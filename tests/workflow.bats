@@ -40,12 +40,14 @@ YAML
     [ "$status" -eq 0 ]
 }
 
-@test "validate: all three starter workflows pass validation" {
+@test "validate: all four starter workflows pass validation" {
     run loop_workflow_validate "$REPO_ROOT/config/workflows/default.yaml"
     [ "$status" -eq 0 ]
     run loop_workflow_validate "$REPO_ROOT/config/workflows/minimal.yaml"
     [ "$status" -eq 0 ]
     run loop_workflow_validate "$REPO_ROOT/config/workflows/docs-only.yaml"
+    [ "$status" -eq 0 ]
+    run loop_workflow_validate "$REPO_ROOT/config/workflows/current.yaml"
     [ "$status" -eq 0 ]
 }
 

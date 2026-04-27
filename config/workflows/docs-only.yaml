@@ -11,7 +11,7 @@
 version: 1
 name: docs-only
 description: |
-  Two-stage pipeline: plan → review → merge. No QA gate. For documentation
+  Three-stage pipeline: plan → review → merge. No QA gate. For documentation
   and content-only changes where human review is sufficient before merge.
 
 issue_stages:

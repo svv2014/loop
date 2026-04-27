@@ -104,7 +104,7 @@ override any of them via the `labels:` map in `config/projects.yaml`.
 | `done` | Terminal: PR merged and issue closed |
 
 **Terminal labels** (valid transition targets, never trigger a stage):
-`done`, `blocked`, `needs-clarification`
+`done`, `blocked`, `needs-clarification`, `qa-fail`
 
 ## Per-project overrides
 
