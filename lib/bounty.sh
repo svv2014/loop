@@ -10,6 +10,20 @@ BOUNTY_URL="${BOUNTY_URL:-http://127.0.0.1:18792}"
 BOUNTY_TIMEOUT="${BOUNTY_TIMEOUT:-3}"
 BOUNTY_API_VERSION="1.0"
 
+# Resolve core version from LOOP_VERSION env var, then VERSION file, then 'unknown'.
+_bounty_core_version() {
+    if [ -n "${LOOP_VERSION:-}" ]; then
+        printf '%s' "$LOOP_VERSION"
+        return
+    fi
+    local vfile="${LOOP_ROOT:-}/VERSION"
+    if [ -f "$vfile" ]; then
+        tr -d '[:space:]' < "$vfile"
+        return
+    fi
+    printf 'unknown'
+}
+
 # bounty_report <event> [key=value ...]
 # Keys: agent model role project issue_num pr_num detail
 # Example: bounty_report "dev_start" role=dev model=sonnet project=myapp issue_num=42
@@ -30,15 +44,21 @@ bounty_report() {
         esac
     done
 
+    local api_ver="$BOUNTY_API_VERSION"
+    if [ -z "$api_ver" ]; then
+        echo "bounty: api version not set, defaulting to 1.0 (deprecated)" >&2
+        api_ver="1.0"
+    fi
+
     local payload
     payload=$(
-        _API="$BOUNTY_API_VERSION" _CV="${LOOP_VERSION:-unknown}" \
+        _API="$api_ver" _CV="$(_bounty_core_version)" \
         _BE="$event" _BA="$agent" _BM="$model" _BR="$role" \
         _BP="$project" _BD="$detail" _BI="$issue_num" _BPN="$pr_num" \
         python3 - <<'PY'
 import json, os, datetime
 d = {
-    "api":          os.environ.get("_API", "1.0"),
+    "api":          os.environ.get("_API") or "1.0",
     "core_version": os.environ.get("_CV") or "unknown",
     "event":        os.environ.get("_BE", "unknown"),
     "agent":        os.environ.get("_BA") or None,

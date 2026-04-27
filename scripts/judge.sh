@@ -9,9 +9,6 @@ LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 
-BOUNTY_URL="${BOUNTY_URL:-http://127.0.0.1:18792}"
-BOUNTY_TIMEOUT="${BOUNTY_TIMEOUT:-3}"
-
 PR_NUM="${1:-}"
 REPO="${2:-}"
 MODEL="${3:-}"

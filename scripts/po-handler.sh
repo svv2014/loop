@@ -21,6 +21,8 @@ source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/bounty.sh
+source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 
