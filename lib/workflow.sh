@@ -101,6 +101,55 @@ for stage in wf.get(key, []) or []:
 PY
 }
 
+# loop_stage_trigger <slug> <stage_id> [target]
+# Returns the actual label that triggers a workflow stage for a project.
+# Walks the project's active workflow, finds stage by id, returns its
+# trigger_label with project label overrides applied.
+# stage_id: po | dev | plan | review | rework | qa | merge (workflow-defined)
+# target (optional): 'issue' or 'pr' to disambiguate stage_id collisions.
+#
+# This is what scanner.sh should use instead of asking for hardcoded
+# canonical names — those exist only in `default` workflow. For projects
+# on `current` (or any custom) workflow, the trigger labels are different
+# and only the workflow file knows them.
+loop_stage_trigger() {
+    local slug="$1" stage_id="$2" target="${3:-}"
+    local wf
+    wf=$(loop_workflow_for_project "$slug")
+    local wf_file="$_LOOP_WORKFLOW_DIR/${wf}.yaml"
+    [ -f "$wf_file" ] || { echo "[workflow] WARN: $wf_file not found" >&2; return 1; }
+    SLUG="$slug" WF="$wf_file" SID="$stage_id" TGT="$target" \
+    CFG="${LOOP_CONFIG:-${LOOP_ROOT:-.}/config/projects.yaml}" python3 - <<'PY'
+import os, sys, yaml
+sid = os.environ['SID']
+target = os.environ.get('TGT', '')
+with open(os.environ['WF']) as f:
+    wf = yaml.safe_load(f) or {}
+overrides = {}
+cfg = os.environ.get('CFG', '')
+if cfg and os.path.isfile(cfg):
+    with open(cfg) as f:
+        data = yaml.safe_load(f) or {}
+    for p in data.get('projects', []):
+        if p.get('slug') == os.environ['SLUG']:
+            overrides = p.get('labels') or {}
+            break
+sections = ['issue_stages', 'pr_stages']
+if target == 'issue':
+    sections = ['issue_stages']
+elif target == 'pr':
+    sections = ['pr_stages']
+for sec in sections:
+    for stage in wf.get(sec, []) or []:
+        if stage.get('id') == sid:
+            canonical = stage.get('trigger_label')
+            if canonical:
+                print(overrides.get(canonical, canonical))
+                sys.exit(0)
+sys.exit(1)
+PY
+}
+
 # loop_handler_for_label <slug> <label>
 # Given an actually-applied label (post-override), returns the handler script base name.
 loop_handler_for_label() {

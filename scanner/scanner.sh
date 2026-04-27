@@ -228,7 +228,7 @@ print(json.dumps({
 " "$slug" "$repo" "$num" "$title" "$url")
         log "emit loop.po_review #$num $title"
         emit "$evt" "po_review:${slug}:${num}"
-    done < <(backend_list_issues_with_label "$repo" "$(loop_label_for "$slug" "po-review")")
+    done < <(backend_list_issues_with_label "$repo" "$(loop_stage_trigger "$slug" "po" "issue")")
 
     # --- dev issues: workflow-driven label (canonical 'plan'). The project's
     # active workflow + label overrides decide the actual label name (e.g.
@@ -253,7 +253,7 @@ print(json.dumps({
                 printf '%s\n' "$_di_num" >> "$_seen_tmp"
                 printf '%s\n' "$_r" >> "$_rows_tmp"
             fi
-        done < <(backend_list_issues_with_label "$repo" "$(loop_label_for "$slug" "plan")")
+        done < <(backend_list_issues_with_label "$repo" "$(loop_stage_trigger "$slug" "plan" "issue" 2>/dev/null || loop_stage_trigger "$slug" "dev" "issue")")
 
         # Re-sort the combined list by (priority, issue_number) so that cross-label
         # ordering is correct (e.g. a p0 in 'plan' beats a p2 in 'dev').
@@ -350,7 +350,7 @@ print(json.dumps({
         emit "$evt" "pr_review:${slug}:${num}"
     }
     while IFS= read -r row; do _emit_pr_review "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_label_for "$slug" "needs-review")")
+        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "review" "pr")")
 
     # --- PRs: changes-requested / needs-rework (new name) → dev_rework ------
     _emit_dev_rework_cr() {
@@ -381,7 +381,7 @@ print(json.dumps({
         emit "$evt" "dev_rework:${slug}:${num}"
     }
     while IFS= read -r row; do _emit_dev_rework_cr "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_label_for "$slug" "needs-rework")")
+        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "rework" "pr")")
 
     # --- PRs: qa-fail / qa-failed (new name) → dev_rework -------------------
     _emit_dev_rework_qa() {
@@ -413,7 +413,7 @@ print(json.dumps({
         emit "$evt" "dev_rework_qa:${slug}:${num}"
     }
     while IFS= read -r row; do _emit_dev_rework_qa "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_label_for "$slug" "qa-fail")")
+        < <(backend_list_prs_with_label "$repo" "$(loop_label_for "$slug" "qa-fail" 2>/dev/null)")
 
     # --- PRs: ready-for-qa / needs-qa (new name); shared dedup key -----------
     _emit_pr_qa() {
@@ -444,7 +444,7 @@ print(json.dumps({
         emit "$evt" "pr_qa:${slug}:${num}"
     }
     while IFS= read -r row; do _emit_pr_qa "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_label_for "$slug" "needs-qa")")
+        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "qa" "pr")")
 
     # --- PRs: qa-pass / approved (new name); shared dedup key ---------------
     _emit_pr_merge() {
@@ -472,7 +472,7 @@ print(json.dumps({
         emit "$evt" "pr_merge:${slug}:${num}"
     }
     while IFS= read -r row; do _emit_pr_merge "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_label_for "$slug" "qa-pass")")
+        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "merge" "pr")")
 }
 
 run_once() {
