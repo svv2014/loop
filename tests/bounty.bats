@@ -154,3 +154,47 @@ PY
     run bounty_report "dev_start" project=myapp
     [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# _bounty_core_version() — three resolution paths
+# ---------------------------------------------------------------------------
+
+@test "_bounty_core_version: returns LOOP_VERSION when env var is set" {
+    LOOP_VERSION="9.9.9" run _bounty_core_version
+    [ "$status" -eq 0 ]
+    [ "$output" = "9.9.9" ]
+}
+
+@test "_bounty_core_version: reads VERSION file when LOOP_VERSION is unset" {
+    local vfile="$BATS_TMPDIR/VERSION"
+    printf '1.2.3' > "$vfile"
+    unset LOOP_VERSION
+    LOOP_ROOT="$BATS_TMPDIR" run _bounty_core_version
+    [ "$status" -eq 0 ]
+    [ "$output" = "1.2.3" ]
+}
+
+@test "_bounty_core_version: returns unknown when neither env var nor VERSION file is present" {
+    unset LOOP_VERSION
+    LOOP_ROOT="$BATS_TMPDIR/nonexistent" run _bounty_core_version
+    [ "$status" -eq 0 ]
+    [ "$output" = "unknown" ]
+}
+
+@test "bounty_report: payload core_version is non-empty" {
+    BOUNTY_API_VERSION="1.0"
+    LOOP_VERSION="0.1.0"
+    bounty_report "dev_start" project=myapp
+
+    [ -f "$PAYLOAD_FILE" ]
+    run python3 - "$PAYLOAD_FILE" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+cv = d.get("core_version", "")
+if not cv:
+    print("core_version is empty or missing")
+    sys.exit(1)
+PY
+    [ "$status" -eq 0 ]
+}
