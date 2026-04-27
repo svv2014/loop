@@ -4,7 +4,7 @@
 #
 # Event payload: {"slug","repo","pr_number","pr_title","pr_url"}
 #
-# Flow: run qa.validation_cmd if configured — on zero exit, label 'approved';
+# Flow: run qa.validation_cmd if configured — on zero exit, label 'qa-pass';
 # on non-zero, label 'qa-failed'. If no validation_cmd is configured for the
 # project, auto-pass (trust the review handler's decision).
 
@@ -72,7 +72,7 @@ if [ -z "${QA_VALIDATION_CMD:-}" ]; then
     backend_remove_label "$REPO" "$PR_NUM" qa-failed
     backend_remove_label "$REPO" "$PR_NUM" qa-fail
     backend_remove_label "$REPO" "$PR_NUM" qa-pass
-    backend_add_label "$REPO" "$PR_NUM" approved
+    backend_add_label "$REPO" "$PR_NUM" qa-pass
     exit 0
 fi
 
@@ -88,8 +88,7 @@ if (cd "$ROOT" && timeout "$QA_TIMEOUT" bash -c "$QA_VALIDATION_CMD") 2>&1 | tee
     backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
     backend_remove_label "$REPO" "$PR_NUM" qa-failed
     backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_remove_label "$REPO" "$PR_NUM" qa-pass
-    backend_add_label "$REPO" "$PR_NUM" approved
+    backend_add_label "$REPO" "$PR_NUM" qa-pass
 else
     log "qa failed for PR #$PR_NUM"
     bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true

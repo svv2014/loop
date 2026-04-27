@@ -165,6 +165,7 @@ if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; the
         --jq "$_belt_jq" 2>/dev/null || true)
     if [ -z "$_dev_pr_num" ]; then
         log "WARN: no open PR found for issue #$ISSUE_NUM after dev agent — adding 'needs-clarification'"
+        backend_remove_label "$REPO" "$ISSUE_NUM" dev
         backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
     else
         log "belt-and-braces: found PR #$_dev_pr_num for issue #$ISSUE_NUM"
