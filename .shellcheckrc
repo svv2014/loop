@@ -1,0 +1,4 @@
+# Match CI: warning level
+severity=warning
+# Shell dialect
+shell=bash

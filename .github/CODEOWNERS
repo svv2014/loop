@@ -1,0 +1,6 @@
+# Loop CODEOWNERS — required code-owner approval gates merges to main.
+#
+# Branch protection requires an approval from someone matching this list
+# before any PR can merge. Add approved contributors here as they join.
+
+* @svv2014

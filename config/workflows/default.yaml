@@ -1,0 +1,55 @@
+# Loop default workflow — clean canonical labels for new adopters.
+#
+# Stages:
+#   po-review (issue) → plan (issue) → needs-review (PR) → needs-rework (PR) →
+#   needs-qa (PR) → qa-pass / qa-fail (PR) → merge → done
+#
+# To use: in config/projects.yaml, set `workflow: default` for a project.
+# Per-project label overrides are supported via the `labels:` map.
+#
+# Schema documented in config/workflows/README.md.
+
+version: 1
+name: default
+description: |
+  Standard plan → review → QA → merge pipeline with PO expansion and
+  rework loop. Clean canonical label names; recommended for new repos.
+
+issue_stages:
+  - id: po
+    trigger_label: po-review
+    handler: po-handler
+    on_done: plan
+    on_blocked: blocked
+    on_clarification: needs-clarification
+
+  - id: plan
+    trigger_label: plan
+    handler: dev-handler
+    on_done: needs-review
+    on_failed_after_max: blocked
+
+pr_stages:
+  - id: review
+    trigger_label: needs-review
+    handler: review-handler
+    decisions:
+      approve: needs-qa
+      reject: needs-rework
+
+  - id: rework
+    trigger_label: needs-rework
+    handler: dev-rework-handler
+    on_done: needs-review
+    on_failed_after_max: blocked
+
+  - id: qa
+    trigger_label: needs-qa
+    handler: qa-handler
+    on_pass: qa-pass
+    on_fail: qa-fail
+
+  - id: merge
+    trigger_label: qa-pass
+    handler: merge-handler
+    on_done: done

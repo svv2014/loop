@@ -1,0 +1,11 @@
+# User-specific config (contains local paths, secrets references)
+loop.env
+config/projects.yaml
+
+# Runtime artifacts
+/tmp/
+*.lock
+/data/bounties.jsonl
+
+# Local tooling state
+.claude/

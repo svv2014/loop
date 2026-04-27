@@ -1,0 +1,58 @@
+name: Task
+description: A concrete unit of dev work — feature, chore, or defined implementation
+title: "[Task]: "
+labels: ["dev", "p2-medium"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Tasks flow through the Loop pipeline: label `dev` → scanner picks up → worker implements → PR opened → `qa-pass` → auto-merge.
+        Write acceptance criteria precisely enough that a worker with no other context can ship it.
+
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective
+      description: What needs to be done, and why?
+      placeholder: One paragraph. State the goal and the motivation.
+    validations:
+      required: true
+
+  - type: textarea
+    id: acceptance_criteria
+    attributes:
+      label: Acceptance Criteria
+      description: Testable checkboxes. A worker should be able to self-verify each one.
+      placeholder: |
+        - [ ] Criterion 1 (testable)
+        - [ ] Criterion 2 (testable)
+    validations:
+      required: true
+
+  - type: textarea
+    id: scope
+    attributes:
+      label: Files & Scope
+      description: Which files/directories should the worker touch? Which should it NOT touch?
+      placeholder: |
+        Touches: web-app/src/pages/Home.tsx, web-app/src/components/ProgressBar.tsx
+        Do not touch: firebase.json, lessons/
+    validations:
+      required: false
+
+  - type: textarea
+    id: dependencies
+    attributes:
+      label: Dependencies
+      description: Issues that must land first. The worker will wait on these.
+      placeholder: "#12, #14"
+    validations:
+      required: false
+
+  - type: textarea
+    id: notes
+    attributes:
+      label: Notes
+      description: Implementation hints, references, gotchas.
+    validations:
+      required: false

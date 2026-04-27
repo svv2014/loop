@@ -1,0 +1,87 @@
+name: QA validate
+
+# Validation gate for the Loop repo itself: when a reviewer labels
+# the PR `ready-for-qa`, we run shellcheck + `bash -n` on all scripts.
+# On success we label `qa-pass` so the pipeline's merge-handler takes over.
+# No direct merge — Loop dogfoods its own pipeline.
+#
+# Fails fast: if validation fails, we label qa-fail and skip merge.
+
+on:
+  pull_request:
+    types: [labeled]
+
+permissions:
+  pull-requests: write
+  checks: write
+  statuses: write
+  issues: write
+
+jobs:
+  qa-merge:
+    if: contains(fromJSON('["ready-for-qa","needs-qa"]'), github.event.label.name)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout PR head
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats
+
+      - name: Run tests
+        run: bats tests/
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: bash -n (syntax check)
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          for f in lib/*.sh scripts/*.sh scanner/*.sh install.sh; do
+            [ -e "$f" ] || continue
+            bash -n "$f"
+          done
+
+      - name: shellcheck (warnings+)
+        run: |
+          shopt -s globstar nullglob
+          files=()
+          for f in lib/*.sh scripts/*.sh scanner/*.sh install.sh; do
+            [ -e "$f" ] && files+=("$f")
+          done
+          shellcheck -S warning "${files[@]}"
+
+      - name: No personal identifiers
+        run: |
+          if git grep -iE 'vadim|/Users/vadim|boba-event|openclaw|suprun|com\.vadim' -- ':!LICENSE' ':!.github/workflows/qa-build-test.yml' ':!.github/workflows/ci.yml'; then
+            echo "Personal identifiers found — fix before merge." >&2
+            exit 1
+          fi
+
+      - name: Apply qa-fail
+        if: failure()
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label ready-for-qa \
+            --add-label qa-fail
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "QA validation failed. See [workflow run](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) for details."
+
+      - name: Label qa-pass
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr edit ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --remove-label ready-for-qa \
+            --add-label qa-pass
+          gh pr comment ${{ github.event.pull_request.number }} \
+            --repo ${{ github.repository }} \
+            --body "QA passed — pipeline will merge."

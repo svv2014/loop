@@ -1,0 +1,123 @@
+# projects.example.yaml — Loop multi-project registry (annotated)
+#
+# Every project that Loop should manage is listed under `projects:`.
+# The scanner iterates this list once per tick and fans out events.
+#
+# Required fields: name, slug, repo, root, default_branch
+# Optional sections: workflow, labels, backend, dev, qa, merge
+
+# Schema version. Bump when projects.yaml format breaks.
+version: 1
+
+projects:
+  - name: My Sample Project          # Human-readable display name
+    slug: sample                      # Short prefix — used in commit titles [SAMPLE-42], logs, retry files
+    repo: owner/sample-project        # GitHub "owner/repo"
+    root: /absolute/path/to/sample    # Local checkout — handler cds here before invoking the orchestrator
+    default_branch: main              # main | master — base branch for new feature branches
+
+    # Workflow — references config/workflows/<name>.yaml. Decides the labels
+    # that drive each stage and the handlers that fire. Defaults to "default"
+    # if omitted. Available starters: default (recommended for new repos),
+    # current (legacy-vocabulary mirror), minimal (solo-prototype 2-stage).
+    workflow: default
+
+    # Optional: per-project label overrides. Sparse map — only include the
+    # labels whose names differ from your workflow's canonical vocabulary.
+    # Useful when a repo already has labels you don't want to rename.
+    # labels:
+    #   plan: dev                      # this repo uses 'dev' instead of 'plan'
+    #   qa-pass: approved
+    #   qa-fail: qa-failed
+
+    # Backend adapter — controls which VCS/issue-tracker integration is used.
+    # Default: github. See docs/backends.md for how to add a new backend.
+    backend: github
+
+    dev:
+      commit_prefix: SAMPLE           # Produces [SAMPLE-N] commit titles and PR titles
+      # Optional: shell command run after the dev agent finishes, before opening the PR.
+      # {project_root} is substituted at runtime. If absent, no post-implementation validation runs.
+      validation_cmd: |
+        cd {project_root} && make build
+
+    qa:
+      # Optional: command run by QA handler to validate the PR branch.
+      validation_cmd: |
+        cd {project_root} && make test
+      # Optional: browser URL for UI smoke tests (consumed by the QA agent prompt).
+      browser_url: http://localhost:3000
+
+    merge:
+      strategy: squash                # squash | merge | rebase
+      auto_rebase: true               # true: merge handler rebases onto default_branch on conflict before giving up
+
+  # ── GitLab example ─────────────────────────────────────────────────────────
+  - name: My GitLab Project
+    slug: glsample
+    # Cloud GitLab: group/project  |  Self-hosted: gitlab.example.com/group/project
+    repo: gitlab.example.com/mygroup/myproject
+    root: /absolute/path/to/glsample
+    default_branch: main
+
+    # Selects the GitLab backend (uses glab CLI + Merge Requests).
+    # Run: ./install.sh /path/to/project --backend=gitlab
+    backend: gitlab
+
+    dev:
+      commit_prefix: GLS
+      validation_cmd: |
+        cd {project_root} && make build
+
+    qa:
+      validation_cmd: |
+        cd {project_root} && make test
+
+    merge:
+      strategy: squash
+      auto_rebase: true
+
+  # ── Jira+GitLab composite example ──────────────────────────────────────────
+  # Tickets tracked in Jira; code and MRs hosted on GitLab.
+  # Requires JIRA_URL, JIRA_USER, JIRA_TOKEN in loop.env.
+  # Run: ./install.sh /path/to/project --backend=jira-gitlab
+  - name: My Jira+GitLab Project
+    slug: jg-sample
+    repo: gitlab.example.com/mygroup/myproject   # GitLab repo (for MR operations)
+    root: /absolute/path/to/jg-sample
+    default_branch: main
+
+    # Composite backend: Jira for issue tracking, GitLab for code and MRs.
+    backend: jira-gitlab
+
+    dev:
+      # commit_prefix should match your Jira project key so commit titles read
+      # [PROJ-42] Fix the thing, matching the Jira issue identifier.
+      commit_prefix: PROJ
+
+    merge:
+      strategy: squash
+      auto_rebase: true
+
+    backend_config:
+      # Jira project key — issues are referenced as PROJ-N throughout Loop.
+      ticket_project: PROJ
+      # Map each Loop canonical state label to the Jira transition name.
+      # Valid transition names depend on your Jira project's workflow.
+      # Discover them with:
+      #   curl -u $JIRA_USER:$JIRA_TOKEN \
+      #     $JIRA_URL/rest/api/3/issue/PROJ-1/transitions | jq '.transitions[]|.name'
+      state_map:
+        dev: "In Progress"
+        in-progress: "In Progress"
+        review-pending: "In Review"
+        in-review: "In Review"
+        ready-for-qa: "QA"
+        qa-pass: "QA"
+        qa-fail: "In Progress"
+        done: "Done"
+        # Escape-hatch states: attempts JIRA_BLOCKED_STATUS transition; if the
+        # status does not exist in the workflow, posts a comment marker instead.
+        needs-clarification: "Blocked"
+        changes-requested: "Blocked"
+        blocked: "Blocked"

@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install shellcheck
+        run: sudo apt-get update && sudo apt-get install -y shellcheck
+
+      - name: bash -n (syntax check)
+        run: |
+          set -e
+          shopt -s globstar nullglob
+          for f in lib/*.sh scripts/*.sh scanner/*.sh install.sh; do
+            [ -e "$f" ] || continue
+            bash -n "$f"
+          done
+
+      - name: shellcheck (warnings+)
+        run: |
+          shopt -s globstar nullglob
+          files=()
+          for f in lib/*.sh scripts/*.sh scanner/*.sh install.sh; do
+            [ -e "$f" ] && files+=("$f")
+          done
+          shellcheck -S warning "${files[@]}"
+
+      - name: No personal identifiers
+        run: |
+          if git grep -iE 'vadim|/Users/vadim|boba-event|openclaw|suprun|com\.vadim' -- ':!LICENSE' ':!.github/workflows/qa-build-test.yml' ':!.github/workflows/ci.yml'; then
+            echo "Personal identifiers found — fix before merge." >&2
+            exit 1
+          fi

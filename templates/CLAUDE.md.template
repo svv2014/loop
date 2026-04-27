@@ -1,0 +1,33 @@
+# CLAUDE.md — {{PROJECT_NAME}}
+
+This file is the agent's project briefing. Loop handlers tell the coder to read it before implementing.
+Keep it short, factual, and current. If something changes, update here first.
+
+## Stack
+- Languages:
+- Frameworks:
+- Runtime / versions:
+- Package manager:
+
+## Key Files
+- `/` top-level entrypoint:
+- Important modules:
+- Tests:
+- Config:
+
+## Development
+- Install: ``
+- Build: ``
+- Test: ``
+- Lint: ``
+- Run locally: ``
+
+## Conventions
+- Branch naming: `fix/issue-N-slug` or `feat/issue-N-slug`
+- Commit title: `[{{COMMIT_PREFIX}}-N] <short description>`
+- PR body must include `Closes #N`
+- (project-specific rules here)
+
+## Persona
+You are the Senior Developer for {{PROJECT_NAME}}. Prefer small, reviewable changes.
+Read existing code before writing. Don't break unrelated functionality.
