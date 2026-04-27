@@ -9,3 +9,9 @@ config/projects.yaml
 
 # Local tooling state
 .claude/
+
+# Operator-specific workflow overrides — local only. Each operator authors
+# their own legacy/internal workflows; only `default.yaml` and `minimal.yaml`
+# ship in the public repo.
+config/workflows/current.yaml
+config/workflows/*.local.yaml

@@ -109,3 +109,22 @@ Possible custom workflow shapes:
 - **Docs-only**: drop the `qa` stage; merge after review
 - **Compliance**: add a `security-audit` stage with required human
   approval before merge
+
+## Operator-local workflows
+
+Workflow files are not all meant to ship publicly. The repo ships
+`default.yaml` and `minimal.yaml` as starters. Operator-specific workflows
+(e.g., legacy-vocabulary mirrors, internal compliance pipelines) should
+be **local-only**, not committed.
+
+Two conventions for keeping a workflow local:
+
+1. **Named files** — `config/workflows/current.yaml` is gitignored by default
+   (reserved for the operator's "preserve existing in-flight vocabulary"
+   workflow during a migration window).
+2. **`*.local.yaml` glob** — any file matching `config/workflows/*.local.yaml`
+   is gitignored. Use this for additional operator-specific workflows
+   (e.g., `corp-compliance.local.yaml`).
+
+Operator-local workflows reference the same schema (v1) as committed ones
+and validate via `./scripts/validate-workflow.sh`.
