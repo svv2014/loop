@@ -10,8 +10,10 @@ LOOP_CONFIG="${LOOP_CONFIG:-$LOOP_ROOT/config/projects.yaml}"
 # loop_load_project <slug>
 # Exports: REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX MERGE_STRATEGY AUTO_REBASE
 #          DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL NAME BACKEND
-#          MAX_CONCURRENT_PRS
+#          MAX_CONCURRENT_PRS WORKFLOW LOOP_LABEL_OVERRIDES
 # BACKEND defaults to 'github' when not specified in projects.yaml.
+# WORKFLOW defaults to 'default' when not specified.
+# LOOP_LABEL_OVERRIDES is a pipe-separated list of canonical=override pairs.
 # Returns non-zero if the slug is not found.
 loop_load_project() {
     local slug="$1"
@@ -21,19 +23,40 @@ loop_load_project() {
 
     local out
     out=$(python3 - "$config" "$slug" <<'PY'
-import sys, yaml
+import sys, yaml, os
 cfg_path, slug = sys.argv[1], sys.argv[2]
 with open(cfg_path) as f:
     data = yaml.safe_load(f) or {}
+
+# v0 legacy fallback: warn when version field is absent
+version = data.get("version")
+if version is None:
+    print("WARNING: projects.yaml has no 'version' field — assuming v0 (legacy). Add 'version: 1' to suppress this warning.", file=sys.stderr)
+
 for p in data.get("projects", []) or []:
     if p.get("slug") == slug:
         dev = p.get("dev") or {}
         qa  = p.get("qa") or {}
         mg  = p.get("merge") or {}
         def sh(v): return "" if v is None else str(v).replace("'", "'\\''")
+
+        # v1: workflow ref (defaults to "default")
+        workflow = p.get("workflow") or "default"
+
+        # v1: sparse label overrides — serialized as "canonical=override|..." pairs
+        label_map = p.get("labels") or {}
+        home = os.environ.get("HOME", "")
+        label_overrides = "|".join(
+            f"{k}={v}" for k, v in label_map.items()
+        )
+
+        # root: substitute ${HOME} and $HOME placeholders
+        root_raw = p.get("root") or ""
+        root_val = root_raw.replace("${HOME}", home).replace("$HOME", home)
+
         print(f"NAME='{sh(p.get('name',''))}'")
         print(f"REPO='{sh(p.get('repo',''))}'")
-        print(f"ROOT='{sh(p.get('root',''))}'")
+        print(f"ROOT='{sh(root_val)}'")
         print(f"DEFAULT_BRANCH='{sh(p.get('default_branch','main'))}'")
         print(f"COMMIT_PREFIX='{sh(dev.get('commit_prefix', slug.upper()))}'")
         print(f"DEV_VALIDATION_CMD='{sh(dev.get('validation_cmd',''))}'")
@@ -54,6 +77,9 @@ for p in data.get("projects", []) or []:
         project_authors = p.get("allowed_authors") or global_authors
         authors_str = ",".join(str(a) for a in project_authors)
         print(f"ALLOWED_AUTHORS='{sh(authors_str)}'")
+        # v1 fields
+        print(f"WORKFLOW='{sh(workflow)}'")
+        print(f"LOOP_LABEL_OVERRIDES='{sh(label_overrides)}'")
         sys.exit(0)
 sys.exit(1)
 PY
@@ -64,7 +90,7 @@ PY
         return 1
     fi
     eval "$out"
-    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS LOOP_AGENT_MODEL ALLOWED_AUTHORS
+    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES
 }
 
 # loop_list_slugs — print each project slug on its own line
