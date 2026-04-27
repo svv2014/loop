@@ -84,6 +84,11 @@ backend_remove_label "$REPO" "$PR_NUM" needs-review
 backend_remove_label "$REPO" "$PR_NUM" review-pending
 backend_add_label "$REPO" "$PR_NUM" in-review
 
+# Resolve workflow-specific labels for this project so the agent prompt + the
+# belt-and-braces apply the right names per active workflow.
+QA_LABEL=$(loop_stage_trigger "$SLUG" qa pr 2>/dev/null || echo ready-for-qa)
+REWORK_LABEL=$(loop_stage_trigger "$SLUG" rework pr 2>/dev/null || echo changes-requested)
+
 TASK_PROMPT=$(cat <<EOF
 You are the Senior Code Reviewer for ${NAME} (slug: ${SLUG}).
 Project root: ${ROOT}
@@ -116,15 +121,15 @@ Your job — do all of these in sequence:
 
 If APPROVE:
    gh pr review ${PR_NUM} --repo ${REPO} --approve --body '<2-4 sentence summary of what looks good>'
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label ready-for-qa --add-label needs-qa
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label needs-review --remove-label review-pending --remove-label ready-for-qa --remove-label needs-qa --add-label ${QA_LABEL}
 
 If REQUEST_CHANGES:
    gh pr review ${PR_NUM} --repo ${REPO} --request-changes --body '<specific, actionable feedback — what to change and why>'
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label changes-requested --add-label needs-rework
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label needs-review --remove-label review-pending --remove-label changes-requested --remove-label needs-rework --add-label ${REWORK_LABEL}
 
 Be strict but fair. Approve content-adjacent bookkeeping (formatting, docs) liberally. Push back on logic errors, security issues, missing tests where the issue asked for tests, or content that contradicts the cited source (e.g. a lesson that miscites CAR Part X).
 
-IMPORTANT: You MUST finish by applying either 'needs-qa' or 'needs-rework' label. The pipeline stalls if neither is applied. Verify with:
+IMPORTANT: You MUST finish by applying either '${QA_LABEL}' or '${REWORK_LABEL}' label. The pipeline stalls if neither is applied. Verify with:
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 Report the decision you made and why, in 3 short sentences.
@@ -138,12 +143,12 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     loop_notify "✅ [$SLUG] PR#$PR_NUM review done"
     retry_clear
     backend_remove_label "$REPO" "$PR_NUM" in-review
-    # Belt-and-braces: if agent forgot to apply a decision label, default to needs-rework
-    # so the PR doesn't silently disappear from the pipeline.
-    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" needs-qa ready-for-qa needs-rework blocked 'done'; then
-        log "WARN: PR #$PR_NUM has no decision label after review agent — defaulting to 'needs-rework'"
-        backend_remove_label "$REPO" "$PR_NUM" changes-requested
-        backend_add_label "$REPO" "$PR_NUM" needs-rework
+    # Belt-and-braces: if agent forgot to apply a decision label, default to rework
+    # (workflow-resolved) so the PR doesn't silently disappear from the pipeline.
+    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" needs-qa ready-for-qa needs-rework changes-requested blocked 'done'; then
+        log "WARN: PR #$PR_NUM has no decision label after review agent — defaulting to '${REWORK_LABEL}'"
+        backend_remove_label "$REPO" "$PR_NUM" needs-rework changes-requested
+        backend_add_label "$REPO" "$PR_NUM" "$REWORK_LABEL"
     fi
 else
     n=$(retry_incr)

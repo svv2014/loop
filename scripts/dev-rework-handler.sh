@@ -144,6 +144,9 @@ if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
     log "qa-fail details: $QA_FAILURE_DETAILS"
 fi
 
+# Resolve workflow-specific labels for this project (default vs current).
+REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
+
 TASK_PROMPT=$(cat <<EOF
 You are the Senior Developer for ${NAME} (slug: ${SLUG}), reworking a PR after $( [ "$REWORK_CONTEXT" = "qa-fail" ] && echo "a QA failure" || echo "reviewer feedback" ).
 Working directory: ${WORKTREE_ROOT}
@@ -194,9 +197,9 @@ $( [ -n "$DEV_VALIDATION_CMD" ] && echo "4. Run validation: ${DEV_VALIDATION_CMD
 7. Post a PR comment summarizing what you changed in response:
 $( [ "$REWORK_CONTEXT" = "qa-fail" ] && echo "   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Fixed QA failure: <summary of what was fixed>'" || echo "   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Addressed review feedback: <summary>'" )
 8. Swap labels — this is MANDATORY to signal success to the pipeline:
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-rework --add-label review-pending
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-rework --remove-label needs-rework --remove-label changes-requested --remove-label qa-fail --remove-label qa-failed --add-label ${REVIEW_LABEL}
 
-IMPORTANT: The PR MUST end this run with label 'review-pending' (or 'needs-clarification'/'blocked' if appropriate). Verify with:
+IMPORTANT: The PR MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clarification'/'blocked' if appropriate). Verify with:
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 If the feedback is unclear or requires architectural input, add label 'needs-clarification' and comment on the PR instead of guessing.
@@ -221,8 +224,8 @@ if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; the
     backend_remove_label "$REPO" "$PR_NUM" in-rework needs-rework changes-requested qa-fail qa-failed
     # Belt-and-braces: if agent forgot step 8, ensure PR has a progression label.
     if ! backend_pr_has_any_label "$REPO" "$PR_NUM" review-pending needs-review needs-clarification blocked 'done'; then
-        log "WARN: PR #$PR_NUM has no progression label after rework agent — adding 'review-pending'"
-        backend_add_label "$REPO" "$PR_NUM" review-pending
+        log "WARN: PR #$PR_NUM has no progression label after rework agent — adding '${REVIEW_LABEL}'"
+        backend_add_label "$REPO" "$PR_NUM" "$REVIEW_LABEL"
     fi
     cleanup_worktree
 else
