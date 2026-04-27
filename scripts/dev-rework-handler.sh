@@ -215,9 +215,12 @@ if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; the
     bounty_report "rework_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" pr_num="$PR_NUM" || true
     loop_notify "✅ [$SLUG] PR#$PR_NUM dev-rework done"
     retry_clear
-    backend_remove_label "$REPO" "$PR_NUM" in-rework
+    # Strip every label from the prior stage (rework entry triggers + qa-fail
+    # entry trigger) so the PR doesn't sit multi-labeled and bounce back into
+    # rework on the next scanner tick. Closes loop#15.
+    backend_remove_label "$REPO" "$PR_NUM" in-rework needs-rework changes-requested qa-fail qa-failed
     # Belt-and-braces: if agent forgot step 8, ensure PR has a progression label.
-    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" review-pending needs-clarification blocked 'done'; then
+    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" review-pending needs-review needs-clarification blocked 'done'; then
         log "WARN: PR #$PR_NUM has no progression label after rework agent — adding 'review-pending'"
         backend_add_label "$REPO" "$PR_NUM" review-pending
     fi
