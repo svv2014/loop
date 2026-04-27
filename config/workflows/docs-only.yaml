@@ -1,0 +1,41 @@
+# Loop docs-only workflow — documentation and content change pipeline.
+#
+# Stages:
+#   plan (issue) → needs-review (PR) → done
+#
+# Skips QA. Use for documentation PRs, README updates, and other changes
+# where automated testing adds no value and human review is sufficient.
+#
+# To use: in config/projects.yaml, set `workflow: docs-only`.
+
+version: 1
+name: docs-only
+description: |
+  Two-stage pipeline: plan → review → merge. No QA gate. For documentation
+  and content-only changes where human review is sufficient before merge.
+
+issue_stages:
+  - id: plan
+    trigger_label: plan
+    handler: dev-handler
+    on_done: needs-review
+    on_failed_after_max: blocked
+
+pr_stages:
+  - id: review
+    trigger_label: needs-review
+    handler: review-handler
+    decisions:
+      approve: merge-ready
+      reject: needs-rework
+
+  - id: rework
+    trigger_label: needs-rework
+    handler: dev-rework-handler
+    on_done: needs-review
+    on_failed_after_max: blocked
+
+  - id: merge
+    trigger_label: merge-ready
+    handler: merge-handler
+    on_done: done

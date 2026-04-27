@@ -14,6 +14,7 @@ This dir contains starter workflows. Operators can author their own.
 | `default.yaml` | Recommended for new repos. Clean canonical labels: `plan` / `needs-review` / `needs-qa` / `qa-pass` / `qa-fail`. |
 | `current.yaml` | Legacy-vocabulary mirror. Uses `dev` instead of `plan`; matches the label set in svv2014 projects at v0.1.0 migration. |
 | `minimal.yaml` | Two-stage pipeline (`plan → merge`). No review, no QA. Solo prototypes only. |
+| `docs-only.yaml` | Three-stage pipeline (`plan → review → merge`). No QA. For documentation and content-only PRs. |
 
 ## Schema (v1)
 
@@ -70,9 +71,40 @@ source lib/workflow.sh
 loop_workflow_validate config/workflows/default.yaml
 ```
 
-The validator checks: schema version, name presence, stage required
-fields, no duplicate `trigger_label` within a workflow, at least one
-stage exists.
+The validator checks: schema version, `name` matches filename, stage
+required fields, no duplicate `trigger_label` within a workflow, at
+least one stage exists, and all transition targets reference known
+labels (trigger labels declared in the file or terminal labels below).
+Missing handler scripts produce a warning but do not cause validation
+to fail.
+
+## Canonical label set
+
+These are the canonical label names used in `default.yaml`. Projects may
+override any of them via the `labels:` map in `config/projects.yaml`.
+
+**Issue labels** (drive `issue_stages`):
+
+| Label | Role |
+|---|---|
+| `po-review` | PO expansion stage — turns a rough idea into a spec |
+| `plan` | Dev implementation stage |
+| `blocked` | Terminal: issue cannot proceed; human attention required |
+| `needs-clarification` | Terminal: issue body is ambiguous; awaiting author reply |
+
+**PR labels** (drive `pr_stages`):
+
+| Label | Role |
+|---|---|
+| `needs-review` | Code review stage |
+| `needs-rework` | Sent back to dev after review rejection |
+| `needs-qa` | QA / automated test stage |
+| `qa-pass` | QA passed; triggers merge |
+| `qa-fail` | QA failed; triggers rework or close |
+| `done` | Terminal: PR merged and issue closed |
+
+**Terminal labels** (valid transition targets, never trigger a stage):
+`done`, `blocked`, `needs-clarification`
 
 ## Per-project overrides
 
