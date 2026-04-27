@@ -99,7 +99,6 @@ log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
 # belt-and-braces apply the right names per the project's active workflow
 # (e.g. needs-review on default, review-pending on current).
 REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
-NEEDS_CLARIFY_LABEL="needs-clarification"
 
 TASK_PROMPT=$(cat <<EOF
 You are the Senior Developer for ${NAME} (slug: ${SLUG}).
