@@ -83,7 +83,7 @@ for idx, p in enumerate(projects):
             f"config/workflows/{workflow}.yaml"
         )
 
-    # Label override key validity
+    # Label override key validity + cross-check against workflow canonical labels
     label_map = p.get("labels") or {}
     if not isinstance(label_map, dict):
         errors.append(f"{loc} (slug={slug!r}): 'labels' must be a mapping")
@@ -93,6 +93,46 @@ for idx, p in enumerate(projects):
                 errors.append(f"{loc} (slug={slug!r}): invalid label key: {k!r}")
             if not v or not isinstance(v, str) or not v.strip():
                 errors.append(f"{loc} (slug={slug!r}): invalid label override value for '{k}': {v!r}")
+
+        # Cross-check label keys against canonical labels in the referenced workflow
+        if label_map and os.path.isfile(wf_file):
+            try:
+                with open(wf_file) as wf:
+                    wf_data = yaml.safe_load(wf) or {}
+            except yaml.YAMLError as e:
+                warnings.append(
+                    f"{loc} (slug={slug!r}): could not parse workflow file for label cross-check: {e}"
+                )
+                wf_data = None
+
+            if wf_data is not None:
+                canonical_labels = set()
+                stage_fields = ("trigger_label", "on_done", "on_blocked",
+                                "on_clarification", "on_failed_after_max")
+                for stage in (wf_data.get("issue_stages") or []):
+                    for field in stage_fields:
+                        v = stage.get(field)
+                        if v:
+                            canonical_labels.add(v)
+                pr_fields = ("trigger_label", "on_done", "on_pass", "on_fail")
+                for stage in (wf_data.get("pr_stages") or []):
+                    for field in pr_fields:
+                        v = stage.get(field)
+                        if v:
+                            canonical_labels.add(v)
+                    decisions = stage.get("decisions") or {}
+                    if isinstance(decisions, dict):
+                        for dv in decisions.values():
+                            if dv:
+                                canonical_labels.add(dv)
+
+                for k in label_map:
+                    if k and isinstance(k, str) and k.strip() and k not in canonical_labels:
+                        errors.append(
+                            f"{loc} (slug={slug!r}): label override key '{k}' is not a "
+                            f"canonical label in workflow '{workflow}' — "
+                            f"valid keys: {sorted(canonical_labels)}"
+                        )
 
     # ${HOME} substitution in root path
     root_raw = p.get("root") or ""
