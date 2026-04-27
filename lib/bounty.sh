@@ -44,15 +44,21 @@ bounty_report() {
         esac
     done
 
+    local api_ver="$BOUNTY_API_VERSION"
+    if [ -z "$api_ver" ]; then
+        echo "bounty: api version not set, defaulting to 1.0 (deprecated)" >&2
+        api_ver="1.0"
+    fi
+
     local payload
     payload=$(
-        _API="$BOUNTY_API_VERSION" _CV="$(_bounty_core_version)" \
+        _API="$api_ver" _CV="$(_bounty_core_version)" \
         _BE="$event" _BA="$agent" _BM="$model" _BR="$role" \
         _BP="$project" _BD="$detail" _BI="$issue_num" _BPN="$pr_num" \
         python3 - <<'PY'
 import json, os, datetime
 d = {
-    "api":          os.environ.get("_API", "1.0"),
+    "api":          os.environ.get("_API") or "1.0",
     "core_version": os.environ.get("_CV") or "unknown",
     "event":        os.environ.get("_BE", "unknown"),
     "agent":        os.environ.get("_BA") or None,
