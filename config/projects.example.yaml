@@ -29,6 +29,11 @@ projects:
     #   plan: dev                      # this repo uses 'dev' instead of 'plan'
     #   qa-pass: approved
     #   qa-fail: qa-failed
+    #
+    # Example with overrides enabled (remove the '#' to activate):
+    # labels:
+    #   plan: ready                    # trigger dev agent with 'ready' instead of 'plan'
+    #   needs-review: review           # shorter label name already in use on this repo
 
     # Backend adapter — controls which VCS/issue-tracker integration is used.
     # Default: github. See docs/backends.md for how to add a new backend.

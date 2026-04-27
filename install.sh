@@ -500,6 +500,15 @@ PY
 fi
 
 # ─────────────────────────────────────────────────────────────────────────────
+# 2b. Validate projects.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+
+if [ -x "$LOOP_ROOT/scripts/validate-config.sh" ]; then
+    "$LOOP_ROOT/scripts/validate-config.sh" "$PROJECTS_YAML" \
+        || { echo "ERROR: projects.yaml validation failed — fix the errors above before continuing." >&2; exit 2; }
+fi
+
+# ─────────────────────────────────────────────────────────────────────────────
 # 3. Create canonical labels (idempotent)
 # ─────────────────────────────────────────────────────────────────────────────
 
