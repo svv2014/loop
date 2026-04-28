@@ -80,6 +80,10 @@ actual work.
 | `qa-handler.sh` | `needs-qa` on PR | Runs project's `validation_cmd`; passes/fails |
 | `merge-handler.sh` | `qa-pass` on PR | Squash-merges, closes linked issue, records bounty |
 
+Each handler also has a short-name alias (`builder.sh`, `planner.sh`,
+`reviewer.sh`, `reviser.sh`, `tester.sh`, `merger.sh`) that is a thin
+`exec` wrapper to the canonical handler script above.
+
 Each handler:
 - Acquires a per-project advisory lock (`/tmp/loop-locks/<slug>.lock`)
 - Sources `lib/env.sh`, `lib/config.sh`, `lib/backends/backend.sh`
@@ -112,6 +116,14 @@ is allowed; same-project handlers serialize.
 Abstracts VCS/issue-tracker calls. Default: `github.sh` (uses `gh`
 CLI). Alternates: `gitlab.sh`, `jira-gitlab.sh` (composite). Each
 adapter implements a fixed interface so handlers don't care.
+
+### Notify layer (`lib/notify.sh`)
+
+Provides `loop_notify()` — a one-liner helper sourced by all handlers.
+When `LOOP_NOTIFY` is set in `loop.env`, every handler calls
+`eval "$LOOP_NOTIFY" <event>` at key lifecycle points (start, done,
+error). No-ops silently when unset. Concrete notifier scripts live in
+`lib/notifiers/` (`slack.sh`, `email.sh`, `stdout.sh`).
 
 ### Workflow layer (`lib/workflow.sh`)
 
@@ -194,7 +206,7 @@ loop/
 │   └── workflows/
 │       ├── README.md               schema docs
 │       ├── default.yaml            new-repo recommended workflow
-│       ├── current.yaml            legacy-vocabulary mirror
+│       ├── docs-only.yaml          documentation-only pipeline (plan→review→done)
 │       └── minimal.yaml            solo prototype
 ├── lib/
 │   ├── env.sh                      loads loop.env, sets PATH, sources version + workflow
@@ -205,23 +217,35 @@ loop/
 │   ├── runner.sh                   dispatches to LOOP_AGENT
 │   ├── lock.sh                     per-project file lock with TTL stealing
 │   ├── bounty.sh                   versioned bounty event sender
+│   ├── notify.sh                   loop_notify() helper; evaluates LOOP_NOTIFY fragment
 │   ├── backends/                   github / gitlab / jira-gitlab adapters
-│   └── notifiers/                  slack / stdout / email
+│   └── notifiers/                  slack / stdout / email notifier scripts
 ├── scripts/
-│   ├── po-handler.sh
-│   ├── dev-handler.sh
-│   ├── dev-rework-handler.sh
-│   ├── review-handler.sh
-│   ├── qa-handler.sh
-│   ├── merge-handler.sh
+│   ├── po-handler.sh               PO expansion (canonical)
+│   ├── dev-handler.sh              implementation (canonical)
+│   ├── dev-rework-handler.sh       rework after review/QA (canonical)
+│   ├── review-handler.sh           AI code review (canonical)
+│   ├── qa-handler.sh               validation / QA (canonical)
+│   ├── merge-handler.sh            squash-merge + bounty (canonical)
+│   ├── planner.sh                  thin alias → po-handler.sh
+│   ├── builder.sh                  thin alias → dev-handler.sh
+│   ├── reviser.sh                  thin alias → dev-rework-handler.sh
+│   ├── reviewer.sh                 thin alias → review-handler.sh
+│   ├── tester.sh                   thin alias → qa-handler.sh
+│   ├── merger.sh                   thin alias → merge-handler.sh
+│   ├── adopt.sh                    heuristic label-mapping for existing repos
 │   ├── judge.sh                    AI judge — runs after merge
 │   ├── bounty-board.sh             leaderboard CLI
 │   ├── label-audit.sh              cross-repo label-coverage audit
-│   ├── validate-workflow.sh        YAML schema validator
+│   ├── validate-workflow.sh        workflow YAML schema validator
+│   ├── validate-config.sh          projects.yaml schema validator
+│   ├── update.sh                   self-update with BREAKING change gate
 │   └── release.sh                  semver bump + tag + GitHub release
 ├── scanner/
 │   ├── scanner.sh                  5-min polling loop
 │   └── reconciler.sh               15-min housekeeping
+├── skills/
+│   └── loop/                       Claude Code skill definition for Loop
 ├── templates/
 │   ├── CLAUDE.md.template          per-project agent briefing
 │   └── launchd/                    macOS plist templates
