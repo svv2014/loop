@@ -117,6 +117,83 @@ except Exception:
     pass
 " || echo "")
 
+# Detect in-flight PR/MR for this issue — must run before building the prompt
+# so the preamble block can be injected when an open MR exists.
+# Degrades gracefully when backend_find_pr_for_issue is not yet available.
+_IN_FLIGHT_PR=""
+_MR_PREAMBLE=""
+_MR_PATHS=""
+_in_flight_pr_num=$(backend_find_pr_for_issue "$REPO" "$ISSUE_NUM" 2>/dev/null || echo "")
+if [ -n "$_in_flight_pr_num" ]; then
+    _pr_state=$(backend_pr_view "$REPO" "$_in_flight_pr_num" \
+        --json state --jq '.state' 2>/dev/null || echo "")
+    if [ "$_pr_state" = "OPEN" ]; then
+        _IN_FLIGHT_PR="$_in_flight_pr_num"
+        _pr_meta=$(backend_pr_view "$REPO" "$_IN_FLIGHT_PR" \
+            --json title,headRefName,state,additions,deletions,changedFiles \
+            2>/dev/null || echo "{}")
+        _pr_title=$(echo "$_pr_meta" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('title',''))" \
+            2>/dev/null || echo "")
+        _pr_branch=$(echo "$_pr_meta" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('headRefName',''))" \
+            2>/dev/null || echo "")
+        _pr_additions=$(echo "$_pr_meta" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('additions','?'))" \
+            2>/dev/null || echo "?")
+        _pr_deletions=$(echo "$_pr_meta" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('deletions','?'))" \
+            2>/dev/null || echo "?")
+        _pr_files=$(echo "$_pr_meta" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('changedFiles','?'))" \
+            2>/dev/null || echo "?")
+        _pr_reviews=$(backend_pr_view "$REPO" "$_IN_FLIGHT_PR" \
+            --json reviews --jq '.reviews[-5:][].body' 2>/dev/null \
+            || echo "(no review comments)")
+        log "in-flight PR #${_IN_FLIGHT_PR} found for issue #${ISSUE_NUM} (branch: ${_pr_branch})"
+        _MR_PREAMBLE="--- EXISTING IMPLEMENTATION IN FLIGHT ---
+PR #${_IN_FLIGHT_PR}: ${_pr_title}
+Branch: ${_pr_branch}
+State: OPEN
+Diff stat: +${_pr_additions} lines, -${_pr_deletions} lines, ${_pr_files} files changed
+
+Last review comments (up to 5 most recent):
+${_pr_reviews}
+--- END IN-FLIGHT CONTEXT ---
+
+"
+        _MR_PATHS="
+G - REFINE-WITH-ACTIVE-MR (spec adjustment small enough the current MR can absorb it):
+   - Comment on the MR: gh pr comment ${_IN_FLIGHT_PR} --repo ${REPO} --body 'PO: spec refinement: [details]'
+   - Flag MR for rework: gh pr edit ${_IN_FLIGHT_PR} --repo ${REPO} --add-label needs-rework
+   - Leave issue label at dev (no label change on issue)
+
+H - SUPERSEDE (requirements changed enough the MR is wrong — wrong approach or stale spec):
+   - Comment on MR: gh pr comment ${_IN_FLIGHT_PR} --repo ${REPO} --body 'PO: closing — superseded by new spec. [Explanation].'
+   - Close MR: gh pr close ${_IN_FLIGHT_PR} --repo ${REPO}
+   - Rewrite issue spec using SPEC FORMAT below
+   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label dev
+
+I - EXPAND-CROSS-PROJECT (MR implementation is correct but related work needed elsewhere):
+   - Do not touch the current MR
+   - Create new child issues for the related work, each labeled po-review
+   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: MR looks correct. Filed related work: #X, #Y.'
+   - Leave issue label unchanged
+
+J - ACCEPT-AS-IS (comment was informational only — no spec or MR change needed):
+   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: acknowledged. No action required.'
+   - No label changes on issue or MR
+
+When an MR is in flight, prefer G/H/I/J over A-F where appropriate.
+"
+    fi
+fi
+
+_report_line="Report your decision (A/B/C/D/E/F) and why in 2 sentences."
+if [ -n "$_IN_FLIGHT_PR" ]; then
+    _report_line="Report your decision (A/B/C/D/E/F/G/H/I/J) and why in 2 sentences."
+fi
+
 _PROMPT_FILE=$(mktemp /tmp/po-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
 You are the Product Owner agent for ${NAME} (slug: ${SLUG}).
@@ -129,7 +206,7 @@ If CLAUDE.md is missing or empty, proceed with the issue text alone and note the
 You have been given GitHub issue #${ISSUE_NUM}: ${ISSUE_TITLE}
 URL: ${ISSUE_URL}
 
-Current body:
+${_MR_PREAMBLE}Current body:
 ${ISSUE_BODY}
 
 Recent comments (most recent last) — may include human steering, blocker context from prior dev attempts, or supplementary scope:
@@ -176,7 +253,7 @@ F - REWORK RECOVERY (ticket has rework history, 1 or more failed rework attempts
    - If 3 or more failed rework attempts: label blocked and notify:
      gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label blocked --remove-label in-progress
      Comment: "PO: 3+ rework attempts failed. Flagging blocked for human review."
-
+${_MR_PATHS}
 SPEC FORMAT (for paths A and F-requeue):
 
 ## Objective
@@ -202,7 +279,7 @@ What this ticket explicitly does not cover. Prevents scope creep.
 
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
-Report your decision (A/B/C/D/E/F) and why in 2 sentences.
+${_report_line}
 $(loop_cli_hint)
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
