@@ -3,16 +3,25 @@
 #
 # Each test builds minimal fake git repos so no network access is required.
 # LOOP_ROOT is injected so update.sh operates on the fake repo, not the real one.
+#
+# Topology:
+#   FAKE_ORIGIN  main: 0.1.0 → 0.2.0(BREAKING)   ← the "remote"
+#   FAKE_CORE    main: 0.1.0 (clone of FAKE_ORIGIN, reset to old commit)
+#
+# Histories are shared, so git fetch + git merge --ff-only work without
+# --allow-unrelated-histories.  update.sh's `git fetch origin main` hits
+# FAKE_ORIGIN (not FAKE_CORE itself), so refs/remotes/origin/main correctly
+# stays at 0.2.0.
 
 setup() {
     REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
     UPDATE_SH="$REPO_ROOT/scripts/update.sh"
 
-    # Build a fake loop core repo with a BREAKING: entry in origin.
-    FAKE_CORE="$BATS_TMPDIR/fake-core"
-    rm -rf "$FAKE_CORE"
-    mkdir -p "$FAKE_CORE"
-    cd "$FAKE_CORE"
+    # ── 1. Build FAKE_ORIGIN with a linear history: 0.1.0 → 0.2.0(BREAKING) ──
+    local FAKE_ORIGIN="$BATS_TMPDIR/fake-origin"
+    rm -rf "$FAKE_ORIGIN"
+    mkdir -p "$FAKE_ORIGIN"
+    cd "$FAKE_ORIGIN"
     git init -q
     git config user.email "test@example.com"
     git config user.name "Test"
@@ -28,8 +37,6 @@ EOF
     # Ensure branch is named 'main' regardless of git default (pre-2.28 uses 'master')
     git branch -M main 2>/dev/null || true
 
-    # Simulate origin/main with a BREAKING: entry
-    git checkout -q -b origin-main
     cat > CHANGELOG.md <<'EOF'
 # Changelog
 ## [0.2.0] - 2026-05-12
@@ -42,14 +49,24 @@ EOF
     echo "0.2.0" > VERSION
     git add .
     git commit -q -m "release: v0.2.0"
+    # FAKE_ORIGIN/main is now at 0.2.0
 
-    git checkout -q main
-    git remote add origin "$FAKE_CORE"
-    git fetch origin origin-main:refs/remotes/origin/main -q
+    # ── 2. Clone FAKE_ORIGIN → FAKE_CORE, then reset to 0.1.0 ────────────────
+    # Cloning gives shared history; reset moves local main back one commit.
+    # refs/remotes/origin/main in FAKE_CORE still points at the 0.2.0 commit.
+    FAKE_CORE="$BATS_TMPDIR/fake-core"
+    rm -rf "$FAKE_CORE"
+    git clone -q "$FAKE_ORIGIN" "$FAKE_CORE"
+    cd "$FAKE_CORE"
+    git config user.email "test@example.com"
+    git config user.name "Test"
+    git reset --hard HEAD~1 -q
+    # Now: FAKE_CORE/main → 0.1.0, FAKE_CORE origin/main → 0.2.0 ✓
 }
 
 teardown() {
-    rm -rf "$BATS_TMPDIR/fake-core" "$BATS_TMPDIR/fake-monitor" 2>/dev/null || true
+    rm -rf "$BATS_TMPDIR/fake-core" "$BATS_TMPDIR/fake-origin" \
+           "$BATS_TMPDIR/fake-monitor" "$BATS_TMPDIR/fake-monitor-origin" 2>/dev/null || true
 }
 
 # ── helpers ───────────────────────────────────────────────────────────────────
@@ -61,25 +78,25 @@ run_update() {
         bash "$UPDATE_SH" "$@"
 }
 
-# Build a fake monitor repo at $BATS_TMPDIR/fake-monitor.
+# Build a fake monitor repo at $BATS_TMPDIR/fake-monitor (with its own origin).
 # $1 = "breaking" | "clean" — controls whether origin/main has a BREAKING: line.
 _make_monitor() {
     local kind="${1:-clean}"
+    local FAKE_MON_ORIGIN="$BATS_TMPDIR/fake-monitor-origin"
     local FAKE_MON="$BATS_TMPDIR/fake-monitor"
-    rm -rf "$FAKE_MON"
-    mkdir -p "$FAKE_MON"
-    cd "$FAKE_MON"
+
+    # Build monitor origin with 0.1.0 → bump
+    rm -rf "$FAKE_MON_ORIGIN"
+    mkdir -p "$FAKE_MON_ORIGIN"
+    cd "$FAKE_MON_ORIGIN"
     git init -q
     git config user.email "test@example.com"
     git config user.name "Test"
     echo "# Changelog" > CHANGELOG.md
     echo "0.1.0" > VERSION
-    git add .
-    git commit -q -m "init"
-    # Ensure branch is named 'main' regardless of git default (pre-2.28 uses 'master')
+    git add .; git commit -q -m "init"
     git branch -M main 2>/dev/null || true
 
-    git checkout -q -b origin-main
     if [ "$kind" = "breaking" ]; then
         cat > CHANGELOG.md <<'EOF'
 # Changelog
@@ -94,12 +111,17 @@ EOF
     else
         echo "0.1.1" > VERSION
     fi
-    git add .
-    git commit -q -m "bump"
+    git add .; git commit -q -m "bump"
+    # FAKE_MON_ORIGIN/main is now at 0.2.0 or 0.1.1
 
-    git checkout -q main
-    git remote add origin "$FAKE_MON"
-    git fetch origin origin-main:refs/remotes/origin/main -q
+    # Clone FAKE_MON_ORIGIN → FAKE_MON, reset to 0.1.0
+    rm -rf "$FAKE_MON"
+    git clone -q "$FAKE_MON_ORIGIN" "$FAKE_MON"
+    cd "$FAKE_MON"
+    git config user.email "test@example.com"
+    git config user.name "Test"
+    git reset --hard HEAD~1 -q
+
     cd "$FAKE_CORE"
 }
 
@@ -140,23 +162,29 @@ EOF
 }
 
 @test "core: no BREAKING: — applies without --yes" {
+    local SAFE_ORIGIN="$BATS_TMPDIR/safe-origin"
     local SAFE="$BATS_TMPDIR/safe-core"
-    rm -rf "$SAFE"; mkdir -p "$SAFE"; cd "$SAFE"
+
+    # Build SAFE_ORIGIN with 0.1.0 → 0.1.1 (no BREAKING:)
+    rm -rf "$SAFE_ORIGIN"; mkdir -p "$SAFE_ORIGIN"; cd "$SAFE_ORIGIN"
     git init -q
     git config user.email "test@example.com"; git config user.name "Test"
     echo "0.1.0" > VERSION; echo "# Changelog" > CHANGELOG.md
     git add .; git commit -q -m "init"
     git branch -M main 2>/dev/null || true
-    git checkout -q -b origin-main
     echo "0.1.1" > VERSION; git add .; git commit -q -m "patch"
-    git checkout -q main
-    git remote add origin "$SAFE"
-    git fetch origin origin-main:refs/remotes/origin/main -q
+
+    # Clone to SAFE and reset to 0.1.0
+    rm -rf "$SAFE"
+    git clone -q "$SAFE_ORIGIN" "$SAFE"
+    cd "$SAFE"
+    git config user.email "test@example.com"; git config user.name "Test"
+    git reset --hard HEAD~1 -q
 
     run env -i HOME="$HOME" PATH="$PATH" LOOP_ROOT="$SAFE" bash "$UPDATE_SH"
     [ "$status" -eq 0 ]
     [ "$(cat "$SAFE/VERSION")" = "0.1.1" ]
-    rm -rf "$SAFE"
+    rm -rf "$SAFE" "$SAFE_ORIGIN"
 }
 
 @test "core: already up to date exits cleanly" {

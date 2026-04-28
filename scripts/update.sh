@@ -38,8 +38,10 @@ done
 
 # ── extract BREAKING: entries from a CHANGELOG diff on stdin ─────────────────
 # Prints "  <version header>\n    BREAKING: ..." blocks; empty if none found.
+# Uses process substitution so python's stdin stays as the piped diff;
+# `python3 - <<'PY'` would redirect stdin to the heredoc, swallowing the pipe.
 _extract_breaking() {
-    python3 - <<'PY'
+    python3 <(cat <<'PY'
 import sys, re
 
 diff = sys.stdin.read()
@@ -69,6 +71,7 @@ for i, m in enumerate(sections):
 
 print('\n'.join(results))
 PY
+    )
 }
 
 # ── fetch loop core ───────────────────────────────────────────────────────────
@@ -90,7 +93,7 @@ fi
 # ── fetch loop-monitor (optional) ────────────────────────────────────────────
 MONITOR_BREAKING=""
 MONITOR_DIFF=""
-MONITOR_UP_TO_DATE=false
+MONITOR_UP_TO_DATE=true  # treated as "not behind" when monitor is not configured
 
 if [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
     echo "[update] fetching loop-monitor (${LOOP_MONITOR_ROOT}) …"
@@ -98,6 +101,8 @@ if [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
 
     if (cd "$LOOP_MONITOR_ROOT" && git diff --quiet HEAD..origin/main 2>/dev/null); then
         MONITOR_UP_TO_DATE=true
+    else
+        MONITOR_UP_TO_DATE=false
     fi
 
     if ! $MONITOR_UP_TO_DATE; then
