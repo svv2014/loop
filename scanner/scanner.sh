@@ -52,6 +52,7 @@ _handler_to_event_type() {
     case "$1" in
         po-handler)          echo "loop.po_review" ;;
         dev-handler)         echo "loop.dev_issue" ;;
+        senior-dev-handler)  echo "loop.senior_dev" ;;
         review-handler)      echo "loop.pr_review" ;;
         dev-rework-handler)  echo "loop.dev_rework" ;;
         qa-handler)          echo "loop.pr_qa" ;;
@@ -67,12 +68,13 @@ dispatch_direct() {
     event_type=$(echo "$json" | python3 -c "import json,sys; print(json.load(sys.stdin).get('type',''))")
     local handler
     case "$event_type" in
-        loop.po_review)  handler="$LOOP_ROOT/scripts/po-handler.sh" ;;
-        loop.dev_issue)  handler="$LOOP_ROOT/scripts/dev-handler.sh" ;;
-        loop.pr_review)  handler="$LOOP_ROOT/scripts/review-handler.sh" ;;
-        loop.dev_rework) handler="$LOOP_ROOT/scripts/dev-rework-handler.sh" ;;
-        loop.pr_qa)      handler="$LOOP_ROOT/scripts/qa-handler.sh" ;;
-        loop.pr_merge)   handler="$LOOP_ROOT/scripts/merge-handler.sh" ;;
+        loop.po_review)   handler="$LOOP_ROOT/scripts/po-handler.sh" ;;
+        loop.dev_issue)   handler="$LOOP_ROOT/scripts/dev-handler.sh" ;;
+        loop.senior_dev)  handler="$LOOP_ROOT/scripts/senior-dev-handler.sh" ;;
+        loop.pr_review)   handler="$LOOP_ROOT/scripts/review-handler.sh" ;;
+        loop.dev_rework)  handler="$LOOP_ROOT/scripts/dev-rework-handler.sh" ;;
+        loop.pr_qa)       handler="$LOOP_ROOT/scripts/qa-handler.sh" ;;
+        loop.pr_merge)    handler="$LOOP_ROOT/scripts/merge-handler.sh" ;;
         *) log "WARN: no handler for event type '$event_type'"; return 1 ;;
     esac
     local effective_timeout="${HANDLER_TIMEOUT_SECONDS:-$HANDLER_TIMEOUT}"
@@ -426,6 +428,9 @@ scan_project() {
         event_type=$(_handler_to_event_type "$handler")
         _scan_issue_stage "$slug" "$repo" "$trigger_label" "$handler" "$event_type"
     done < <(loop_polled_labels "$slug" issue)
+
+    # Senior-dev escalation — always polled regardless of workflow definition.
+    _scan_issue_stage "$slug" "$repo" "senior-dev" "senior-dev-handler" "loop.senior_dev"
 
     # PR stages — iterated from the project's active workflow.
     while IFS= read -r trigger_label; do
