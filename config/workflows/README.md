@@ -145,9 +145,9 @@ Possible custom workflow shapes:
 ## Operator-local workflows
 
 Workflow files are not all meant to ship publicly. The repo ships
-`default.yaml` and `minimal.yaml` as starters. Operator-specific workflows
-(e.g., legacy-vocabulary mirrors, internal compliance pipelines) should
-be **local-only**, not committed.
+`default.yaml`, `minimal.yaml`, and `docs-only.yaml` as starters.
+Operator-specific workflows (e.g., legacy-vocabulary mirrors, internal
+compliance pipelines) should be **local-only**, not committed.
 
 Two conventions for keeping a workflow local:
 
