@@ -45,23 +45,30 @@ The name is a nod to _loup_, French for wolf — a predator that hunts in packs,
 
 ## Install (5 minutes)
 
+Clone, bootstrap, and add your first project:
+
 ```bash
-git clone https://github.com/svv2014/loop.git
-cd loop
-./install.sh --bootstrap            # check tools, write loop.env, register services
+git clone https://github.com/svv2014/loop.git && cd loop
+./install.sh --bootstrap            # check tools, write loop.env, register scanner
 ./install.sh /path/to/your-project  # add a project to the pipeline
 ```
 
-`--bootstrap` checks `gh auth status`, `python3` + `pyyaml`, and at least
-one supported agent CLI; copies `loop.env.example` → `loop.env` and
-`config/projects.example.yaml` → `config/projects.yaml`; registers a
-launchd plist (macOS) or cron entry (Linux) for the scanner and reconciler.
+Set your agent in `loop.env`:
 
-Then label any issue `plan` (or `dev`, depending on your workflow) and
-the scanner picks it up within 5 minutes.
+```bash
+LOOP_AGENT=claude
+LOOP_AGENT_MODEL=sonnet
+```
 
-See [`docs/quick-start.md`](docs/quick-start.md) for a step-by-step
-walkthrough including agent configuration and first-project setup.
+Then label an issue to start the pipeline:
+
+```bash
+gh issue edit <number> --repo owner/repo --add-label plan
+```
+
+The scanner picks it up within 5 minutes and opens a PR automatically.
+
+[More options](docs/quick-start.md) — GitLab, other agents, loop-monitor, and advanced config.
 
 ## How a feature flows through Loop
 
