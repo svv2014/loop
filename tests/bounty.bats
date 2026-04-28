@@ -198,3 +198,62 @@ if not cv:
 PY
     [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# loop_id — stable per-instance identifier
+# ---------------------------------------------------------------------------
+
+@test "bounty_report: default loop_id is stable across two calls with same env" {
+    BOUNTY_API_VERSION="1.0"
+    unset LOOP_ID
+    export LOOP_ROOT="$BATS_TMPDIR"
+
+    bounty_report "dev_done" project=myapp issue_num=1
+    [ -f "$PAYLOAD_FILE" ]
+    local id1
+    id1="$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d['loop_id'])" < "$PAYLOAD_FILE")"
+
+    rm -f "$PAYLOAD_FILE"
+    bounty_report "dev_done" project=myapp issue_num=1
+    [ -f "$PAYLOAD_FILE" ]
+    local id2
+    id2="$(python3 -c "import json,sys; d=json.load(sys.stdin); print(d['loop_id'])" < "$PAYLOAD_FILE")"
+
+    [ "$id1" = "$id2" ]
+    [ -n "$id1" ]
+}
+
+@test "bounty_report: LOOP_ID env override appears in payload" {
+    BOUNTY_API_VERSION="1.0"
+    export LOOP_ID="test-instance-abc"
+
+    bounty_report "merge_done" project=myapp pr_num=5
+
+    [ -f "$PAYLOAD_FILE" ]
+    run python3 -c "import json,sys; d=json.load(sys.stdin); print(d['loop_id'])" < "$PAYLOAD_FILE"
+    [ "$status" -eq 0 ]
+    [ "$output" = "test-instance-abc" ]
+}
+
+@test "bounty_report: core_version and loop_id present for po_start, dev_done, rework_failed" {
+    BOUNTY_API_VERSION="1.0"
+    export LOOP_VERSION="2.0.0"
+    export LOOP_ID="ci-instance"
+
+    for event in po_start dev_done rework_failed; do
+        rm -f "$PAYLOAD_FILE"
+        bounty_report "$event" project=myapp issue_num=10
+
+        [ -f "$PAYLOAD_FILE" ]
+        run python3 - "$PAYLOAD_FILE" "$event" <<'PY'
+import json, sys
+with open(sys.argv[1]) as f:
+    d = json.load(f)
+ev = sys.argv[2]
+assert d.get("core_version"), f"core_version missing for {ev}"
+assert d.get("loop_id"), f"loop_id missing for {ev}"
+assert d["event"] == ev, f"event mismatch: {d['event']} != {ev}"
+PY
+        [ "$status" -eq 0 ]
+    done
+}
