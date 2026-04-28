@@ -41,6 +41,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 - [LOOP-96] Wolf mascot — loup/loop dual identity branding (#125)
 - [LOOP-123] simplify README Install section to 3-command Claude+GitHub quickstart (#126)
+- [LOOP-124] rewrite quick-start.md: Claude+GitHub MVP in 5 steps (#130)
 ### Added
 - `tests/po-body-preserve.bats`: 5 tests for the original-brief extraction logic
 - `scripts/auto-release-pr.sh`: new script that maintains one open `chore: release vX.Y.Z` PR; idempotent, computes next version from `semver:*` labels, promotes CHANGELOG, supports `--dry-run`
