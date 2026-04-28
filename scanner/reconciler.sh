@@ -745,9 +745,8 @@ PY
     local pr_num pr_state issue_nums issue_num
     for pr_num in $conflict_prs; do
         # Check actual merge state
-        pr_state=$(backend_pr_view "$repo" "$pr_num" --json mergeable,mergeStateStatus,body 2>/dev/null || echo "{}")
-        local mergeable merge_status body
-        mergeable=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeable',''))" 2>/dev/null || echo "")
+        pr_state=$(backend_pr_view "$repo" "$pr_num" --json mergeStateStatus,body 2>/dev/null || echo "{}")
+        local merge_status body
         merge_status=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeStateStatus',''))" 2>/dev/null || echo "")
         body=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('body',''))" 2>/dev/null || echo "")
 

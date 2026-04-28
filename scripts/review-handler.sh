@@ -102,6 +102,7 @@ backend_add_label "$REPO" "$PR_NUM" in-review
 # belt-and-braces apply the right names per active workflow.
 QA_LABEL=$(loop_stage_trigger "$SLUG" qa pr 2>/dev/null || echo ready-for-qa)
 REWORK_LABEL=$(loop_stage_trigger "$SLUG" rework pr 2>/dev/null || echo changes-requested)
+_BACKEND_CLI_NOTE=$(backend_cli_note)
 
 _PROMPT_FILE=$(mktemp /tmp/review-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
@@ -148,6 +149,7 @@ IMPORTANT: You MUST finish by applying either '${QA_LABEL}' or '${REWORK_LABEL}'
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 Report the decision you made and why, in 3 short sentences.
+${_BACKEND_CLI_NOTE}
 $(loop_cli_hint)
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")

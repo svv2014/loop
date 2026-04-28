@@ -194,6 +194,7 @@ if [ -n "$DEV_VALIDATION_CMD" ]; then
 else
     _VALIDATION_STEP=""
 fi
+_BACKEND_CLI_NOTE=$(backend_cli_note)
 
 _PROMPT_FILE=$(mktemp /tmp/rework-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
@@ -232,6 +233,7 @@ IMPORTANT: The PR MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clar
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 If the feedback is unclear or requires architectural input, add label 'needs-clarification' and comment on the PR instead of guessing.
+${_BACKEND_CLI_NOTE}
 $(loop_cli_hint)
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")

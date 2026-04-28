@@ -194,6 +194,7 @@ if [ -n "$_IN_FLIGHT_PR" ]; then
     _report_line="Report your decision (A/B/C/D/E/F/G/H/I/J) and why in 2 sentences."
 fi
 
+_BACKEND_CLI_NOTE=$(backend_cli_note)
 _PROMPT_FILE=$(mktemp /tmp/po-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
 You are the Product Owner agent for ${NAME} (slug: ${SLUG}).
@@ -280,6 +281,7 @@ What this ticket explicitly does not cover. Prevents scope creep.
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
 ${_report_line}
+${_BACKEND_CLI_NOTE}
 $(loop_cli_hint)
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
