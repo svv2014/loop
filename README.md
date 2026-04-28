@@ -54,6 +54,9 @@ launchd plist (macOS) or cron entry (Linux) for the scanner and reconciler.
 Then label any issue `plan` (or `dev`, depending on your workflow) and
 the scanner picks it up within 5 minutes.
 
+See [`docs/quick-start.md`](docs/quick-start.md) for a step-by-step
+walkthrough including agent configuration and first-project setup.
+
 ## How a feature flows through Loop
 
 1. **You** open an issue, write what you want, label it `plan`.
@@ -85,7 +88,7 @@ Loop ships three starter workflows in `config/workflows/`:
 | `minimal.yaml` | Solo prototypes. Two stages: `plan → merge`. No review, no QA. |
 | `docs-only.yaml` | Documentation and content PRs. Three stages: `plan → review → merge`. No QA gate. |
 
-`current.yaml` is an operator-local workflow (gitignored). If you're migrating from a repo that already uses legacy labels (`dev` / `needs-review` / `qa-pass`), create it locally — the schema is documented in `config/workflows/README.md`.
+`current.yaml` is an operator-local workflow (gitignored). If you're migrating from a repo that already uses legacy labels (`dev` / `review-pending` / `ready-for-qa`), create it locally — see [`docs/migration-from-asdlc.md`](docs/migration-from-asdlc.md) for a full label mapping and setup instructions.
 
 Per-project workflow + label overrides in `config/projects.yaml`:
 
@@ -105,8 +108,8 @@ Author your own — see [`config/workflows/README.md`](config/workflows/README.m
 
 ## Configuration
 
-- `loop.env` — operator-specific env (log dir, agent choice, monitor URL,
-  notification command). Copy from `loop.env.example`. **Not committed.**
+- `loop.env` — operator-specific env (log dir, agent choice, dispatch mode,
+  notifications, PATH extras). Copy from `loop.env.example`. **Not committed.**
 - `config/projects.yaml` — your project registry. **Not committed.**
 - `config/projects.example.yaml` — annotated schema reference.
 - `config/workflows/*.yaml` — pipeline workflow definitions. Committed.
