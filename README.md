@@ -51,10 +51,8 @@ one supported agent CLI; copies `loop.env.example` → `loop.env` and
 `config/projects.example.yaml` → `config/projects.yaml`; registers a
 launchd plist (macOS) or cron entry (Linux) for the scanner and reconciler.
 
-Then open `loop.env` and set `LOOP_AGENT` to your preferred AI agent
-(`claude`, `codex`, `gemini`, or `aider`). Label any issue `dev` (or
-`plan`, depending on your workflow) and the scanner picks it up within
-5 minutes.
+Then label any issue `plan` (or `dev`, depending on your workflow) and
+the scanner picks it up within 5 minutes.
 
 ## How a feature flows through Loop
 
@@ -77,60 +75,31 @@ Then open `loop.env` and set `LOOP_AGENT` to your preferred AI agent
 The whole flow is just labels on issues and PRs. You can intervene at
 any stage by manually labeling.
 
-## Pipeline stages
-
-Labels drive every state transition. The canonical stage order (using
-`current` workflow vocabulary):
-
-```
-po-review ──▶ dev ──▶ review-pending ──▶ ready-for-qa ──▶ done
-                            ▲                   │
-                            └── needs-rework ◀──┘ (QA fail or review reject)
-
-Side states (halt the pipeline until resolved):
-  needs-clarification — agent is blocked; operator must clarify the issue
-```
-
-| Stage label | Who sets it | Outcome |
-|---|---|---|
-| `po-review` | Operator | PO agent expands the issue; advances to `dev` |
-| `dev` | Scanner / operator | Dev agent creates branch + PR; advances to `review-pending` |
-| `review-pending` | Dev handler | Review agent approves or requests rework |
-| `ready-for-qa` | Review handler | QA agent runs tests; advances to `done` or back to `needs-rework` |
-| `needs-rework` | Review / QA handler | Dev agent re-implements; returns to `review-pending` |
-| `needs-clarification` | Any handler | Pipeline paused; operator updates the issue and re-labels |
-| `done` | Merge handler | PR squash-merged, issue closed |
-
-## Handlers
-
-Each handler is a shell script in `scripts/` that fires when its trigger
-label appears on an issue or PR:
-
-| Script | Trigger label | Action |
-|---|---|---|
-| `scripts/po-handler.sh` | `po-review` | PO agent expands the issue spec; advances to `dev` |
-| `scripts/dev-handler.sh` | `dev` | Dev agent creates a branch and opens a PR |
-| `scripts/review-handler.sh` | `review-pending` | AI code review; approve → `ready-for-qa`, reject → `needs-rework` |
-| `scripts/qa-handler.sh` | `ready-for-qa` | Runs project `validation_cmd`; pass → `done`, fail → `needs-rework` |
-| `scripts/merge-handler.sh` | QA pass | Squash-merges the PR, closes the issue, labels `done` |
-| `scripts/dev-rework-handler.sh` | `needs-rework` | Dev agent re-implements based on review or QA feedback |
-
 ## Workflows (bring your own)
 
-Loop ships starter workflows in `config/workflows/`:
+Loop ships three starter workflows in `config/workflows/`:
 
-| Workflow | Label vocabulary | When to use |
-|---|---|---|
-| `default` | `plan` / `needs-review` / `needs-qa` / `qa-pass` | New repos adopting Loop's built-in label names |
-| `current` | `dev` / `review-pending` / `ready-for-qa` / `done` | Repos that already use the operator's existing label names |
-| `minimal` | `plan` → `merge` | Solo prototypes; no review, no QA |
+| Workflow | When to use |
+|---|---|
+| `default.yaml` | New repos. Clean canonical labels: `plan` / `needs-review` / `needs-qa` / `qa-pass`. Five-stage pipeline with PO expansion + rework loop. |
+| `minimal.yaml` | Solo prototypes. Two stages: `plan → merge`. No review, no QA. |
+| `docs-only.yaml` | Documentation and content PRs. Three stages: `plan → review → merge`. No QA gate. |
 
-**`default`** uses Loop's built-in canonical label names.
-**`current`** uses the operator's existing label names — drop-in for repos
-that already have labels like `dev` and `ready-for-qa`.
+`current.yaml` is an operator-local workflow (gitignored). If you're migrating from a repo that already uses legacy labels (`dev` / `needs-review` / `qa-pass`), create it locally — the schema is documented in `config/workflows/README.md`.
 
-The active workflow for each project is set via the `workflow:` field in
-`config/projects.yaml`. Per-project label overrides are also supported.
+Per-project workflow + label overrides in `config/projects.yaml`:
+
+```yaml
+version: 1
+projects:
+  - name: My App
+    slug: myapp
+    repo: owner/my-app
+    workflow: default              # references config/workflows/default.yaml
+    labels:                        # optional — sparse overrides
+      plan: dev                    # repo uses 'dev' instead of 'plan'
+      qa-pass: approved
+```
 
 Author your own — see [`config/workflows/README.md`](config/workflows/README.md).
 
@@ -141,28 +110,6 @@ Author your own — see [`config/workflows/README.md`](config/workflows/README.m
 - `config/projects.yaml` — your project registry. **Not committed.**
 - `config/projects.example.yaml` — annotated schema reference.
 - `config/workflows/*.yaml` — pipeline workflow definitions. Committed.
-
-### Minimal `config/projects.yaml`
-
-```yaml
-version: 1
-projects:
-  - name: My Project
-    slug: myapp              # short identifier — used in logs and lock files
-    repo: owner/my-app       # GitHub "owner/repo"
-    root: /path/to/my-app    # absolute path to local checkout
-    default_branch: main
-    workflow: current        # or: default, minimal
-    dev:
-      commit_prefix: MYAPP   # produces [MYAPP-N] commit and PR titles
-```
-
-Required fields: `slug`, `repo`, `root`, `default_branch`.
-`dev.commit_prefix` controls the `[PREFIX-N]` string prepended to every
-commit title and PR title opened by the dev agent.
-
-See `config/projects.example.yaml` for all optional fields (QA command,
-merge strategy, label overrides, backend adapter).
 
 ## Supported AI agents
 
@@ -240,32 +187,6 @@ contract; both are first-class commitments going forward.
 [Roadmap](ROADMAP.md) tracks what's next: spec-blind validator stage,
 domain specialist agents (frontend / backend / data / devops), expanded
 backend coverage.
-
-## Updating
-
-Until automated updates ship ([#17](https://github.com/svv2014/loop/issues/17)),
-update Loop and loop-monitor manually:
-
-```bash
-# 1. Pull the latest Loop core
-cd ~/projects/loop
-git pull --ff-only
-
-# 2. Pull the latest loop-monitor (if installed)
-cd ~/projects/loop-monitor
-git pull --ff-only
-
-# 3. Restart the Loop services (macOS launchd)
-launchctl kickstart -k gui/$(id -u)/com.user.loop-scanner
-launchctl kickstart -k gui/$(id -u)/com.user.loop-reconciler
-```
-
-On Linux, restart the cron-managed processes by reloading the crontab or
-bouncing the wrapper processes as appropriate for your setup.
-
-Check [CHANGELOG.md](CHANGELOG.md) for migration notes before upgrading,
-especially across MINOR versions (pre-1.0 minor releases may change
-`loop.env` keys or `projects.yaml` schema).
 
 ## Contributing
 

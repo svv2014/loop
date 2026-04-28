@@ -11,7 +11,7 @@ config/projects.yaml
 .claude/
 
 # Operator-specific workflow overrides — local only. Each operator authors
-# their own legacy/internal workflows; only `default.yaml` and `minimal.yaml`
-# ship in the public repo.
+# their own legacy/internal workflows; `default.yaml`, `minimal.yaml`, and
+# `docs-only.yaml` ship in the public repo.
 config/workflows/current.yaml
 config/workflows/*.local.yaml

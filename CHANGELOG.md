@@ -23,10 +23,12 @@ bounty event API.
 ### Added
 
 - **Workflow-as-config** — pipeline stages and the labels that drive them
-  are defined per-project in `config/workflows/<name>.yaml`. Two starter
-  workflows ship: `default` (clean canonical labels) and `current`
-  (legacy-vocabulary mirror for in-place adoption). Operators can author
-  their own workflow files.
+  are defined per-project in `config/workflows/<name>.yaml`. Three starter
+  workflows ship: `default` (clean canonical labels), `minimal` (two-stage
+  plan → merge, no review or QA), and `docs-only` (plan → review → merge,
+  no QA gate). Operators can author their own workflow files. `current.yaml`
+  is reserved as an operator-local gitignored file for legacy-label
+  migration.
 - **Per-project workflow + label overrides** — `config/projects.yaml` v1
   schema lets each project pick a workflow and override individual label
   names if needed.
