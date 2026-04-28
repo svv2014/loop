@@ -36,6 +36,11 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - Draft: [LOOP-89] Add daily operator digest of stuck pipeline items (#94)
 - Draft: [LOOP-87] detect draft PRs in review-handler and qa-handler (#95)
 - [LOOP-90] add LOOP_SENIOR_MODEL and loop_run_senior_agent() helper (#118)
+- [LOOP-88] PO handler: preserve original issue body under '## Original brief (preserved by PO)' marker on issue expand (#119)
+
+### Added
+- `tests/po-body-preserve.bats`: 5 tests for the original-brief extraction logic
+
 ## [0.1.0] - 2026-04-27
 
 Initial public release. Loop is the public rebrand of a prior internal
