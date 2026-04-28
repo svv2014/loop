@@ -103,56 +103,64 @@ except Exception:
     pass
 " || echo "")
 
+# Write multi-line vars to temp files so the quoted heredoc can stay clean.
+_BODY_FILE=$(mktemp /tmp/po-body-XXXXXX.txt)
+_COMMENTS_FILE=$(mktemp /tmp/po-comments-XXXXXX.txt)
 _PROMPT_FILE=$(mktemp /tmp/po-prompt-XXXXXX.txt)
-cat > "$_PROMPT_FILE" <<EOF
-You are the Product Owner agent for ${NAME} (slug: ${SLUG}).
-Project root: ${ROOT}
-Repo: ${REPO}
+printf '%s' "$ISSUE_BODY"     > "$_BODY_FILE"
+printf '%s' "$ISSUE_COMMENTS" > "$_COMMENTS_FILE"
 
-READ ${ROOT}/CLAUDE.md first for project context, conventions, and scope rules.
+# Quoted heredoc — bash 3.2 safe (no variable expansion inside, no $() wrapping).
+# @@PLACEHOLDER@@ tokens are substituted below via Python.
+cat > "$_PROMPT_FILE" <<'PROMPT'
+You are the Product Owner agent for @@NAME@@ (slug: @@SLUG@@).
+Project root: @@ROOT@@
+Repo: @@REPO@@
+
+READ @@ROOT@@/CLAUDE.md first for project context, conventions, and scope rules.
 If CLAUDE.md is missing or empty, proceed with the issue text alone and note the absence in the spec under ## Notes.
 
-You have been given GitHub issue #${ISSUE_NUM}: ${ISSUE_TITLE}
-URL: ${ISSUE_URL}
+You have been given GitHub issue #@@ISSUE_NUM@@: @@ISSUE_TITLE@@
+URL: @@ISSUE_URL@@
 
 Current body:
-${ISSUE_BODY}
+@@ISSUE_BODY@@
 
 Recent comments (most recent last) — may include human steering, blocker context from prior dev attempts, or supplementary scope:
-${ISSUE_COMMENTS}
+@@ISSUE_COMMENTS@@
 
 Your job: triage this ticket and decide what to do with it. You have full authority over the ticket lifecycle.
 
 STEP 1 — Read the context:
-- cd ${ROOT} && read CLAUDE.md
-- Check if similar issues are already open or recently closed: gh issue list --repo ${REPO} --state all --limit 50
+- cd @@ROOT@@ && read CLAUDE.md
+- Check if similar issues are already open or recently closed: gh issue list --repo @@REPO@@ --state all --limit 50
 - Read the rework history in comments (look for "Rework attempt" comments)
 
 STEP 2 — Choose a decision path:
 
 A - EXPAND AND QUEUE (default: idea is clear, not duplicate, achievable in 1 day or less):
    - Rewrite the issue body with the spec below
-   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --body-file /tmp/po-${ISSUE_NUM}-body.md
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: spec written. Queuing for implementation.'
-   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label dev
+   - gh issue edit @@ISSUE_NUM@@ --repo @@REPO@@ --body-file /tmp/po-@@ISSUE_NUM@@-body.md
+   - gh issue comment @@ISSUE_NUM@@ --repo @@REPO@@ --body 'PO: spec written. Queuing for implementation.'
+   - gh issue edit @@ISSUE_NUM@@ --repo @@REPO@@ --remove-label in-progress --add-label dev
 
 B - CLOSE AS DUPLICATE (issue already exists or was recently merged):
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: closing as duplicate of #N.'
-   - gh issue close ${ISSUE_NUM} --repo ${REPO} --reason "not planned"
+   - gh issue comment @@ISSUE_NUM@@ --repo @@REPO@@ --body 'PO: closing as duplicate of #N.'
+   - gh issue close @@ISSUE_NUM@@ --repo @@REPO@@ --reason "not planned"
 
 C - CANCEL / OUT OF SCOPE (idea contradicts project goals, irrelevant, or explicitly unwanted):
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: closing out of scope. Reason: [explain].'
-   - gh issue close ${ISSUE_NUM} --repo ${REPO} --reason "not planned"
+   - gh issue comment @@ISSUE_NUM@@ --repo @@REPO@@ --body 'PO: closing out of scope. Reason: [explain].'
+   - gh issue close @@ISSUE_NUM@@ --repo @@REPO@@ --reason "not planned"
 
 D - UPGRADE TO EPIC (idea is too big for one dev cycle, more than 1 day of work):
    - Convert this issue to a tracker/epic (add label "tracker")
    - Create 2-4 child issues, each scoped to less than 1 day, each with "po-review" label
-   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label tracker --remove-label in-progress --remove-label po-review
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: decomposed into child issues: #X, #Y, #Z.'
+   - gh issue edit @@ISSUE_NUM@@ --repo @@REPO@@ --add-label tracker --remove-label in-progress --remove-label po-review
+   - gh issue comment @@ISSUE_NUM@@ --repo @@REPO@@ --body 'PO: decomposed into child issues: #X, #Y, #Z.'
 
 E - NEEDS CLARIFICATION (request is ambiguous, one specific question can unblock it):
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: needs clarification: [one specific question].'
-   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label needs-clarification
+   - gh issue comment @@ISSUE_NUM@@ --repo @@REPO@@ --body 'PO: needs clarification: [one specific question].'
+   - gh issue edit @@ISSUE_NUM@@ --repo @@REPO@@ --remove-label in-progress --add-label needs-clarification
 
 F - REWORK RECOVERY (ticket has rework history, 1 or more failed rework attempts in comments):
    Read what failed. Then decide:
@@ -160,7 +168,7 @@ F - REWORK RECOVERY (ticket has rework history, 1 or more failed rework attempts
    - If implementation approach was wrong: add an "Implementation Hint" section to spec and re-queue
    - If ticket is fundamentally broken: cancel (path C)
    - If 3 or more failed rework attempts: label blocked and notify:
-     gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label blocked --remove-label in-progress
+     gh issue edit @@ISSUE_NUM@@ --repo @@REPO@@ --add-label blocked --remove-label in-progress
      Comment: "PO: 3+ rework attempts failed. Flagging blocked for human review."
 
 SPEC FORMAT (for paths A and F-requeue):
@@ -187,11 +195,40 @@ Any gotchas, relevant prior art, or constraints pulled from CLAUDE.md.
 What this ticket explicitly does not cover. Prevents scope creep.
 
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
-Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
+Verify: gh issue view @@ISSUE_NUM@@ --repo @@REPO@@ --json labels,state
 Report your decision (A/B/C/D/E/F) and why in 2 sentences.
-EOF
+PROMPT
+
+# Substitute @@PLACEHOLDER@@ tokens — Python handles multi-line values safely.
+python3 - "$_PROMPT_FILE" "$_BODY_FILE" "$_COMMENTS_FILE" \
+    "$NAME" "$SLUG" "$ROOT" "$REPO" "$ISSUE_NUM" "$ISSUE_TITLE" "$ISSUE_URL" <<'PY'
+import sys
+prompt_file, body_file, comments_file = sys.argv[1], sys.argv[2], sys.argv[3]
+name, slug, root, repo, issue_num, issue_title, issue_url = sys.argv[4:]
+with open(prompt_file) as f:
+    content = f.read()
+with open(body_file) as f:
+    body = f.read()
+with open(comments_file) as f:
+    comments = f.read()
+for placeholder, value in [
+    ('@@NAME@@',          name),
+    ('@@SLUG@@',          slug),
+    ('@@ROOT@@',          root),
+    ('@@REPO@@',          repo),
+    ('@@ISSUE_NUM@@',     issue_num),
+    ('@@ISSUE_TITLE@@',   issue_title),
+    ('@@ISSUE_URL@@',     issue_url),
+    ('@@ISSUE_BODY@@',    body),
+    ('@@ISSUE_COMMENTS@@', comments),
+]:
+    content = content.replace(placeholder, value)
+with open(prompt_file, 'w') as f:
+    f.write(content)
+PY
+
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
-rm -f "$_PROMPT_FILE"
+rm -f "$_PROMPT_FILE" "$_BODY_FILE" "$_COMMENTS_FILE"
 
 _post_failure_comment() {
     local target_type="$1" target_num="$2" label_ctx="$3" _attempt="$4" max="$5"
