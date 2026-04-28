@@ -710,6 +710,162 @@ PY
     done <<< "$candidates"
 }
 
+# --- Check 12: QA failure recovery — transient auto-retry + repeated-failure clarification ---
+# Default transient keywords. Operators can override via LOOP_TRANSIENT_KEYWORDS in loop.env.
+# Value must be a comma-separated list of case-insensitive substrings to match against run logs.
+_DEFAULT_TRANSIENT_KEYWORDS="timeout,rate limit,503,tcp i/o,ETIMEDOUT,connection refused,install"
+QA_RETRY_STATE_DIR="/tmp/loop-qa-retry"
+
+reconcile_qa_failures() {
+    local repo="$1"
+    log "[$repo] scanning qa-fail PRs for transient errors / repeated failures"
+
+    mkdir -p "$QA_RETRY_STATE_DIR"
+
+    # Fetch open PRs with qa-fail label
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    local qa_fail_prs
+    qa_fail_prs=$(PJSON="$prs_json" python3 - <<'PY'
+import json, os
+prs = json.loads(os.environ['PJSON'])
+for pr in prs:
+    lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
+    if 'qa-fail' in lbls:
+        branch = pr.get('headRefName', '')
+        print(f"{pr['number']}\t{branch}\t{pr.get('body','')[:400]}")
+PY
+)
+
+    if [ -z "$qa_fail_prs" ]; then
+        log "[$repo] no qa-fail PRs"
+        return 0
+    fi
+
+    local transient_keywords="${LOOP_TRANSIENT_KEYWORDS:-$_DEFAULT_TRANSIENT_KEYWORDS}"
+    # Sanitize repo name for use in file paths (no path traversal)
+    local repo_safe="${repo//\//-}"
+    repo_safe="${repo_safe//[^a-zA-Z0-9._-]/_}"
+
+    while IFS=$'\t' read -r pr_num pr_branch pr_body; do
+        [ -z "$pr_num" ] && continue
+
+        # Marker file: capped at one auto-retry per PR per unique failure
+        local marker="/tmp/loop-qa-retry-${repo_safe}-${pr_num}.retried"
+
+        # Find the most recent failed QA run for this branch
+        local run_id runs_raw
+        runs_raw=$(gh run list --repo "$repo" \
+            --workflow qa-build-test.yml \
+            --json databaseId,conclusion,headBranch \
+            --limit 20 2>/dev/null || echo "[]")
+        run_id=$(RUNS="$runs_raw" BRANCH="$pr_branch" python3 - <<'PY2'
+import json, os
+rows = json.loads(os.environ['RUNS'])
+branch = os.environ['BRANCH']
+for r in rows:
+    if r.get('headBranch') == branch and r.get('conclusion') in ('failure', 'timed_out'):
+        print(r['databaseId'])
+        break
+PY2
+) || run_id=""
+
+        if [ -z "$run_id" ]; then
+            log "[$repo] PR#$pr_num: no failed QA run found for branch=$pr_branch — skip"
+            continue
+        fi
+
+        local run_log
+        run_log=$(gh run view "$run_id" --repo "$repo" --log-failed 2>/dev/null || echo "")
+
+        if [ -z "$run_log" ]; then
+            log "[$repo] PR#$pr_num: empty QA run log for run=$run_id — skip"
+            continue
+        fi
+
+        # Check for transient keywords
+        local is_transient=false
+        local kw
+        IFS=',' read -ra kw_arr <<< "$transient_keywords"
+        for kw in "${kw_arr[@]}"; do
+            kw="${kw# }"; kw="${kw% }"
+            if echo "$run_log" | grep -qi "$kw"; then
+                is_transient=true
+                break
+            fi
+        done
+
+        if $is_transient && [ ! -f "$marker" ]; then
+            log "[$repo] PR#$pr_num: transient QA failure detected (run=$run_id) — auto-retry"
+            loop_notify "Loop reconciler: $repo — PR#$pr_num transient QA failure (run=$run_id); cycling qa-fail → needs-qa"
+            $DRY_RUN && continue
+            touch "$marker"
+            backend_remove_label "$repo" "$pr_num" qa-fail \
+                || log "[$repo] WARN: failed to remove qa-fail from PR#$pr_num"
+            backend_add_label "$repo" "$pr_num" needs-qa \
+                || log "[$repo] WARN: failed to add needs-qa to PR#$pr_num"
+            continue
+        fi
+
+        # Retry already exhausted (marker exists) or non-transient: post clarification
+        log "[$repo] PR#$pr_num: QA failure not auto-retryable (marker_exists=$( [ -f "$marker" ] && echo true || echo false ), transient=$is_transient) — posting clarification"
+
+        # Extract failing test names (last 20 lines of log as context)
+        local failing_tests last_20
+        failing_tests=$(echo "$run_log" | grep -oE '(FAIL|FAILED|Error in|✗|×)[[:space:]]+[A-Za-z0-9_./:@ -]+' \
+            | head -20 | sort -u | tr '\n' ' ' || echo "")
+        last_20=$(echo "$run_log" | tail -20)
+
+        # Extract linked issue numbers from PR body
+        local linked_issues
+        linked_issues=$(BODY="$pr_body" python3 - <<'PY3'
+import re, os
+nums = re.findall(r'[Cc]loses?\s+#(\d+)', os.environ.get('BODY', ''))
+print(' '.join(nums))
+PY3
+)
+
+        local clarification_body
+        clarification_body="**What was tried:** QA workflow run [#${run_id}](https://github.com/${repo}/actions/runs/${run_id}) on PR #${pr_num} (branch \`${pr_branch}\`).
+
+**What failed:**
+\`\`\`
+${failing_tests:-No structured test names found}
+\`\`\`
+
+<details><summary>Last 20 lines of failure output</summary>
+
+\`\`\`
+${last_20}
+\`\`\`
+</details>
+
+**Options:**
+(a) Fix the failing test(s) — update the code or test to make them pass, then push a new commit to this PR.
+(b) Skip the test(s) — if the test is flaky or irrelevant to this change, annotate it with the appropriate skip marker and document why."
+
+        $DRY_RUN && {
+            log "[$repo] DRY_RUN: would post clarification comment on PR#$pr_num"
+            continue
+        }
+
+        backend_comment_pr "$repo" "$pr_num" "$clarification_body" \
+            || log "[$repo] WARN: failed to post clarification on PR#$pr_num"
+        backend_add_label "$repo" "$pr_num" needs-clarification \
+            || log "[$repo] WARN: failed to add needs-clarification to PR#$pr_num"
+
+        # Also label the linked issue(s) with needs-clarification
+        local issue_num
+        for issue_num in $linked_issues; do
+            backend_add_label "$repo" "$issue_num" needs-clarification \
+                || log "[$repo] WARN: failed to add needs-clarification to issue#$issue_num"
+        done
+
+        loop_notify "Loop reconciler: $repo — PR#$pr_num QA failure escalated to needs-clarification (run=$run_id)"
+    done <<< "$qa_fail_prs"
+}
+
 # --- Check 11: conflict-blocked PRs — close + re-queue source issue to dev -----
 # When the rework agent hits MAX_RETRIES because of a persistent rebase conflict,
 # the PR ends up with `blocked` + mergeStateStatus=CONFLICTING/DIRTY. The branch
@@ -800,6 +956,7 @@ run_project() {
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_conflict_blocked_prs "$REPO"
+    reconcile_qa_failures "$REPO"
     reconcile_worktrees "$slug" "$REPO"
 }
 
