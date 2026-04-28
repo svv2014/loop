@@ -100,3 +100,44 @@ loop_load_backend
 
 # (declare this alongside the other backend_* interface functions)
 backend_issue_unmet_deps() { echo "backend_issue_unmet_deps not implemented" >&2; return 1; }
+
+# backend_cli_note — emit a CLI reference block for agent prompts.
+# On gitlab/jira-gitlab backends, prints a glab/gh equivalence table so
+# the agent knows to use glab instead of gh. Prints nothing on github.
+backend_cli_note() {
+    case "${BACKEND:-github}" in
+        gitlab|jira-gitlab) cat <<'CLINOTE'
+
+BACKEND NOTICE: This project uses GitLab. Use glab commands instead of gh:
+  gh issue view N --repo R --json body --jq .body
+    → glab issue view N --repo R --output json | python3 -c "import json,sys; print(json.load(sys.stdin).get('description',''))"
+  gh issue list --repo R --state all --limit 50
+    → glab issue list --repo R --state all --limit 50
+  gh issue edit N --repo R --add-label L --remove-label M
+    → glab issue update N --repo R --add-label L --remove-label M
+  gh issue comment N --repo R --body 'text'
+    → glab issue comment N --repo R --body 'text'
+  gh issue close N --repo R
+    → glab issue close N --repo R
+  gh issue create --repo R --title T --body B --label L
+    → glab issue create --repo R --title T --description B --label L
+  gh pr create --repo R --title T --body B --label L
+    → glab mr create --repo R --title T --description B --label L
+  gh pr view N --repo R --json state,merged
+    → glab mr view N --repo R --output json
+  gh pr diff N --repo R
+    → glab mr diff N --repo R
+  gh pr checks N --repo R
+    → glab pipeline list --source-branch BRANCH --repo R
+  gh pr review N --repo R --approve --body 'text'
+    → glab mr approve N --repo R  (post review body as a separate comment)
+  gh pr review N --repo R --request-changes --body 'text'
+    → glab mr revoke N --repo R  (post review body as a separate comment)
+  gh pr edit N --repo R --add-label L --remove-label M
+    → glab mr update N --repo R --add-label L --remove-label M
+  gh pr comment N --repo R --body 'text'
+    → glab mr comment N --repo R --body 'text'
+CLINOTE
+        ;;
+    esac
+}

@@ -105,6 +105,8 @@ except Exception:
     pass
 " || echo "")
 
+_BACKEND_CLI_NOTE=$(backend_cli_note)
+
 _PROMPT_FILE=$(mktemp /tmp/po-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
 You are the Product Owner agent for ${NAME} (slug: ${SLUG}).
@@ -191,6 +193,7 @@ What this ticket explicitly does not cover. Prevents scope creep.
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
 Report your decision (A/B/C/D/E/F) and why in 2 sentences.
+${_BACKEND_CLI_NOTE}
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
@@ -201,9 +204,9 @@ _post_failure_comment() {
     # internal pipeline instructions that must not become public.
     local body="Automated ${label_ctx} failed ${max} times. Needs human clarification. Operator: see ${LOG_FILE} for the agent transcript."
     if [ "$target_type" = "issue" ]; then
-        gh issue comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
+        backend_comment_issue "$REPO" "$target_num" "$body"
     else
-        gh pr comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
+        backend_comment_pr "$REPO" "$target_num" "$body"
     fi
 }
 

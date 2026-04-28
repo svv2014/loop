@@ -30,11 +30,11 @@ loop_run_agent() {
 
     case "$LOOP_AGENT" in
         claude)
-            claude -p \
+            (cd "$cwd" && claude -p \
                 --model "${LOOP_AGENT_MODEL:-sonnet}" \
                 --output-format text \
                 --dangerously-skip-permissions \
-                "$prompt"
+                "$prompt")
             ;;
         codex)
             codex \

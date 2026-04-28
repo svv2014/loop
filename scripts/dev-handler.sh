@@ -99,6 +99,7 @@ log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
 # belt-and-braces apply the right names per the project's active workflow
 # (e.g. needs-review on default, review-pending on current).
 REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
+_BACKEND_CLI_NOTE=$(backend_cli_note)
 
 TASK_PROMPT=$(cat <<EOF
 You are the Senior Developer for ${NAME} (slug: ${SLUG}).
@@ -146,6 +147,7 @@ IMPORTANT: The issue MUST end this run with label '${REVIEW_LABEL}' (or 'needs-c
    gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels
 
 If blocked by missing context or an architectural decision, comment on the issue and add label 'needs-clarification' instead of opening a PR.
+${_BACKEND_CLI_NOTE}
 EOF
 )
 
@@ -212,7 +214,7 @@ else
             echo '```'
             echo "</details>"
         } > "$_fail_body_file"
-        gh issue comment "$ISSUE_NUM" --repo "$REPO" --body-file "$_fail_body_file" 2>/dev/null || true
+        backend_comment_issue "$REPO" "$ISSUE_NUM" "$(cat "$_fail_body_file")"
         rm -f "$_fail_body_file"
         loop_notify "❌ [$SLUG] #$ISSUE_NUM dev failed: agent failed after $MAX_RETRIES attempts"
     else
