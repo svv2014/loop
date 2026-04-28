@@ -947,6 +947,137 @@ print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/
     done
 }
 
+# --- Check 12: auto-rebase PRs with stale base (needs-rework / qa-fail) --------
+# For PRs labeled needs-rework or qa-fail, detect if the PR branch has diverged
+# from origin/<DEFAULT_BRANCH>. If so, attempt a clean git rebase. On success,
+# push with --force-with-lease and re-trigger the pipeline stage label. On
+# conflict, abort and log a warning — never auto-resolve non-trivial conflicts.
+# Respects DRY_RUN: detects divergence but skips push and label mutations.
+reconcile_stale_base() {
+    local repo="$1"
+    log "[$repo] checking for PRs with stale base (needs-rework / qa-fail)"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    # Filter to PRs with needs-rework or qa-fail; emit: pr_num TAB head_ref TAB active_label
+    local target_prs
+    target_prs=$(PJSON="$prs_json" python3 - <<'PY'
+import json, os
+prs = json.loads(os.environ['PJSON'])
+for pr in prs:
+    lbls = {l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])}
+    if 'needs-rework' not in lbls and 'qa-fail' not in lbls:
+        continue
+    head = pr.get('headRefName', '')
+    if not head:
+        continue
+    active = 'qa-fail' if 'qa-fail' in lbls else 'needs-rework'
+    print(f"{pr['number']}\t{head}\t{active}")
+PY
+)
+
+    if [ -z "$target_prs" ]; then
+        log "[$repo] no needs-rework/qa-fail PRs found"
+        return 0
+    fi
+
+    # Resolve a local git dir: GIT_WORK_DIR → ROOT → scratch clone
+    local _git_dir="" _tmp_clone=""
+    if [ -n "${GIT_WORK_DIR:-}" ] && git -C "${GIT_WORK_DIR}" rev-parse --git-dir >/dev/null 2>&1; then
+        _git_dir="${GIT_WORK_DIR}"
+    elif [ -n "${ROOT:-}" ] && [ -d "${ROOT}" ] && git -C "${ROOT}" rev-parse --git-dir >/dev/null 2>&1; then
+        _git_dir="${ROOT}"
+    else
+        _tmp_clone=$(mktemp -d)
+        log "[$repo] no local clone configured; scratch-cloning into ${_tmp_clone}"
+        if ! gh repo clone "$repo" "${_tmp_clone}" -- --quiet 2>/dev/null; then
+            log "[$repo] WARN: failed to clone repo; skipping stale-base check"
+            rm -rf "${_tmp_clone}"
+            return 0
+        fi
+        _git_dir="${_tmp_clone}"
+    fi
+
+    # Fetch latest origin (and unshallow if needed so merge-base has full history)
+    git -C "$_git_dir" fetch origin --quiet 2>/dev/null \
+        || log "[$repo] WARN: git fetch failed; divergence checks may be stale"
+    if git -C "$_git_dir" rev-parse --is-shallow-repository 2>/dev/null | grep -q "^true$"; then
+        git -C "$_git_dir" fetch --unshallow --quiet 2>/dev/null || true
+    fi
+
+    local pr_num head_ref active_label _wt_dir
+    while IFS=$'\t' read -r pr_num head_ref active_label; do
+        [ -z "$pr_num" ] && continue
+
+        # Safety: never operate on the default branch
+        if [ "$head_ref" = "$DEFAULT_BRANCH" ]; then
+            log "[$repo] PR#$pr_num: head is default branch ($DEFAULT_BRANCH) — skip"
+            continue
+        fi
+
+        # Fetch PR branch into a remote tracking ref so we can reference it by name
+        if ! git -C "$_git_dir" fetch origin \
+                "${head_ref}:refs/remotes/origin/${head_ref}" --quiet 2>/dev/null; then
+            log "[$repo] WARN: PR#$pr_num — cannot fetch branch ${head_ref}; skipping"
+            continue
+        fi
+
+        # Detect divergence: is origin/<DEFAULT_BRANCH> an ancestor of the PR branch?
+        # Returns 0 (up-to-date, skip) or non-zero (diverged, needs rebase).
+        if git -C "$_git_dir" merge-base --is-ancestor \
+                "origin/${DEFAULT_BRANCH}" "origin/${head_ref}" 2>/dev/null; then
+            log "[$repo] PR#$pr_num (${head_ref}) base is current — no action"
+            continue
+        fi
+
+        log "[$repo] PR#$pr_num (${head_ref}) base has diverged from origin/${DEFAULT_BRANCH}"
+
+        if $DRY_RUN; then
+            log "[$repo] DRY_RUN: would rebase ${head_ref} onto origin/${DEFAULT_BRANCH}"
+            continue
+        fi
+
+        # Create a temp worktree at the PR branch tip for the rebase
+        _wt_dir=$(mktemp -d) || { log "[$repo] WARN: PR#$pr_num — mktemp failed; skipping"; continue; }
+        rmdir "$_wt_dir"
+        if ! git -C "$_git_dir" worktree add --detach \
+                "$_wt_dir" "origin/${head_ref}" 2>/dev/null; then
+            log "[$repo] WARN: PR#$pr_num — could not create worktree; skipping"
+            continue
+        fi
+
+        if git -C "$_wt_dir" rebase "origin/${DEFAULT_BRANCH}" 2>/dev/null; then
+            # Push rebased branch back — always with --force-with-lease, never to default branch
+            if git -C "$_wt_dir" push origin \
+                    "HEAD:refs/heads/${head_ref}" --force-with-lease --quiet 2>/dev/null; then
+                log "[$repo] PR#$pr_num (${head_ref}): rebased onto ${DEFAULT_BRANCH} and pushed"
+                loop_notify "Loop reconciler: $repo — PR#$pr_num auto-rebased ${head_ref} onto ${DEFAULT_BRANCH}"
+                # Re-trigger the pipeline stage via label cycle
+                if [ "$active_label" = "qa-fail" ]; then
+                    backend_remove_label "$repo" "$pr_num" needs-qa || true
+                    backend_add_label    "$repo" "$pr_num" needs-qa || true
+                else
+                    backend_remove_label "$repo" "$pr_num" needs-rework || true
+                    backend_add_label    "$repo" "$pr_num" needs-rework || true
+                fi
+            else
+                log "[$repo] WARN: PR#$pr_num — rebase clean but push failed (concurrent update?)"
+            fi
+        else
+            git -C "$_wt_dir" rebase --abort 2>/dev/null || true
+            log "[$repo] PR#$pr_num (${head_ref}): rebase has conflicts — aborting, PR unchanged"
+            loop_notify "Loop reconciler: $repo — PR#$pr_num (${head_ref}) rebase conflict; manual fix needed"
+        fi
+
+        git -C "$_git_dir" worktree remove "$_wt_dir" --force 2>/dev/null \
+            || rm -rf "$_wt_dir"
+    done <<< "$target_prs"
+
+    git -C "$_git_dir" worktree prune 2>/dev/null || true
+    [ -n "$_tmp_clone" ] && rm -rf "$_tmp_clone"
+}
+
 # --- Check 13: stale blocked issues — Opus escalation after 30 min -----------
 # Issues that have been `blocked` for more than 30 minutes with no live handler
 # are automatically re-dispatched using Opus. Covers: issues blocked by the PO
@@ -1088,6 +1219,7 @@ run_project() {
     reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
+    reconcile_stale_base "$REPO"
     reconcile_stale_blocked_issues "$REPO"
     reconcile_qa_failures "$REPO"
     reconcile_worktrees "$slug" "$REPO"
