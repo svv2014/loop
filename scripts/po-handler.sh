@@ -201,9 +201,15 @@ _post_failure_comment() {
     # internal pipeline instructions that must not become public.
     local body="Automated ${label_ctx} failed ${max} times. Needs human clarification. Operator: see ${LOG_FILE} for the agent transcript."
     if [ "$target_type" = "issue" ]; then
+<<<<<<< HEAD
         gh issue comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
     else
         gh pr comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
+=======
+        backend_comment_issue "$REPO" "$target_num" "$(cat "$body_file")" 2>/dev/null || true
+    else
+        backend_comment_pr "$REPO" "$target_num" "$(cat "$body_file")" 2>/dev/null || true
+>>>>>>> 4597b57 ([LOOP-29] Fix backend abstraction bypass and loop_run_agent cwd handling)
     fi
 }
 

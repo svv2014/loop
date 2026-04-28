@@ -262,11 +262,29 @@ else
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$PR_NUM" in-rework
         backend_add_label "$REPO" "$PR_NUM" blocked
+<<<<<<< HEAD
         # Post only a short marker to the PR — never the agent log/prompt, which
         # contains internal pipeline instructions that should not be public.
         gh pr comment "$PR_NUM" --repo "$REPO" \
             --body "Automated rework failed ${MAX_RETRIES} times. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript." \
             2>/dev/null || true
+=======
+        _fail_body_file=$(mktemp /tmp/loop-fail-XXXXXX.md)
+        {
+            echo "Automated rework failed ${MAX_RETRIES} times. Needs human eyes."
+            echo ""
+            echo "<details><summary>Last agent output</summary>"
+            echo ""
+            echo '```'
+            tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" \
+                | sed 's/\(ANTHROPIC_API_KEY=\|GITHUB_TOKEN=\|GH_TOKEN=\|_SECRET=\)[^ ]*/\1REDACTED/g' \
+                | tail -40
+            echo '```'
+            echo "</details>"
+        } > "$_fail_body_file"
+        backend_comment_pr "$REPO" "$PR_NUM" "$(cat "$_fail_body_file")" 2>/dev/null || true
+        rm -f "$_fail_body_file"
+>>>>>>> 4597b57 ([LOOP-29] Fix backend abstraction bypass and loop_run_agent cwd handling)
         loop_notify "❌ [$SLUG] PR#$PR_NUM dev-rework failed: agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$PR_NUM" in-rework

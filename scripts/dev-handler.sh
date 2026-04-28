@@ -212,7 +212,7 @@ else
             echo '```'
             echo "</details>"
         } > "$_fail_body_file"
-        gh issue comment "$ISSUE_NUM" --repo "$REPO" --body-file "$_fail_body_file" 2>/dev/null || true
+        backend_comment_issue "$REPO" "$ISSUE_NUM" "$(cat "$_fail_body_file")" 2>/dev/null || true
         rm -f "$_fail_body_file"
         loop_notify "❌ [$SLUG] #$ISSUE_NUM dev failed: agent failed after $MAX_RETRIES attempts"
     else
