@@ -37,9 +37,11 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - Draft: [LOOP-87] detect draft PRs in review-handler and qa-handler (#95)
 - [LOOP-90] add LOOP_SENIOR_MODEL and loop_run_senior_agent() helper (#118)
 - [LOOP-88] PO handler: preserve original issue body under '## Original brief (preserved by PO)' marker on issue expand (#119)
+- [LOOP-43] add `scripts/auto-release-pr.sh`: idempotent release PR + merge-handler tag/publish + semver labels in bootstrap (#120)
 
 ### Added
 - `tests/po-body-preserve.bats`: 5 tests for the original-brief extraction logic
+- `scripts/auto-release-pr.sh`: new script that maintains one open `chore: release vX.Y.Z` PR; idempotent, computes next version from `semver:*` labels, promotes CHANGELOG, supports `--dry-run`
 
 ## [0.1.0] - 2026-04-27
 
