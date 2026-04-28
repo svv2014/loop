@@ -1226,6 +1226,8 @@ run_project() {
     reconcile_qa_failures "$REPO"
     recovery_check_dependencies "$slug"
     reconcile_worktrees "$slug" "$REPO"
+    recovery_check_stuck_labels "$slug"
+    recovery_prune_orphan_worktrees
 }
 
 acquire_lock
