@@ -108,8 +108,8 @@ Author your own — see [`config/workflows/README.md`](config/workflows/README.m
 
 ## Configuration
 
-- `loop.env` — operator-specific env (log dir, agent choice, monitor URL,
-  notification command). Copy from `loop.env.example`. **Not committed.**
+- `loop.env` — operator-specific env (log dir, agent choice, dispatch mode,
+  notifications, PATH extras). Copy from `loop.env.example`. **Not committed.**
 - `config/projects.yaml` — your project registry. **Not committed.**
 - `config/projects.example.yaml` — annotated schema reference.
 - `config/workflows/*.yaml` — pipeline workflow definitions. Committed.
