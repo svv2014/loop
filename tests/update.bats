@@ -266,3 +266,86 @@ EOF
     [ "$status" -eq 1 ]
     [[ "$output" != *"loop-monitor"* ]]
 }
+
+# ── --rollback tests ──────────────────────────────────────────────────────────
+
+@test "rollback: reads history log and calls git checkout with correct SHA" {
+    FAKE_HIST="$BATS_TMPDIR/update-history.log"
+    # Record the current HEAD as from_sha, and a fake to_sha
+    from_sha="$(cd "$FAKE_CORE" && git rev-parse HEAD)"
+    to_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+    # Pre-populate the history log with a loop-core entry
+    printf '2026-04-28T10:00:00Z loop-core %s %s\n' "$from_sha" "$to_sha" > "$FAKE_HIST"
+
+    # Advance FAKE_CORE to origin/main so from_sha is a reachable ancestor
+    cd "$FAKE_CORE" && git merge --ff-only origin/main -q
+
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" \
+        LOOP_UPDATE_LOG="$FAKE_HIST" \
+        bash "$UPDATE_SH" --rollback
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"rolling back loop-core"* ]]
+    # Verify git checkout returned to from_sha
+    current_sha="$(cd "$FAKE_CORE" && git rev-parse HEAD)"
+    [ "$current_sha" = "$from_sha" ]
+}
+
+@test "rollback: fails gracefully when history log is missing" {
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" \
+        LOOP_UPDATE_LOG="$BATS_TMPDIR/nonexistent-history.log" \
+        bash "$UPDATE_SH" --rollback
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"no update history found"* ]]
+}
+
+@test "rollback: fails gracefully when history log is empty" {
+    FAKE_HIST="$BATS_TMPDIR/empty-history.log"
+    : > "$FAKE_HIST"
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" \
+        LOOP_UPDATE_LOG="$FAKE_HIST" \
+        bash "$UPDATE_SH" --rollback
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"update history is empty"* ]]
+}
+
+# ── --to <tag> tests ──────────────────────────────────────────────────────────
+
+@test "to-tag: checks out the specified tag in loop core" {
+    FAKE_HIST="$BATS_TMPDIR/tag-history.log"
+
+    # Create a tag at the current HEAD (0.1.0) in origin, then clone
+    cd "$BATS_TMPDIR/fake-origin"
+    git tag v0.1.0 HEAD~1 2>/dev/null || git tag v0.1.0 HEAD
+
+    cd "$FAKE_CORE"
+    git fetch --tags --quiet
+
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" \
+        LOOP_UPDATE_LOG="$FAKE_HIST" \
+        bash "$UPDATE_SH" --to v0.1.0
+    # tag points to current HEAD so "already at" or success
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"v0.1.0"* ]]
+}
+
+@test "history: normal --yes update records from/to SHAs in log" {
+    FAKE_HIST="$BATS_TMPDIR/record-history.log"
+
+    from_sha="$(cd "$FAKE_CORE" && git rev-parse HEAD)"
+
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" \
+        LOOP_UPDATE_LOG="$FAKE_HIST" \
+        bash "$UPDATE_SH" --yes
+    [ "$status" -eq 0 ]
+
+    [ -f "$FAKE_HIST" ]
+    log_line="$(cat "$FAKE_HIST")"
+    [[ "$log_line" == *"loop-core"* ]]
+    [[ "$log_line" == *"$from_sha"* ]]
+}

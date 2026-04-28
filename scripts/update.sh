@@ -6,6 +6,8 @@
 #   ./scripts/update.sh --yes        # fetch + apply even with breaking changes
 #   ./scripts/update.sh --check      # fetch, show full changelog diff, no apply
 #   ./scripts/update.sh --dry-run    # same as --check (alias)
+#   ./scripts/update.sh --to <tag>   # checkout a specific tag instead of pulling
+#   ./scripts/update.sh --rollback   # revert to the SHA recorded before the last update
 #
 # Per-component: if LOOP_MONITOR_ROOT is set in loop.env and points to a git
 # repo, loop-monitor's CHANGELOG.md is also scanned for BREAKING: markers.
@@ -26,15 +28,75 @@ fi
 
 YES=false
 CHECK=false
+TO_TAG=""
+ROLLBACK=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --yes)             YES=true;  shift ;;
         --check|--dry-run) CHECK=true; shift ;;
-        -h|--help)         sed -n '2,9p' "$0"; exit 0 ;;
+        --to)              shift; TO_TAG="${1:-}"; [ -n "$TO_TAG" ] || { echo "--to requires a tag argument" >&2; exit 2; }; shift ;;
+        --rollback)        ROLLBACK=true; shift ;;
+        -h|--help)         sed -n '2,13p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
+
+# ── update history log ────────────────────────────────────────────────────────
+LOOP_UPDATE_LOG="${LOOP_UPDATE_LOG:-$HOME/.loop/update-history.log}"
+_log_dir="$(dirname "$LOOP_UPDATE_LOG")"
+
+_record_update() {
+    local repo="$1" from_sha="$2" to_sha="$3"
+    mkdir -p "$_log_dir"
+    printf '%s %s %s %s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$repo" "$from_sha" "$to_sha" \
+        >> "$LOOP_UPDATE_LOG"
+}
+
+# ── --rollback ────────────────────────────────────────────────────────────────
+if $ROLLBACK; then
+    if [ ! -f "$LOOP_UPDATE_LOG" ]; then
+        echo "[update] no update history found at $LOOP_UPDATE_LOG" >&2
+        exit 1
+    fi
+
+    # Read the last entry from the log
+    last_entry="$(tail -n 1 "$LOOP_UPDATE_LOG")"
+    if [ -z "$last_entry" ]; then
+        echo "[update] update history is empty" >&2
+        exit 1
+    fi
+
+    rb_timestamp="$(echo "$last_entry" | awk '{print $1}')"
+    rb_repo="$(echo "$last_entry" | awk '{print $2}')"
+    rb_from_sha="$(echo "$last_entry" | awk '{print $3}')"
+    rb_to_sha="$(echo "$last_entry" | awk '{print $4}')"
+
+    echo "[update] rolling back $rb_repo from $rb_to_sha to $rb_from_sha (recorded at $rb_timestamp)"
+
+    if [ "$rb_repo" = "loop-core" ]; then
+        cd "$LOOP_ROOT"
+        git checkout "$rb_from_sha"
+        echo "[update] loop core rolled back to $rb_from_sha"
+    elif [ "$rb_repo" = "loop-monitor" ]; then
+        if [ -z "${LOOP_MONITOR_ROOT:-}" ] || [ ! -d "${LOOP_MONITOR_ROOT}/.git" ]; then
+            echo "[update] LOOP_MONITOR_ROOT not set or not a git repo; cannot roll back monitor" >&2
+            exit 1
+        fi
+        (cd "$LOOP_MONITOR_ROOT" && git checkout "$rb_from_sha")
+        echo "[update] loop-monitor rolled back to $rb_from_sha"
+        # Restart monitor if possible
+        if command -v systemctl >/dev/null 2>&1; then
+            systemctl --user restart loop-monitor 2>/dev/null || true
+        fi
+    else
+        echo "[update] unknown repo in history: $rb_repo" >&2
+        exit 1
+    fi
+
+    echo "[update] rollback complete."
+    exit 0
+fi
 
 # ── extract BREAKING: entries from a CHANGELOG diff on stdin ─────────────────
 # Prints "  <version header>\n    BREAKING: ..." blocks; empty if none found.
@@ -73,6 +135,43 @@ print('\n'.join(results))
 PY
     )
 }
+
+# ── --to <tag>: tag-pinned update path ───────────────────────────────────────
+if [ -n "$TO_TAG" ]; then
+    echo "[update] pinning loop core to tag $TO_TAG …"
+    git fetch --tags --quiet
+
+    CORE_FROM_SHA="$(git rev-parse HEAD)"
+    CORE_TO_SHA="$(git rev-parse "refs/tags/${TO_TAG}" 2>/dev/null || git rev-parse "$TO_TAG")"
+
+    if [ "$CORE_FROM_SHA" = "$CORE_TO_SHA" ]; then
+        echo "[update] loop core already at $TO_TAG"
+    else
+        _record_update "loop-core" "$CORE_FROM_SHA" "$CORE_TO_SHA"
+        git checkout "$TO_TAG"
+        echo "[update] loop core updated to tag $TO_TAG ($(cat VERSION 2>/dev/null || echo unknown))"
+    fi
+
+    if [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
+        echo "[update] pinning loop-monitor to tag $TO_TAG …"
+        (cd "$LOOP_MONITOR_ROOT" && git fetch --tags --quiet)
+
+        MON_FROM_SHA="$(cd "$LOOP_MONITOR_ROOT" && git rev-parse HEAD)"
+        MON_TO_SHA="$(cd "$LOOP_MONITOR_ROOT" && git rev-parse "refs/tags/${TO_TAG}" 2>/dev/null || \
+                       cd "$LOOP_MONITOR_ROOT" && git rev-parse "$TO_TAG")"
+
+        if [ "$MON_FROM_SHA" = "$MON_TO_SHA" ]; then
+            echo "[update] loop-monitor already at $TO_TAG"
+        else
+            _record_update "loop-monitor" "$MON_FROM_SHA" "$MON_TO_SHA"
+            (cd "$LOOP_MONITOR_ROOT" && git checkout "$TO_TAG")
+            echo "[update] loop-monitor updated to tag $TO_TAG ($(cat "${LOOP_MONITOR_ROOT}/VERSION" 2>/dev/null || echo unknown))"
+        fi
+    fi
+
+    echo "[update] done."
+    exit 0
+fi
 
 # ── fetch loop core ───────────────────────────────────────────────────────────
 echo "[update] fetching loop core (origin/main) …"
@@ -167,14 +266,20 @@ fi
 
 # ── apply ────────────────────────────────────────────────────────────────────
 if ! $CORE_UP_TO_DATE; then
+    CORE_FROM_SHA="$(git rev-parse HEAD)"
     echo "[update] applying loop core …"
     git merge --ff-only origin/main
+    CORE_TO_SHA="$(git rev-parse HEAD)"
+    _record_update "loop-core" "$CORE_FROM_SHA" "$CORE_TO_SHA"
     echo "[update] loop core updated to $(cat VERSION 2>/dev/null || echo unknown)"
 fi
 
 if ! $MONITOR_UP_TO_DATE && [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
+    MON_FROM_SHA="$(cd "$LOOP_MONITOR_ROOT" && git rev-parse HEAD)"
     echo "[update] applying loop-monitor …"
     (cd "$LOOP_MONITOR_ROOT" && git merge --ff-only origin/main)
+    MON_TO_SHA="$(cd "$LOOP_MONITOR_ROOT" && git rev-parse HEAD)"
+    _record_update "loop-monitor" "$MON_FROM_SHA" "$MON_TO_SHA"
     echo "[update] loop-monitor updated to $(cat "${LOOP_MONITOR_ROOT}/VERSION" 2>/dev/null || echo unknown)"
 fi
 
