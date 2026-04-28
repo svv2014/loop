@@ -68,3 +68,57 @@ loop_run_agent() {
             ;;
     esac
 }
+
+# loop_run_senior_agent <prompt> <cwd>
+# Like loop_run_agent but uses LOOP_SENIOR_MODEL for the model override.
+# Falls back to LOOP_AGENT_MODEL (or per-agent default) when LOOP_SENIOR_MODEL is unset.
+loop_run_senior_agent() {
+    local prompt="$1"
+    local cwd="${2:-$(pwd)}"
+
+    if [ -n "${LOOP_ORCHESTRATOR:-}" ] && [ -x "${LOOP_ORCHESTRATOR}" ]; then
+        "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd"
+        return $?
+    fi
+
+    case "$LOOP_AGENT" in
+        claude)
+            claude -p \
+                --model "${LOOP_SENIOR_MODEL:-${LOOP_AGENT_MODEL:-sonnet}}" \
+                --output-format text \
+                --dangerously-skip-permissions \
+                --cwd "$cwd" \
+                "$prompt"
+            ;;
+        codex)
+            (cd "$cwd" && codex \
+                --model "${LOOP_SENIOR_MODEL:-${LOOP_AGENT_MODEL:-o4-mini}}" \
+                --approval-mode full-auto \
+                -q "$prompt")
+            ;;
+        gemini)
+            (cd "$cwd" && gemini \
+                -m "${LOOP_SENIOR_MODEL:-${LOOP_AGENT_MODEL:-gemini-2.5-pro}}" \
+                --sandbox \
+                -p "$prompt")
+            ;;
+        aider)
+            (cd "$cwd" && aider \
+                --model "${LOOP_SENIOR_MODEL:-${LOOP_AGENT_MODEL:-sonnet}}" \
+                --yes-always \
+                --message "$prompt")
+            ;;
+        custom)
+            echo "WARNING: LOOP_AGENT=custom does not support model override; proceeding without --model flag" >&2
+            if [ -z "${LOOP_AGENT_CMD:-}" ]; then
+                echo "ERROR: LOOP_AGENT=custom but LOOP_AGENT_CMD not set" >&2
+                return 2
+            fi
+            eval "$LOOP_AGENT_CMD" "$prompt"
+            ;;
+        *)
+            echo "ERROR: Unknown LOOP_AGENT='$LOOP_AGENT'. Use: claude, codex, gemini, aider, custom" >&2
+            return 2
+            ;;
+    esac
+}
