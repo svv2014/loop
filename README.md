@@ -241,6 +241,32 @@ contract; both are first-class commitments going forward.
 domain specialist agents (frontend / backend / data / devops), expanded
 backend coverage.
 
+## Updating
+
+Until automated updates ship ([#17](https://github.com/svv2014/loop/issues/17)),
+update Loop and loop-monitor manually:
+
+```bash
+# 1. Pull the latest Loop core
+cd ~/projects/loop
+git pull --ff-only
+
+# 2. Pull the latest loop-monitor (if installed)
+cd ~/projects/loop-monitor
+git pull --ff-only
+
+# 3. Restart the Loop services (macOS launchd)
+launchctl kickstart -k gui/$(id -u)/com.user.loop-scanner
+launchctl kickstart -k gui/$(id -u)/com.user.loop-reconciler
+```
+
+On Linux, restart the cron-managed processes by reloading the crontab or
+bouncing the wrapper processes as appropriate for your setup.
+
+Check [CHANGELOG.md](CHANGELOG.md) for migration notes before upgrading,
+especially across MINOR versions (pre-1.0 minor releases may change
+`loop.env` keys or `projects.yaml` schema).
+
 ## Contributing
 
 External contributions welcome. PRs require an approval from a
