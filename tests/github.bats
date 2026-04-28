@@ -22,96 +22,96 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
-# asdlc_issue_has_any_label
+# loop_issue_has_any_label
 # ---------------------------------------------------------------------------
 
-@test "asdlc_issue_has_any_label: returns 0 when label is present" {
+@test "loop_issue_has_any_label: returns 0 when label is present" {
     export GH_MOCK_OUTPUT="dev
 enhancement"
-    run asdlc_issue_has_any_label "owner/repo" 1 "dev"
+    run loop_issue_has_any_label "owner/repo" 1 "dev"
     [ "$status" -eq 0 ]
 }
 
-@test "asdlc_issue_has_any_label: returns 0 when one of several wanted labels matches" {
+@test "loop_issue_has_any_label: returns 0 when one of several wanted labels matches" {
     export GH_MOCK_OUTPUT="review-pending"
-    run asdlc_issue_has_any_label "owner/repo" 1 "dev" "review-pending"
+    run loop_issue_has_any_label "owner/repo" 1 "dev" "review-pending"
     [ "$status" -eq 0 ]
 }
 
-@test "asdlc_issue_has_any_label: returns 1 when label is absent" {
+@test "loop_issue_has_any_label: returns 1 when label is absent" {
     export GH_MOCK_OUTPUT="enhancement"
-    run asdlc_issue_has_any_label "owner/repo" 1 "dev"
+    run loop_issue_has_any_label "owner/repo" 1 "dev"
     [ "$status" -eq 1 ]
 }
 
-@test "asdlc_issue_has_any_label: returns 1 when gh fails" {
+@test "loop_issue_has_any_label: returns 1 when gh fails" {
     export GH_MOCK_EXIT=1
-    run asdlc_issue_has_any_label "owner/repo" 1 "dev"
+    run loop_issue_has_any_label "owner/repo" 1 "dev"
     [ "$status" -eq 1 ]
 }
 
-@test "asdlc_issue_has_any_label: returns 1 when output is empty" {
+@test "loop_issue_has_any_label: returns 1 when output is empty" {
     export GH_MOCK_OUTPUT=""
-    run asdlc_issue_has_any_label "owner/repo" 1 "dev"
+    run loop_issue_has_any_label "owner/repo" 1 "dev"
     [ "$status" -eq 1 ]
 }
 
 # ---------------------------------------------------------------------------
-# asdlc_pr_has_any_label
+# loop_pr_has_any_label
 # ---------------------------------------------------------------------------
 
-@test "asdlc_pr_has_any_label: returns 0 when label is present" {
+@test "loop_pr_has_any_label: returns 0 when label is present" {
     export GH_MOCK_OUTPUT="review-pending"
-    run asdlc_pr_has_any_label "owner/repo" 5 "review-pending"
+    run loop_pr_has_any_label "owner/repo" 5 "review-pending"
     [ "$status" -eq 0 ]
 }
 
-@test "asdlc_pr_has_any_label: returns 0 when one of several wanted labels matches" {
+@test "loop_pr_has_any_label: returns 0 when one of several wanted labels matches" {
     export GH_MOCK_OUTPUT="qa-pass"
-    run asdlc_pr_has_any_label "owner/repo" 5 "in-review" "qa-pass"
+    run loop_pr_has_any_label "owner/repo" 5 "in-review" "qa-pass"
     [ "$status" -eq 0 ]
 }
 
-@test "asdlc_pr_has_any_label: returns 1 when label is absent" {
+@test "loop_pr_has_any_label: returns 1 when label is absent" {
     export GH_MOCK_OUTPUT="dev"
-    run asdlc_pr_has_any_label "owner/repo" 5 "review-pending"
+    run loop_pr_has_any_label "owner/repo" 5 "review-pending"
     [ "$status" -eq 1 ]
 }
 
-@test "asdlc_pr_has_any_label: returns 1 when gh fails" {
+@test "loop_pr_has_any_label: returns 1 when gh fails" {
     export GH_MOCK_EXIT=1
-    run asdlc_pr_has_any_label "owner/repo" 5 "review-pending"
+    run loop_pr_has_any_label "owner/repo" 5 "review-pending"
     [ "$status" -eq 1 ]
 }
 
 # ---------------------------------------------------------------------------
-# asdlc_add_label
+# loop_add_label
 # ---------------------------------------------------------------------------
 
-@test "asdlc_add_label: succeeds with mocked gh" {
+@test "loop_add_label: succeeds with mocked gh" {
     export GH_MOCK_EXIT=0
-    run asdlc_add_label "owner/repo" 1 "in-progress"
+    run loop_add_label "owner/repo" 1 "in-progress"
     [ "$status" -eq 0 ]
 }
 
-@test "asdlc_add_label: succeeds even when gh returns non-zero (or true)" {
+@test "loop_add_label: succeeds even when gh returns non-zero (or true)" {
     export GH_MOCK_EXIT=1
-    run asdlc_add_label "owner/repo" 1 "in-progress"
+    run loop_add_label "owner/repo" 1 "in-progress"
     [ "$status" -eq 0 ]
 }
 
 # ---------------------------------------------------------------------------
-# asdlc_remove_label
+# loop_remove_label
 # ---------------------------------------------------------------------------
 
-@test "asdlc_remove_label: succeeds with mocked gh" {
+@test "loop_remove_label: succeeds with mocked gh" {
     export GH_MOCK_EXIT=0
-    run asdlc_remove_label "owner/repo" 1 "dev"
+    run loop_remove_label "owner/repo" 1 "dev"
     [ "$status" -eq 0 ]
 }
 
-@test "asdlc_remove_label: succeeds even when gh returns non-zero (or true)" {
+@test "loop_remove_label: succeeds even when gh returns non-zero (or true)" {
     export GH_MOCK_EXIT=1
-    run asdlc_remove_label "owner/repo" 1 "dev"
+    run loop_remove_label "owner/repo" 1 "dev"
     [ "$status" -eq 0 ]
 }
