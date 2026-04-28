@@ -117,13 +117,14 @@ emit() {
         key_file="$DEDUP_DIR/$(_dedup_key "$dedup_id")"
         if [ -f "$key_file" ]; then
             local age
-            age=$(( $(date +%s) - $(stat -f%m "$key_file" 2>/dev/null || echo 0) ))
+            age=$(( $(date +%s) - $(stat -f%m "$key_file" 2>/dev/null || stat -c%Y "$key_file" 2>/dev/null || echo 0) ))
             if [ "$age" -lt 1800 ]; then
-                log "skip (dedup): $dedup_id"
+                log "skip (dedup, age=${age}s): $dedup_id"
                 return 0
             fi
         fi
     fi
+    log "emit: $dedup_id"
     if [ "${LOOP_DISPATCH_MODE:-direct}" = "event-queue" ] && [ -n "$BOBA_EVENT_CLIENT" ]; then
         if ! "$BOBA_EVENT_CLIENT" queue "$json" >/dev/null 2>>"$LOG_FILE"; then
             log "WARN: failed to queue event: $json"
@@ -274,7 +275,6 @@ _scan_issue_stage() {
         fi
         local evt
         evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$num" "$title" "$url")
-        log "emit $event_type #$num $title"
         emit "$evt" "${event_type}:${slug}:${num}"
     done < <(backend_list_issues_with_label "$repo" "$trigger_label")
 }
@@ -353,7 +353,6 @@ PY
             continue
         fi
         _evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$_num" "$_title" "$_url")
-        log "emit $event_type #$_num $_title"
         emit "$_evt" "${event_type}:${slug}:${_num}"
         _emitted=$(( _emitted + 1 ))
     done < "$_rows_tmp"
@@ -402,7 +401,6 @@ _scan_pr_stage() {
         local evt
         evt=$(_emit_pr_event "$event_type" "$slug" "$repo" "$num" "$title" "$url" \
               "$rework_context_key" "$rework_context_val")
-        log "emit $event_type PR#$num $title"
         emit "$evt" "${event_type}:${slug}:${num}"
     done < <(backend_list_prs_with_label "$repo" "$trigger_label")
 }
