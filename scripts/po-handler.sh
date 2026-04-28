@@ -25,6 +25,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/cli-hint.sh
+source "$LOOP_ROOT/lib/cli-hint.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-po-handler.log"
 MAX_RETRIES=2
@@ -191,6 +193,7 @@ What this ticket explicitly does not cover. Prevents scope creep.
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
 Report your decision (A/B/C/D/E/F) and why in 2 sentences.
+$(loop_cli_hint)
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
