@@ -55,12 +55,12 @@ fi
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
-# Per-project lock — one Loop handler at a time per repo (same-machine + same-repo
-# share state: working tree, GitHub rate bucket, label race windows).
-# Cross-repo parallelism is preserved — different slugs don't block each other.
+# Per-issue lock — PO writes only to one issue's body and labels, so two PO
+# workers on different issues in the same project are safe in parallel. The
+# lock still serializes duplicate dispatches for the same issue.
 source "$LOOP_ROOT/lib/lock.sh"
-loop_acquire_lock "$SLUG" || { log "ERROR: couldn't acquire lock for $SLUG within 1hr — exiting"; exit 1; }
-log "acquired project lock for $SLUG"
+loop_acquire_lock "po-${SLUG}-${ISSUE_NUM}" || { log "ERROR: couldn't acquire lock for po-${SLUG}-${ISSUE_NUM} within 1hr — exiting"; exit 1; }
+log "acquired po lock for $SLUG #$ISSUE_NUM"
 
 RETRY_FILE="/tmp/loop-po-retries-${SLUG}-${ISSUE_NUM}"
 retry_count() { [ -f "$RETRY_FILE" ] && cat "$RETRY_FILE" || echo 0; }
