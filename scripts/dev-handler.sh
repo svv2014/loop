@@ -166,7 +166,6 @@ cleanup_worktree() {
     git -C "$ROOT" worktree prune 2>/dev/null || true
 }
 
-LOG_CAPTURE_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     log "dev agent succeeded for #$ISSUE_NUM"
     bounty_report "dev_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" || true
