@@ -34,25 +34,26 @@ loop_run_agent() {
                 --model "${LOOP_AGENT_MODEL:-sonnet}" \
                 --output-format text \
                 --dangerously-skip-permissions \
+                --cwd "$cwd" \
                 "$prompt"
             ;;
         codex)
-            codex \
+            (cd "$cwd" && codex \
                 --model "${LOOP_AGENT_MODEL:-o4-mini}" \
                 --approval-mode full-auto \
-                -q "$prompt"
+                -q "$prompt")
             ;;
         gemini)
-            gemini \
+            (cd "$cwd" && gemini \
                 -m "${LOOP_AGENT_MODEL:-gemini-2.5-pro}" \
                 --sandbox \
-                -p "$prompt"
+                -p "$prompt")
             ;;
         aider)
-            aider \
+            (cd "$cwd" && aider \
                 --model "${LOOP_AGENT_MODEL:-sonnet}" \
                 --yes-always \
-                --message "$prompt"
+                --message "$prompt")
             ;;
         custom)
             if [ -z "${LOOP_AGENT_CMD:-}" ]; then
