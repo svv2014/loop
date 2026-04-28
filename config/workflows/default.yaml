@@ -1,7 +1,7 @@
 # Loop default workflow — clean canonical labels for new adopters.
 #
 # Stages:
-#   po-review (issue) → plan (issue) → needs-review (PR) → needs-rework (PR) →
+#   po-review (issue) → dev (issue) → needs-review (PR) → needs-rework (PR) →
 #   needs-qa (PR) → qa-pass / qa-fail (PR) → merge → done
 #
 # To use: in config/projects.yaml, set `workflow: default` for a project.
@@ -19,12 +19,12 @@ issue_stages:
   - id: po
     trigger_label: po-review
     handler: po-handler
-    on_done: plan
+    on_done: dev
     on_blocked: blocked
     on_clarification: needs-clarification
 
-  - id: plan
-    trigger_label: plan
+  - id: dev
+    trigger_label: dev
     handler: dev-handler
     on_done: needs-review
     on_failed_after_max: blocked
