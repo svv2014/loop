@@ -69,12 +69,12 @@ loop_run_agent() {
     esac
 }
 
-# loop_run_senior_agent <worktree> <prompt>
+# loop_run_senior_agent <prompt> [<worktree>]
 # Like loop_run_agent but uses LOOP_SENIOR_MODEL for the model override.
 # Falls back to LOOP_AGENT_MODEL (or per-agent default) when LOOP_SENIOR_MODEL is unset.
 loop_run_senior_agent() {
-    local cwd="$1"
-    local prompt="$2"
+    local prompt="$1"
+    local cwd="${2:-$(pwd)}"
 
     if [ -n "${LOOP_ORCHESTRATOR:-}" ] && [ -x "${LOOP_ORCHESTRATOR}" ]; then
         "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd"

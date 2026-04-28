@@ -72,7 +72,7 @@ if [ "$retries" -ge "$MAX_RETRIES" ]; then
 fi
 
 log "senior-dev handler: slug=$SLUG repo=$REPO issue=#$ISSUE_NUM attempt=$((retries + 1))/$MAX_RETRIES"
-bounty_report "senior_dev_start" model="${LOOP_SENIOR_AGENT_MODEL:-${LOOP_AGENT_MODEL:-opus}}" role=senior-dev project="$SLUG" issue_num="$ISSUE_NUM" || true
+bounty_report "senior_dev_start" model="${LOOP_SENIOR_MODEL:-${LOOP_AGENT_MODEL:-opus}}" role=senior-dev project="$SLUG" issue_num="$ISSUE_NUM" || true
 loop_notify "▶️ [$SLUG] #$ISSUE_NUM senior-dev escalation starting"
 
 # Fetch issue body
@@ -171,7 +171,7 @@ LOG_CAPTURE_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 if loop_run_senior_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     _IN_PROGRESS_CLAIMED=0
     log "senior-dev agent succeeded for #$ISSUE_NUM"
-    bounty_report "senior_dev_done" model="${LOOP_SENIOR_AGENT_MODEL:-${LOOP_AGENT_MODEL:-opus}}" role=senior-dev project="$SLUG" issue_num="$ISSUE_NUM" || true
+    bounty_report "senior_dev_done" model="${LOOP_SENIOR_MODEL:-${LOOP_AGENT_MODEL:-opus}}" role=senior-dev project="$SLUG" issue_num="$ISSUE_NUM" || true
     loop_notify "✅ [$SLUG] #$ISSUE_NUM senior-dev done"
     retry_clear
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
@@ -205,7 +205,7 @@ else
     _IN_PROGRESS_CLAIMED=0
     n=$(retry_incr)
     log "senior-dev agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES)"
-    bounty_report "senior_dev_failed" model="${LOOP_SENIOR_AGENT_MODEL:-${LOOP_AGENT_MODEL:-opus}}" role=senior-dev project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
+    bounty_report "senior_dev_failed" model="${LOOP_SENIOR_MODEL:-${LOOP_AGENT_MODEL:-opus}}" role=senior-dev project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked
