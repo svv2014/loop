@@ -6,9 +6,11 @@
 #   ./scripts/update.sh --yes        # fetch + apply even with breaking changes
 #   ./scripts/update.sh --check      # fetch, show full changelog diff, no apply
 #   ./scripts/update.sh --dry-run    # same as --check (alias)
+#   ./scripts/update.sh --core-only  # pull loop core only, skip monitor
+#   ./scripts/update.sh --monitor-only  # pull loop-monitor only and restart it
 #
-# Per-component: if LOOP_MONITOR_ROOT is set in loop.env and points to a git
-# repo, loop-monitor's CHANGELOG.md is also scanned for BREAKING: markers.
+# Per-component: if LOOP_MONITOR_ROOT is set (or ~/projects/loop-monitor exists)
+# and points to a git repo, loop-monitor is also updated and restarted.
 #
 # LOOP_ROOT may be overridden via env to point at a different repo root
 # (used by tests; production behavior is unchanged).
@@ -24,14 +26,21 @@ if [ -f "$LOOP_ROOT/loop.env" ]; then
     set +u; . "$LOOP_ROOT/loop.env"; set -u
 fi
 
+# Resolve monitor root: explicit env var, else ~/projects/loop-monitor.
+LOOP_MONITOR_ROOT="${LOOP_MONITOR_ROOT:-$HOME/projects/loop-monitor}"
+
 YES=false
 CHECK=false
+CORE_ONLY=false
+MONITOR_ONLY=false
 
 while [ $# -gt 0 ]; do
     case "$1" in
         --yes)             YES=true;  shift ;;
         --check|--dry-run) CHECK=true; shift ;;
-        -h|--help)         sed -n '2,9p' "$0"; exit 0 ;;
+        --core-only)       CORE_ONLY=true; shift ;;
+        --monitor-only)    MONITOR_ONLY=true; shift ;;
+        -h|--help)         sed -n '2,11p' "$0"; exit 0 ;;
         *) echo "unknown arg: $1" >&2; exit 2 ;;
     esac
 done
@@ -74,29 +83,48 @@ PY
     )
 }
 
+# ── restart loop-monitor service after update ────────────────────────────────
+_restart_monitor() {
+    if [[ "$(uname)" == "Darwin" ]]; then
+        launchctl kickstart -k "gui/$(id -u)/com.loop.loop-monitor" 2>/dev/null \
+            && echo "[update] loop-monitor service restarted." \
+            || echo "[update] note: could not restart loop-monitor via launchctl (service may not be loaded)."
+    else
+        echo "[update] note: loop-monitor restart not automated on Linux — restart it manually if needed."
+    fi
+}
+
 # ── fetch loop core ───────────────────────────────────────────────────────────
-echo "[update] fetching loop core (origin/main) …"
-git fetch origin main --quiet
-
-CORE_UP_TO_DATE=false
-if git diff --quiet HEAD..origin/main; then
-    CORE_UP_TO_DATE=true
-fi
-
+CORE_UP_TO_DATE=true
 CORE_DIFF=""
 CORE_BREAKING=""
-if ! $CORE_UP_TO_DATE; then
-    CORE_DIFF=$(git diff HEAD..origin/main -- CHANGELOG.md 2>/dev/null || true)
-    CORE_BREAKING=$(echo "$CORE_DIFF" | _extract_breaking)
+CORE_VERSION_BEFORE=""
+
+if ! $MONITOR_ONLY; then
+    echo "[update] fetching loop core (origin/main) …"
+    CORE_VERSION_BEFORE="$(cat "$LOOP_ROOT/VERSION" 2>/dev/null || echo unknown)"
+    git fetch origin main --quiet
+
+    CORE_UP_TO_DATE=false
+    if git diff --quiet HEAD..origin/main; then
+        CORE_UP_TO_DATE=true
+    fi
+
+    if ! $CORE_UP_TO_DATE; then
+        CORE_DIFF=$(git diff HEAD..origin/main -- CHANGELOG.md 2>/dev/null || true)
+        CORE_BREAKING=$(echo "$CORE_DIFF" | _extract_breaking)
+    fi
 fi
 
 # ── fetch loop-monitor (optional) ────────────────────────────────────────────
 MONITOR_BREAKING=""
 MONITOR_DIFF=""
 MONITOR_UP_TO_DATE=true  # treated as "not behind" when monitor is not configured
+MONITOR_VERSION_BEFORE=""
 
-if [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
+if ! $CORE_ONLY && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
     echo "[update] fetching loop-monitor (${LOOP_MONITOR_ROOT}) …"
+    MONITOR_VERSION_BEFORE="$(cat "${LOOP_MONITOR_ROOT}/VERSION" 2>/dev/null || echo unknown)"
     (cd "$LOOP_MONITOR_ROOT" && git fetch origin main --quiet 2>/dev/null) || true
 
     if (cd "$LOOP_MONITOR_ROOT" && git diff --quiet HEAD..origin/main 2>/dev/null); then
@@ -111,7 +139,7 @@ if [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
     fi
 fi
 
-# ── --check: show full diffs and exit without applying ───────────────────────
+# ── --check/--dry-run: show full diffs and exit without applying ──────────────
 if $CHECK; then
     echo ""
     echo "=== loop core changelog ==="
@@ -121,7 +149,7 @@ if $CHECK; then
         echo "$CORE_DIFF" | grep '^+' | grep -v '^+++' | sed 's/^+//' | head -80
     fi
 
-    if [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
+    if [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
         echo ""
         echo "=== loop-monitor changelog ==="
         if $MONITOR_UP_TO_DATE; then
@@ -168,14 +196,17 @@ fi
 # ── apply ────────────────────────────────────────────────────────────────────
 if ! $CORE_UP_TO_DATE; then
     echo "[update] applying loop core …"
+    echo "[update] loop core: ${CORE_VERSION_BEFORE} → applying …"
     git merge --ff-only origin/main
-    echo "[update] loop core updated to $(cat VERSION 2>/dev/null || echo unknown)"
+    echo "[update] loop core updated: ${CORE_VERSION_BEFORE} → $(cat "$LOOP_ROOT/VERSION" 2>/dev/null || echo unknown)"
 fi
 
-if ! $MONITOR_UP_TO_DATE && [ -n "${LOOP_MONITOR_ROOT:-}" ] && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
+if ! $MONITOR_UP_TO_DATE && [ -d "${LOOP_MONITOR_ROOT}/.git" ]; then
     echo "[update] applying loop-monitor …"
+    echo "[update] loop-monitor: ${MONITOR_VERSION_BEFORE} → applying …"
     (cd "$LOOP_MONITOR_ROOT" && git merge --ff-only origin/main)
-    echo "[update] loop-monitor updated to $(cat "${LOOP_MONITOR_ROOT}/VERSION" 2>/dev/null || echo unknown)"
+    echo "[update] loop-monitor updated: ${MONITOR_VERSION_BEFORE} → $(cat "${LOOP_MONITOR_ROOT}/VERSION" 2>/dev/null || echo unknown)"
+    _restart_monitor
 fi
 
 echo "[update] done."

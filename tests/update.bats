@@ -266,3 +266,90 @@ EOF
     [ "$status" -eq 1 ]
     [[ "$output" != *"loop-monitor"* ]]
 }
+
+# ── --core-only tests ─────────────────────────────────────────────────────────
+
+@test "--core-only: skips monitor even when LOOP_MONITOR_ROOT is a valid git repo" {
+    _make_monitor clean
+    FAKE_MON="$BATS_TMPDIR/fake-monitor"
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" LOOP_MONITOR_ROOT="$FAKE_MON" \
+        bash "$UPDATE_SH" --core-only --yes
+    [ "$status" -eq 0 ]
+    [[ "$output" != *"loop-monitor"* ]]
+    [[ "$output" == *"done"* ]]
+}
+
+@test "--core-only with breaking core: halts without --yes" {
+    run_update --core-only
+    [ "$status" -eq 1 ]
+    [[ "$output" == *"⚠ This update contains breaking changes:"* ]]
+}
+
+# ── --monitor-only tests ──────────────────────────────────────────────────────
+
+@test "--monitor-only: skips loop core pull" {
+    _make_monitor clean
+    FAKE_MON="$BATS_TMPDIR/fake-monitor"
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" LOOP_MONITOR_ROOT="$FAKE_MON" \
+        bash "$UPDATE_SH" --monitor-only --yes
+    [ "$status" -eq 0 ]
+    # Core VERSION must not have changed (still at old commit)
+    [ "$(cat "$FAKE_CORE/VERSION")" = "0.1.0" ]
+    # Monitor must have been updated
+    [ "$(cat "$FAKE_MON/VERSION")" = "0.1.1" ]
+}
+
+@test "--monitor-only: does not fetch or mention loop core" {
+    _make_monitor clean
+    FAKE_MON="$BATS_TMPDIR/fake-monitor"
+    run env -i HOME="$HOME" PATH="$PATH" \
+        LOOP_ROOT="$FAKE_CORE" LOOP_MONITOR_ROOT="$FAKE_MON" \
+        bash "$UPDATE_SH" --monitor-only --yes
+    [[ "$output" != *"loop core"* ]]
+}
+
+# ── launchctl restart stub test ───────────────────────────────────────────────
+
+@test "restart: launchctl kickstart called after monitor update (mocked)" {
+    _make_monitor clean
+    FAKE_MON="$BATS_TMPDIR/fake-monitor"
+
+    # Stub directory with a fake launchctl that records invocations.
+    local STUB_DIR="$BATS_TMPDIR/stubs"
+    mkdir -p "$STUB_DIR"
+    local CALL_LOG="$BATS_TMPDIR/launchctl-calls.log"
+    cat > "$STUB_DIR/launchctl" <<'SH'
+#!/usr/bin/env bash
+echo "launchctl $*" >> "$CALL_LOG"
+SH
+    chmod +x "$STUB_DIR/launchctl"
+
+    # Stub uname to always return Darwin so the launchctl path is taken.
+    cat > "$STUB_DIR/uname" <<'SH'
+#!/usr/bin/env bash
+echo "Darwin"
+SH
+    chmod +x "$STUB_DIR/uname"
+
+    run env -i HOME="$HOME" PATH="$STUB_DIR:$PATH" \
+        LOOP_ROOT="$FAKE_CORE" LOOP_MONITOR_ROOT="$FAKE_MON" \
+        CALL_LOG="$CALL_LOG" \
+        bash "$UPDATE_SH" --monitor-only --yes
+
+    [ "$status" -eq 0 ]
+    [ -f "$CALL_LOG" ]
+    grep -q "kickstart" "$CALL_LOG"
+    grep -q "com.loop.loop-monitor" "$CALL_LOG"
+}
+
+# ── VERSION before/after display ──────────────────────────────────────────────
+
+@test "version: output includes before and after version for core update" {
+    run_update --yes
+    [ "$status" -eq 0 ]
+    # Should show both the old version (0.1.0) and new version (0.2.0)
+    [[ "$output" == *"0.1.0"* ]]
+    [[ "$output" == *"0.2.0"* ]]
+}
