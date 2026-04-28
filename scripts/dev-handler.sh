@@ -80,6 +80,19 @@ ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/d
 # Claim the issue
 backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 
+# Safety net: if the handler is killed (SIGTERM/SIGINT) or set -e fires unexpectedly
+# between here and the explicit cleanup paths, restore the issue to dev so the
+# scanner re-queues it on the next tick rather than leaving it stuck in-progress.
+_IN_PROGRESS_CLAIMED=1
+_dev_label_cleanup() {
+    [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
+    log "EXIT trap: clearing orphaned in-progress on #$ISSUE_NUM — restoring to dev"
+    backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
+    backend_add_label "$REPO" "$ISSUE_NUM" dev 2>/dev/null || true
+    cleanup_worktree 2>/dev/null || true
+}
+trap '_dev_label_cleanup' EXIT TERM INT
+
 # Isolated worktree per issue — prevents parallel dev-handlers from stomping on
 # each other's working tree (observed bug: files from branch A leaked into
 # branch B's PR when two handlers ran concurrently).
@@ -157,6 +170,7 @@ cleanup_worktree() {
 
 LOG_CAPTURE_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "dev agent succeeded for #$ISSUE_NUM"
     bounty_report "dev_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" || true
     loop_notify "✅ [$SLUG] #$ISSUE_NUM dev done"
@@ -193,6 +207,7 @@ if matches:
     fi
     cleanup_worktree
 else
+    _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup
     n=$(retry_incr)
     log "dev agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES)"
     bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true

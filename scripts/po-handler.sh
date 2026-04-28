@@ -86,6 +86,16 @@ _po_trigger=$(loop_label_for "$SLUG" "po-review")
 backend_remove_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
 backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 
+# Safety net: restore to po-review if killed or set -e fires before explicit cleanup.
+_IN_PROGRESS_CLAIMED=1
+_po_label_cleanup() {
+    [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
+    log "EXIT trap: clearing orphaned in-progress on #$ISSUE_NUM — restoring to po-review"
+    backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
+    backend_add_label "$REPO" "$ISSUE_NUM" po-review 2>/dev/null || true
+}
+trap '_po_label_cleanup' EXIT TERM INT
+
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
 
 # Include recent comments so human steering + prior blocker context is visible to the PO agent.
@@ -201,19 +211,14 @@ _post_failure_comment() {
     # internal pipeline instructions that must not become public.
     local body="Automated ${label_ctx} failed ${max} times. Needs human clarification. Operator: see ${LOG_FILE} for the agent transcript."
     if [ "$target_type" = "issue" ]; then
-<<<<<<< HEAD
-        gh issue comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
+        backend_comment_issue "$REPO" "$target_num" "$body" 2>/dev/null || true
     else
-        gh pr comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
-=======
-        backend_comment_issue "$REPO" "$target_num" "$(cat "$body_file")" 2>/dev/null || true
-    else
-        backend_comment_pr "$REPO" "$target_num" "$(cat "$body_file")" 2>/dev/null || true
->>>>>>> 4597b57 ([LOOP-29] Fix backend abstraction bypass and loop_run_agent cwd handling)
+        backend_comment_pr "$REPO" "$target_num" "$body" 2>/dev/null || true
     fi
 }
 
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "po agent succeeded for #$ISSUE_NUM"
     bounty_report "po_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
     loop_notify "✅ [$SLUG] #$ISSUE_NUM po-review done"
@@ -225,6 +230,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
         backend_add_label "$REPO" "$ISSUE_NUM" dev
     fi
 else
+    _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup
     n=$(retry_incr)
     log "po agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES)"
     bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
