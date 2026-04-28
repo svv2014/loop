@@ -9,12 +9,12 @@ This dir contains starter workflows. Operators can author their own.
 
 ## Files
 
-| File | Purpose |
-|---|---|
-| `default.yaml` | Recommended for new repos. Clean canonical labels: `plan` / `needs-review` / `needs-qa` / `qa-pass` / `qa-fail`. |
-| `current.yaml` | Legacy-vocabulary mirror. Uses `dev` instead of `plan`; matches the label set in svv2014 projects at v0.1.0 migration. |
-| `minimal.yaml` | Two-stage pipeline (`plan → merge`). No review, no QA. Solo prototypes only. |
-| `docs-only.yaml` | Three-stage pipeline (`plan → review → merge`). No QA. For documentation and content-only PRs. |
+| File | Ships? | Purpose |
+|---|---|---|
+| `default.yaml` | Yes | Recommended for new repos. Clean canonical labels: `plan` / `needs-review` / `needs-qa` / `qa-pass` / `qa-fail`. |
+| `minimal.yaml` | Yes | Two-stage pipeline (`plan → merge`). No review, no QA. Solo prototypes only. |
+| `docs-only.yaml` | Yes | Three-stage pipeline (`plan → review → merge`). No QA. For documentation and content-only PRs. |
+| `current.yaml` | **No — gitignored** | Operator-local legacy-vocabulary mirror. Not committed to this repo. See [Operator-local workflows](#operator-local-workflows) and [docs/migration-from-asdlc.md](../../docs/migration-from-asdlc.md). |
 
 ## Schema (v1)
 
@@ -105,6 +105,43 @@ override any of them via the `labels:` map in `config/projects.yaml`.
 
 **Terminal labels** (valid transition targets, never trigger a stage):
 `done`, `blocked`, `needs-clarification`, `qa-fail`
+
+## `current` workflow label vocabulary
+
+`current.yaml` is the operator-local legacy-vocabulary mirror. It uses a
+different set of label names from `default.yaml` to preserve in-flight
+labels on repos that were already running under the original svv2014 label
+scheme before Loop's `default` workflow was introduced.
+
+**Pipeline flow:**
+
+```
+po-review (issue) → dev (issue) → review-pending (PR) → ready-for-qa (PR)
+    → qa-pass / qa-fail (PR) → merge → done
+```
+
+**Issue labels:**
+
+| Label | Role |
+|---|---|
+| `po-review` | PO expansion stage (same as `default`) |
+| `dev` | Dev implementation stage (`plan` in `default`) |
+| `blocked` | Terminal: issue cannot proceed |
+| `needs-clarification` | Terminal: awaiting author reply |
+
+**PR labels:**
+
+| Label | Role |
+|---|---|
+| `review-pending` | Code review stage (`needs-review` in `default`) |
+| `changes-requested` | Sent back to dev after review rejection (`needs-rework` in `default`) |
+| `ready-for-qa` | QA / automated test stage (`needs-qa` in `default`) |
+| `qa-pass` | QA passed; triggers merge (same as `default`) |
+| `qa-fail` | QA failed; triggers rework or close (same as `default`) |
+| `done` | Terminal: PR merged and issue closed (same as `default`) |
+
+See [docs/migration-from-asdlc.md](../../docs/migration-from-asdlc.md) for a full
+side-by-side mapping and instructions for creating your own `current.yaml`.
 
 ## Per-project overrides
 
