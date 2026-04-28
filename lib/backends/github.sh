@@ -124,6 +124,24 @@ backend_merge_pr() {
     gh pr merge "$number" "$strategy_flag" --repo "$repo" --delete-branch
 }
 
+# backend_find_pr_for_issue <repo> <issue_num>
+# Prints the open PR number whose body closes the given issue, or empty string.
+# Always exits 0.
+backend_find_pr_for_issue() {
+    local repo="$1" issue_num="$2"
+    local result
+    result=$(gh pr list --repo "$repo" --state open \
+        --json number \
+        --search "Closes #${issue_num} in:body" \
+        2>/dev/null \
+        | python3 -c "
+import json, sys
+prs = json.load(sys.stdin)
+print(prs[0]['number'] if prs else '')
+" 2>/dev/null || true)
+    printf '%s' "${result:-}"
+}
+
 # ---------------------------------------------------------------------------
 # Extended interface — bulk operations used by reconciler
 # ---------------------------------------------------------------------------
