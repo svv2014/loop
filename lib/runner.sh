@@ -21,8 +21,10 @@ loop_run_agent() {
     local cwd="${2:-$(pwd)}"
 
     # If a full orchestrator is configured, use it (backward compat)
+    # --mode quick skips the planner's 1800s subtask cap — the dev prompt is
+    # already fully specified, so decomposition only adds latency and timeout risk.
     if [ -n "${LOOP_ORCHESTRATOR:-}" ] && [ -x "${LOOP_ORCHESTRATOR}" ]; then
-        "$LOOP_ORCHESTRATOR" "$prompt" --cwd "$cwd"
+        "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd"
         return $?
     fi
 
