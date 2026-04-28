@@ -123,7 +123,7 @@ WORKTREE_ROOT="/tmp/loop-rework-${SLUG}-${PR_NUM}"
 if [ -d "$WORKTREE_ROOT" ]; then
     git -C "$ROOT" worktree remove "$WORKTREE_ROOT" --force 2>/dev/null || rm -rf "$WORKTREE_ROOT"
 fi
-git -C "$ROOT" fetch origin "$PR_BRANCH" --quiet 2>&1 | tee -a "$LOG_FILE" || true
+git -C "$ROOT" fetch origin "$PR_BRANCH" "$DEFAULT_BRANCH" --quiet 2>&1 | tee -a "$LOG_FILE" || true
 if ! git -C "$ROOT" worktree add "$WORKTREE_ROOT" "origin/$PR_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
     log "ERROR: failed to create worktree at $WORKTREE_ROOT for branch $PR_BRANCH"
     backend_remove_label "$REPO" "$PR_NUM" in-rework
@@ -131,6 +131,24 @@ if ! git -C "$ROOT" worktree add "$WORKTREE_ROOT" "origin/$PR_BRANCH" 2>&1 | tee
     exit 1
 fi
 log "worktree ready: $WORKTREE_ROOT (branch $PR_BRANCH)"
+
+# System invariant: rework agent must never run on a stale base. Always rebase
+# the branch onto current origin/<default> so the agent sees up-to-date world.
+# Clean rebase = silent; conflicting rebase = abort and let agent address conflicts
+# via the prompt instructions below.
+REBASE_CONFLICTS=""
+if ! git -C "$WORKTREE_ROOT" rebase "origin/$DEFAULT_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+    REBASE_CONFLICTS=$(git -C "$WORKTREE_ROOT" diff --name-only --diff-filter=U 2>/dev/null | tr '\n' ' ')
+    git -C "$WORKTREE_ROOT" rebase --abort 2>/dev/null || true
+    log "rebase onto origin/$DEFAULT_BRANCH had conflicts: ${REBASE_CONFLICTS:-(unknown)}"
+else
+    # Clean rebase — push the freshened branch so CI re-runs against new base.
+    if git -C "$WORKTREE_ROOT" push --force-with-lease origin "$PR_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+        log "rebased $PR_BRANCH onto origin/$DEFAULT_BRANCH and force-pushed"
+    else
+        log "WARN: rebase succeeded locally but push failed — agent will retry"
+    fi
+fi
 
 # For qa-fail context, fetch QA failure details from PR comments.
 QA_FAILURE_DETAILS=""
@@ -147,18 +165,47 @@ fi
 # Resolve workflow-specific labels for this project (default vs current).
 REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
 
-TASK_PROMPT=$(cat <<EOF
-You are the Senior Developer for ${NAME} (slug: ${SLUG}), reworking a PR after $( [ "$REWORK_CONTEXT" = "qa-fail" ] && echo "a QA failure" || echo "reviewer feedback" ).
+if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
+    _REWORK_TRIGGER="a QA failure"
+    _STEP2="2. This rework was triggered by a QA FAILURE. Fix the issues reported below.
+   QA failure details:
+   ---
+   ${QA_FAILURE_DETAILS}
+   ---
+   If no details are shown, run: gh pr view ${PR_NUM} --repo ${REPO} --json comments
+   and look for comments containing QA failure output.
+   Check for merge conflicts too:
+   gh pr view ${PR_NUM} --repo ${REPO} --json mergeable,mergeStateStatus
+   - If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase first (see below), then fix QA issues."
+    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Fixed QA failure: <summary of what was fixed>'"
+else
+    _REWORK_TRIGGER="reviewer feedback"
+    _STEP2="2. Check PR state details -- the trigger could be reviewer feedback OR a merge conflict:
+   gh pr view ${PR_NUM} --repo ${REPO} --json body,reviews,comments,mergeable,mergeStateStatus
+   - If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase onto origin/${DEFAULT_BRANCH} and resolve conflicts. Use 'git fetch origin && git rebase origin/${DEFAULT_BRANCH}', resolve each conflicted file, 'git add' resolved files, 'git rebase --continue', then 'git push --force-with-lease origin ${PR_BRANCH}'. Skip to step 6.
+   - Otherwise: focus on the most recent review with state REQUEST_CHANGES and its inline comments."
+    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Addressed review feedback: <summary>'"
+fi
+
+if [ -n "$DEV_VALIDATION_CMD" ]; then
+    _VALIDATION_STEP="4. Run validation: ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}"
+else
+    _VALIDATION_STEP=""
+fi
+
+_PROMPT_FILE=$(mktemp /tmp/rework-prompt-XXXXXX.txt)
+cat > "$_PROMPT_FILE" <<EOF
+You are the Senior Developer for ${NAME} (slug: ${SLUG}), reworking a PR after ${_REWORK_TRIGGER}.
 Working directory: ${WORKTREE_ROOT}
 Repo: ${REPO}
-PR: #${PR_NUM} — ${PR_TITLE}
+PR: #${PR_NUM} -- ${PR_TITLE}
 URL: ${PR_URL}
 Branch: ${PR_BRANCH}
 
 First, READ ${WORKTREE_ROOT}/CLAUDE.md for full project context.
 If CLAUDE.md is missing, proceed with best judgment and note the absence in your PR comment.
 
-Your job — in sequence:
+Your job -- in sequence:
 
 0. Check PR state before doing anything:
    gh pr view ${PR_NUM} --repo ${REPO} --json state,merged
@@ -167,36 +214,16 @@ Your job — in sequence:
    - If state=OPEN: continue to step 1.
 
 1. cd ${WORKTREE_ROOT}  (already on ${PR_BRANCH})
-$( if [ "$REWORK_CONTEXT" = "qa-fail" ]; then cat <<QABLOCK
-2. This rework was triggered by a QA FAILURE. Fix the issues reported below.
-   QA failure details:
-   ---
-QABLOCK
-   echo "   ${QA_FAILURE_DETAILS}"
-   cat <<QABLOCK2
-   ---
-   If no details are shown, run: gh pr view ${PR_NUM} --repo ${REPO} --json comments
-   and look for comments containing QA failure output.
-   Check for merge conflicts too:
-   gh pr view ${PR_NUM} --repo ${REPO} --json mergeable,mergeStateStatus
-   - If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase first (see below), then fix QA issues.
-QABLOCK2
-else cat <<CRBLOCK
-2. Check PR state details — the trigger could be reviewer feedback OR a merge conflict:
-   gh pr view ${PR_NUM} --repo ${REPO} --json body,reviews,comments,mergeable,mergeStateStatus
-   - If mergeable=CONFLICTING or mergeStateStatus=DIRTY: the task is to rebase onto origin/${DEFAULT_BRANCH} and resolve conflicts. Use \`git fetch origin && git rebase origin/${DEFAULT_BRANCH}\`, resolve each conflicted file by understanding the intent of both branches (read the last few commits on both branches for context), \`git add\` resolved files, \`git rebase --continue\`, then \`git push --force-with-lease origin ${PR_BRANCH}\`. Skip to step 6.
-   - Otherwise: focus on the most recent review with state REQUEST_CHANGES and its inline comments.
-CRBLOCK
-fi )
+${_STEP2}
 3. Address every point of feedback in code. Follow CLAUDE.md conventions.
-$( [ -n "$DEV_VALIDATION_CMD" ] && echo "4. Run validation: ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}" )
+${_VALIDATION_STEP}
 5. If there are new changes to commit: git commit -m '[${COMMIT_PREFIX}-rework-${PR_NUM}] <short description of what you addressed>'
    If all feedback was already addressed in prior commits and there are no staged changes, skip this step.
 6. Push the branch: git push origin ${PR_BRANCH}
    (or git push --force-with-lease origin ${PR_BRANCH} if a rebase was performed)
 7. Post a PR comment summarizing what you changed in response:
-$( [ "$REWORK_CONTEXT" = "qa-fail" ] && echo "   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Fixed QA failure: <summary of what was fixed>'" || echo "   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Addressed review feedback: <summary>'" )
-8. Swap labels — this is MANDATORY to signal success to the pipeline:
+${_STEP7}
+8. Swap labels -- this is MANDATORY to signal success to the pipeline:
    gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-rework --remove-label needs-rework --remove-label changes-requested --remove-label qa-fail --remove-label qa-failed --add-label ${REVIEW_LABEL}
 
 IMPORTANT: The PR MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clarification'/'blocked' if appropriate). Verify with:
@@ -204,7 +231,8 @@ IMPORTANT: The PR MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clar
 
 If the feedback is unclear or requires architectural input, add label 'needs-clarification' and comment on the PR instead of guessing.
 EOF
-)
+TASK_PROMPT=$(cat "$_PROMPT_FILE")
+rm -f "$_PROMPT_FILE"
 
 cleanup_worktree() {
     git -C "$ROOT" worktree remove "$WORKTREE_ROOT" --force 2>/dev/null \
