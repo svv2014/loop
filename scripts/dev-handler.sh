@@ -102,6 +102,7 @@ log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
 # belt-and-braces apply the right names per the project's active workflow
 # (e.g. needs-review on default, review-pending on current).
 REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
+_BACKEND_CLI_NOTE=$(backend_cli_note)
 
 if [ -n "$DEV_VALIDATION_CMD" ]; then
     _VALIDATION_STEP="4. Run validation: ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}"
@@ -156,6 +157,7 @@ IMPORTANT: The issue MUST end this run with label '${REVIEW_LABEL}' (or 'needs-c
    gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels
 
 If blocked by missing context or an architectural decision, comment on the issue and add label 'needs-clarification' instead of opening a PR.
+${_BACKEND_CLI_NOTE}
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
@@ -200,11 +202,8 @@ else
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked
-        # Post only a short marker — never the agent log/prompt, which contains
-        # internal pipeline instructions that must not become public.
-        gh issue comment "$ISSUE_NUM" --repo "$REPO" \
-            --body "Automated dev cycle failed ${MAX_RETRIES} times. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript." \
-            2>/dev/null || true
+        backend_comment_issue "$REPO" "$ISSUE_NUM" \
+            "Automated dev cycle failed ${MAX_RETRIES} times. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript."
         loop_notify "❌ [$SLUG] #$ISSUE_NUM dev failed: agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress

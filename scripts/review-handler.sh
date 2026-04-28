@@ -88,6 +88,7 @@ backend_add_label "$REPO" "$PR_NUM" in-review
 # belt-and-braces apply the right names per active workflow.
 QA_LABEL=$(loop_stage_trigger "$SLUG" qa pr 2>/dev/null || echo ready-for-qa)
 REWORK_LABEL=$(loop_stage_trigger "$SLUG" rework pr 2>/dev/null || echo changes-requested)
+_BACKEND_CLI_NOTE=$(backend_cli_note)
 
 _PROMPT_FILE=$(mktemp /tmp/review-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
@@ -134,6 +135,7 @@ IMPORTANT: You MUST finish by applying either '${QA_LABEL}' or '${REWORK_LABEL}'
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 Report the decision you made and why, in 3 short sentences.
+${_BACKEND_CLI_NOTE}
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
@@ -159,11 +161,8 @@ else
         backend_remove_label "$REPO" "$PR_NUM" in-review
         backend_remove_label "$REPO" "$PR_NUM" changes-requested
         backend_add_label "$REPO" "$PR_NUM" needs-rework
-        # Post only a short marker — never the agent log/prompt, which contains
-        # internal pipeline instructions that must not become public.
-        gh pr comment "$PR_NUM" --repo "$REPO" \
-            --body "Automated review failed ${MAX_RETRIES} times. Needs human eyes. Operator: see ${LOG_FILE} for the agent transcript." \
-            2>/dev/null || true
+        backend_comment_pr "$REPO" "$PR_NUM" \
+            "Automated review failed ${MAX_RETRIES} times. Needs human eyes. Operator: see ${LOG_FILE} for the agent transcript."
         loop_notify "❌ [$SLUG] PR#$PR_NUM review failed: agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$PR_NUM" in-review
