@@ -24,6 +24,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/cli-hint.sh
+source "$LOOP_ROOT/lib/cli-hint.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-rework-handler.log"
 MAX_RETRIES=2
@@ -203,6 +205,7 @@ IMPORTANT: The PR MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clar
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 If the feedback is unclear or requires architectural input, add label 'needs-clarification' and comment on the PR instead of guessing.
+$(loop_cli_hint)
 EOF
 )
 
