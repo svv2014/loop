@@ -45,24 +45,24 @@ teardown() {
 
     # Replicate the claim sequence from dev-handler.sh
     local _dev_trigger
-    _dev_trigger=$(loop_label_for "test-proj" "plan")
+    _dev_trigger=$(loop_label_for "test-proj" "dev")
     backend_remove_label "owner/test-repo" "1" "$_dev_trigger"
     backend_add_label    "owner/test-repo" "1" "in-progress"
 
     # trigger label must be removed
-    grep -q "remove plan" "$ops_log"
+    grep -q "remove dev" "$ops_log"
     # in-progress must be added
     grep -q "add in-progress" "$ops_log"
     # trigger label must NOT be re-added (no dual state)
-    ! grep -q "add plan" "$ops_log"
+    ! grep -q "add dev" "$ops_log"
     # remove must precede add
     local rm_line add_line
-    rm_line=$(grep -n "remove plan" "$ops_log" | cut -d: -f1)
+    rm_line=$(grep -n "remove dev" "$ops_log" | cut -d: -f1)
     add_line=$(grep -n "add in-progress" "$ops_log" | cut -d: -f1)
     [ "$rm_line" -lt "$add_line" ]
 }
 
-@test "dev-handler claim: label override respected (plan → backlog)" {
+@test "dev-handler claim: label override respected (dev → backlog)" {
     cat > "$BATS_TMPDIR/override.yaml" <<'YAML'
 version: 1
 projects:
@@ -73,7 +73,7 @@ projects:
     default_branch: main
     workflow: default
     labels:
-      plan: backlog
+      dev: backlog
 YAML
     export LOOP_CONFIG="$BATS_TMPDIR/override.yaml"
 
@@ -84,13 +84,13 @@ YAML
     backend_add_label()    { echo "add $3"    >> "$ops_log"; }
 
     local _dev_trigger
-    _dev_trigger=$(loop_label_for "override-proj" "plan")
+    _dev_trigger=$(loop_label_for "override-proj" "dev")
     backend_remove_label "owner/override-repo" "1" "$_dev_trigger"
     backend_add_label    "owner/override-repo" "1" "in-progress"
 
     # overridden label (backlog) must be stripped, not the canonical name
     grep -q "remove backlog" "$ops_log"
-    ! grep -q "remove plan" "$ops_log"
+    ! grep -q "remove dev" "$ops_log"
 }
 
 # ---------------------------------------------------------------------------

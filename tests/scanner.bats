@@ -158,8 +158,8 @@ teardown() {
     [ "$status" -eq 0 ]
 }
 
-@test "issue_is_claimed: returns 1 when issue has only plan label" {
-    export GH_MOCK_OUTPUT="plan"
+@test "issue_is_claimed: returns 1 when issue has only dev label" {
+    export GH_MOCK_OUTPUT="dev"
     run issue_is_claimed "test-slug" "owner/repo" 1
     [ "$status" -eq 1 ]
 }
@@ -226,21 +226,21 @@ projects:
 YAML
 }
 
-@test "workflow fixture: proj-default issue labels include po-review and plan" {
+@test "workflow fixture: proj-default issue labels include po-review and dev" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-default" issue
     [ "$status" -eq 0 ]
     [[ "$output" == *"po-review"* ]]
-    [[ "$output" == *"plan"* ]]
+    [[ "$output" == *"dev"* ]]
 }
 
-@test "workflow fixture: proj-minimal issue labels include plan but NOT po-review" {
+@test "workflow fixture: proj-minimal issue labels include dev but NOT po-review" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-minimal" issue
     [ "$status" -eq 0 ]
-    [[ "$output" == *"plan"* ]]
+    [[ "$output" == *"dev"* ]]
     [[ "$output" != *"po-review"* ]]
 }
 
@@ -263,16 +263,16 @@ YAML
     [[ "$output" != *"needs-review"* ]]
 }
 
-@test "workflow fixture: proj-default emits loop.dev_issue for plan-labeled issue" {
+@test "workflow fixture: proj-default emits loop.dev_issue for dev-labeled issue" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
 
     local PLAN_ISSUE
-    PLAN_ISSUE='{"number":1,"title":"Fix thing","url":"http://gh/1","labels":["plan"],"author":"bot"}'
+    PLAN_ISSUE='{"number":1,"title":"Fix thing","url":"http://gh/1","labels":["dev"],"author":"bot"}'
 
     backend_list_issues_with_label() {
         local _label="$2"
-        [ "$_label" = "plan" ] && printf '%s\n' "$PLAN_ISSUE"
+        [ "$_label" = "dev" ] && printf '%s\n' "$PLAN_ISSUE"
         return 0
     }
     backend_list_prs_with_label()  { return 0; }

@@ -16,7 +16,7 @@ description: |
 
 issue_stages:
   - id: plan
-    trigger_label: plan
+    trigger_label: dev
     handler: dev-handler
     on_done: needs-review
     on_failed_after_max: blocked
