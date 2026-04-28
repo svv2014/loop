@@ -103,7 +103,14 @@ log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
 # (e.g. needs-review on default, review-pending on current).
 REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
 
-TASK_PROMPT=$(cat <<EOF
+if [ -n "$DEV_VALIDATION_CMD" ]; then
+    _VALIDATION_STEP="4. Run validation: ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}"
+else
+    _VALIDATION_STEP=""
+fi
+
+_PROMPT_FILE=$(mktemp /tmp/dev-prompt-XXXXXX.txt)
+cat > "$_PROMPT_FILE" <<EOF
 You are the Senior Developer for ${NAME} (slug: ${SLUG}).
 Working directory: ${WORKTREE_ROOT}
 Repo: ${REPO}
@@ -122,27 +129,27 @@ Issue body:
 ${ISSUE_BODY}
 
 Your job:
-1. cd ${WORKTREE_ROOT}  (already on origin/${DEFAULT_BRANCH} — no pull needed)
+1. cd ${WORKTREE_ROOT}  (already on origin/${DEFAULT_BRANCH} -- no pull needed)
 2. Create a branch: fix/issue-${ISSUE_NUM}-<slug>  (or feat/issue-${ISSUE_NUM}-<slug> for features)
    If a branch named fix/issue-${ISSUE_NUM}-* or feat/issue-${ISSUE_NUM}-* already exists on origin, delete it first:
    git push origin --delete <existing-branch-name>
 3. Implement the change. Follow CLAUDE.md conventions.
-$( [ -n "$DEV_VALIDATION_CMD" ] && echo "4. Run validation: ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}" )
+${_VALIDATION_STEP}
 5. Before committing, verify there are actual staged changes:
    git diff --cached --quiet && echo 'WARNING: no staged changes' || true
    If there are no changes to commit, comment on the issue explaining why (e.g. already implemented, out of scope) and add label 'needs-clarification' instead of opening an empty PR.
 6. Commit: git commit -m '[${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>'
 7. Push the branch and open a PR:
-   gh pr create --repo ${REPO} --title '[${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>' \\
+   gh pr create --repo ${REPO} --title '[${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>' \
      --body 'Closes #${ISSUE_NUM}
 
 ## Changes
 <what you changed and why>
 
 ## Test Plan
-<what QA should verify>' \\
+<what QA should verify>' \
      --label ${REVIEW_LABEL}
-8. On your own issue — this step is MANDATORY to signal success to the pipeline:
+8. On your own issue -- this step is MANDATORY to signal success to the pipeline:
    gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --remove-label dev --remove-label plan --remove-label needs-review --remove-label review-pending --add-label ${REVIEW_LABEL}
 
 IMPORTANT: The issue MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clarification' if blocked). Verify with:
@@ -150,7 +157,8 @@ IMPORTANT: The issue MUST end this run with label '${REVIEW_LABEL}' (or 'needs-c
 
 If blocked by missing context or an architectural decision, comment on the issue and add label 'needs-clarification' instead of opening a PR.
 EOF
-)
+TASK_PROMPT=$(cat "$_PROMPT_FILE")
+rm -f "$_PROMPT_FILE"
 
 cleanup_worktree() {
     git -C "$ROOT" worktree remove "$WORKTREE_ROOT" --force 2>/dev/null \
@@ -193,21 +201,11 @@ else
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked
-        _fail_body_file=$(mktemp /tmp/loop-fail-XXXXXX.md)
-        {
-            echo "Automated dev cycle failed ${MAX_RETRIES} times. Needs human review."
-            echo ""
-            echo "<details><summary>Last agent output</summary>"
-            echo ""
-            echo '```'
-            tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" \
-                | sed 's/\(ANTHROPIC_API_KEY=\|GITHUB_TOKEN=\|GH_TOKEN=\|_SECRET=\)[^ ]*/\1REDACTED/g' \
-                | tail -40
-            echo '```'
-            echo "</details>"
-        } > "$_fail_body_file"
-        gh issue comment "$ISSUE_NUM" --repo "$REPO" --body-file "$_fail_body_file" 2>/dev/null || true
-        rm -f "$_fail_body_file"
+        # Post only a short marker — never the agent log/prompt, which contains
+        # internal pipeline instructions that must not become public.
+        gh issue comment "$ISSUE_NUM" --repo "$REPO" \
+            --body "Automated dev cycle failed ${MAX_RETRIES} times. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript." \
+            2>/dev/null || true
         loop_notify "❌ [$SLUG] #$ISSUE_NUM dev failed: agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress

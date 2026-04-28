@@ -197,25 +197,14 @@ rm -f "$_PROMPT_FILE"
 
 _post_failure_comment() {
     local target_type="$1" target_num="$2" label_ctx="$3" _attempt="$4" max="$5"
-    local body_file; body_file=$(mktemp /tmp/loop-fail-XXXXXX.md)
-    {
-        echo "Automated ${label_ctx} failed ${max} times. Needs human clarification."
-        echo ""
-        echo "<details><summary>Last agent output</summary>"
-        echo ""
-        echo '```'
-        tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" \
-            | sed 's/\(ANTHROPIC_API_KEY=\|GITHUB_TOKEN=\|GH_TOKEN=\|_SECRET=\)[^ ]*/\1REDACTED/g' \
-            | tail -40
-        echo '```'
-        echo "</details>"
-    } > "$body_file"
+    # Post only a short marker — never the agent log/prompt, which contains
+    # internal pipeline instructions that must not become public.
+    local body="Automated ${label_ctx} failed ${max} times. Needs human clarification. Operator: see ${LOG_FILE} for the agent transcript."
     if [ "$target_type" = "issue" ]; then
-        gh issue comment "$target_num" --repo "$REPO" --body-file "$body_file" 2>/dev/null || true
+        gh issue comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
     else
-        gh pr comment "$target_num" --repo "$REPO" --body-file "$body_file" 2>/dev/null || true
+        gh pr comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
     fi
-    rm -f "$body_file"
 }
 
 LOG_CAPTURE_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
