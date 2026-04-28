@@ -118,6 +118,110 @@ else
     log "PR #${PR_NUM} had no 'Closes #N' in body — nothing to close"
 fi
 
+# ── Changelog update ─────────────────────────────────────────────────────────
+# Non-fatal: run in a subshell so any error never aborts a successful merge.
+(
+  CHANGELOG="${ROOT}/CHANGELOG.md"
+
+  PR_META=$(backend_pr_view "$REPO" "$PR_NUM" --json title,labels 2>/dev/null || echo "{}")
+  CL_TITLE=$(echo "$PR_META" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('title',''))")
+  # shellcheck disable=SC2086
+  CL_LABELS=$(echo "$PR_META" | python3 -c "import json,sys; d=json.load(sys.stdin); print(' '.join(l['name'] for l in d.get('labels',[])))")
+
+  case "$CL_TITLE" in
+    "chore(changelog):"*|"chore(release):"*)
+      log "changelog: skipping — PR title starts with chore(changelog/release):"
+      exit 0
+      ;;
+  esac
+
+  CL_SECTION="Changed"
+  # shellcheck disable=SC2086
+  for _lbl in $CL_LABELS; do
+    case "$_lbl" in
+      bug)     CL_SECTION="Fixed";  break ;;
+      feature) CL_SECTION="Added";  break ;;
+    esac
+  done
+
+  if [ ! -f "$CHANGELOG" ]; then
+    log "WARN: $CHANGELOG not found — skipping changelog entry"
+    exit 0
+  fi
+
+  git -C "$ROOT" pull --ff-only origin "$DEFAULT_BRANCH" 2>&1 | tee -a "$LOG_FILE" || {
+    log "WARN: git pull before changelog edit failed — skipping"
+    exit 0
+  }
+
+  _py_rc=0
+  CHANGELOG_PATH="$CHANGELOG" PR_NUM="$PR_NUM" CL_TITLE="$CL_TITLE" CL_SECTION="$CL_SECTION" \
+  python3 <<'PY' >> "$LOG_FILE" 2>&1 || _py_rc=$?
+import sys, os, re
+
+changelog_path = os.environ['CHANGELOG_PATH']
+pr_num         = os.environ['PR_NUM']
+pr_title       = os.environ['CL_TITLE']
+section        = os.environ['CL_SECTION']
+entry          = f"- {pr_title} (#{pr_num})"
+
+with open(changelog_path, 'r') as f:
+    content = f.read()
+
+if '## [Unreleased]' not in content:
+    print("WARN: no [Unreleased] section found — skipping changelog entry")
+    sys.exit(1)
+
+if entry in content:
+    print("INFO: changelog entry already present — skipping")
+    sys.exit(0)
+
+section_header   = f"### {section}"
+unreleased_match = re.search(r'## \[Unreleased\][^\n]*\n', content)
+unreleased_end   = unreleased_match.end()
+
+next_section_match = re.search(r'\n## ', content[unreleased_end:])
+block_end = (unreleased_end + next_section_match.start()) if next_section_match else len(content)
+
+unreleased_block = content[unreleased_end:block_end]
+sub_match = re.search(r'### ' + re.escape(section) + r'[^\n]*\n', unreleased_block)
+
+if sub_match:
+    sub_body_start = unreleased_end + sub_match.end()
+    next_sub = re.search(r'\n### ', unreleased_block[sub_match.end():])
+    if next_sub:
+        insert_pos = sub_body_start + next_sub.start()
+    else:
+        insert_pos = block_end
+        while insert_pos > sub_body_start and content[insert_pos - 1] == '\n':
+            insert_pos -= 1
+    new_content = content[:insert_pos] + f"\n{entry}" + content[insert_pos:]
+else:
+    insert_pos = block_end
+    while insert_pos > unreleased_end and content[insert_pos - 1] == '\n':
+        insert_pos -= 1
+    new_content = content[:insert_pos] + f"\n\n{section_header}\n{entry}" + content[insert_pos:]
+
+with open(changelog_path, 'w') as f:
+    f.write(new_content)
+PY
+
+  if [ "$_py_rc" -ne 0 ]; then
+    log "WARN: changelog edit skipped (rc=$_py_rc)"
+    exit 0
+  fi
+
+  git -C "$ROOT" add "$CHANGELOG"
+  if git -C "$ROOT" diff --cached --quiet; then
+    log "changelog: no changes to commit"
+    exit 0
+  fi
+  git -C "$ROOT" commit -m "chore(changelog): record #${PR_NUM}"
+  git -C "$ROOT" push origin "$DEFAULT_BRANCH" 2>&1 | tee -a "$LOG_FILE" \
+    || log "WARN: changelog push failed — entry committed locally but not pushed"
+  log "changelog: appended entry for PR #${PR_NUM} under ### ${CL_SECTION}"
+) || log "WARN: changelog update block encountered an error — merge still succeeded"
+
 bounty_report "merge_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" || true
 loop_notify "✅ [$SLUG] PR#$PR_NUM merge done"
 
