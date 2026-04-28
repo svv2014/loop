@@ -193,6 +193,8 @@ else
     _VALIDATION_STEP=""
 fi
 
+_BACKEND_CLI_NOTE=$(backend_cli_note)
+
 _PROMPT_FILE=$(mktemp /tmp/rework-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
 You are the Senior Developer for ${NAME} (slug: ${SLUG}), reworking a PR after ${_REWORK_TRIGGER}.
@@ -230,6 +232,7 @@ IMPORTANT: The PR MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clar
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 If the feedback is unclear or requires architectural input, add label 'needs-clarification' and comment on the PR instead of guessing.
+${_BACKEND_CLI_NOTE}
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
@@ -262,11 +265,21 @@ else
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$PR_NUM" in-rework
         backend_add_label "$REPO" "$PR_NUM" blocked
-        # Post only a short marker to the PR — never the agent log/prompt, which
-        # contains internal pipeline instructions that should not be public.
-        gh pr comment "$PR_NUM" --repo "$REPO" \
-            --body "Automated rework failed ${MAX_RETRIES} times. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript." \
-            2>/dev/null || true
+        _fail_body_file=$(mktemp /tmp/loop-fail-XXXXXX.md)
+        {
+            echo "Automated rework failed ${MAX_RETRIES} times. Needs human eyes."
+            echo ""
+            echo "<details><summary>Last agent output</summary>"
+            echo ""
+            echo '```'
+            tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" \
+                | sed 's/\(ANTHROPIC_API_KEY=\|GITHUB_TOKEN=\|GH_TOKEN=\|_SECRET=\)[^ ]*/\1REDACTED/g' \
+                | tail -40
+            echo '```'
+            echo "</details>"
+        } > "$_fail_body_file"
+        backend_comment_pr "$REPO" "$PR_NUM" "$(cat "$_fail_body_file")"
+        rm -f "$_fail_body_file"
         loop_notify "❌ [$SLUG] PR#$PR_NUM dev-rework failed: agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$PR_NUM" in-rework

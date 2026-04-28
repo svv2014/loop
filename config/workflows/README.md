@@ -62,6 +62,25 @@ pr_stages:
 - At least one stage (anywhere in `issue_stages` or `pr_stages`)
 - Each stage: `id`, `trigger_label`, `handler`
 
+### Reserved stage IDs
+
+The built-in handlers call `loop_stage_trigger` with specific stage `id`
+values to resolve label names at runtime. Using a different `id` (or
+omitting a stage entirely) causes the handler to fall back to a hardcoded
+default label, which may not match the labels in your project.
+
+| Stage ID | Looked up by | Fallback if absent |
+|---|---|---|
+| `po` | po-handler (trigger strip) | `po-review` |
+| `dev` | dev-handler (trigger strip) | `plan` |
+| `review` | dev-handler, dev-rework-handler | `review-pending` |
+| `rework` | scanner (qa-fail context detection) | `changes-requested` |
+| `qa` | review-handler | `ready-for-qa` |
+
+Custom workflows that rename a stage must use one of these IDs, or
+override the label via the `labels:` map in `config/projects.yaml` so
+the fallback value still matches the label applied in the repo.
+
 ### Validation
 
 ```bash

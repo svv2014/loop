@@ -105,6 +105,8 @@ except Exception:
     pass
 " || echo "")
 
+_BACKEND_CLI_NOTE=$(backend_cli_note)
+
 _PROMPT_FILE=$(mktemp /tmp/po-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
 You are the Product Owner agent for ${NAME} (slug: ${SLUG}).
@@ -191,20 +193,32 @@ What this ticket explicitly does not cover. Prevents scope creep.
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
 Report your decision (A/B/C/D/E/F) and why in 2 sentences.
+${_BACKEND_CLI_NOTE}
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
 
 _post_failure_comment() {
     local target_type="$1" target_num="$2" label_ctx="$3" _attempt="$4" max="$5"
-    # Post only a short marker — never the agent log/prompt, which contains
-    # internal pipeline instructions that must not become public.
-    local body="Automated ${label_ctx} failed ${max} times. Needs human clarification. Operator: see ${LOG_FILE} for the agent transcript."
+    local body_file; body_file=$(mktemp /tmp/loop-fail-XXXXXX.md)
+    {
+        echo "Automated ${label_ctx} failed ${max} times. Needs human clarification."
+        echo ""
+        echo "<details><summary>Last agent output</summary>"
+        echo ""
+        echo '```'
+        tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" \
+            | sed 's/\(ANTHROPIC_API_KEY=\|GITHUB_TOKEN=\|GH_TOKEN=\|_SECRET=\)[^ ]*/\1REDACTED/g' \
+            | tail -40
+        echo '```'
+        echo "</details>"
+    } > "$body_file"
     if [ "$target_type" = "issue" ]; then
-        gh issue comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
+        backend_comment_issue "$REPO" "$target_num" "$(cat "$body_file")"
     else
-        gh pr comment "$target_num" --repo "$REPO" --body "$body" 2>/dev/null || true
+        backend_comment_pr "$REPO" "$target_num" "$(cat "$body_file")"
     fi
+    rm -f "$body_file"
 }
 
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
