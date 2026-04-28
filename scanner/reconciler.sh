@@ -927,7 +927,17 @@ print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/
         for issue_num in $issue_nums; do
             backend_remove_label "$repo" "$issue_num" blocked qa-pass changes-requested in-rework 2>/dev/null || true
             backend_add_label "$repo" "$issue_num" dev 2>/dev/null || true
-            log "[$repo] re-queued issue #$issue_num → dev"
+            log "[$repo] re-queued issue #$issue_num → dev (Opus dispatch)"
+            # Dispatch directly with Opus — re-labeling to dev would just let Sonnet fail again.
+            local iss_event
+            iss_event=$(python3 -c "import json; print(json.dumps({'type':'loop.dev_issue','payload':{'slug':'${slug}','repo':'${repo}','issue_number':'${issue_num}','issue_title':''}}))" 2>/dev/null || true)
+            if [ -n "$iss_event" ]; then
+                LOOP_AGENT_MODEL=claude-opus-4-7 LOOP_EVENT_JSON="$iss_event" \
+                    nohup timeout "${HANDLER_TIMEOUT_SECONDS:-3600}" \
+                    "$LOOP_ROOT/scripts/dev-handler.sh" \
+                    >> "$LOOP_LOG_DIR/loop-dev-handler.log" 2>&1 &
+                log "[$repo] Opus dev-handler dispatched for issue #$issue_num (PID $!)"
+            fi
         done
 
         # If no Closes link found, just log — don't close with no re-queue plan
@@ -935,6 +945,58 @@ print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/
             log "[$repo] WARN: PR #$pr_num has no Closes link — closed but no issue re-queued"
         fi
     done
+}
+
+# --- Check 13: stale blocked issues — Opus escalation after 30 min -----------
+# Issues that have been `blocked` for more than 30 minutes with no live handler
+# are automatically re-dispatched using Opus. Covers: issues blocked by the PO
+# agent, dev agent, or manually — anything that Sonnet couldn't resolve.
+# Idempotent: a fresh dispatch will claim in-progress, so subsequent ticks skip.
+reconcile_stale_blocked_issues() {
+    local repo="$1"
+    log "[$repo] scanning for stale blocked issues (>30m) to Opus-escalate"
+
+    local issues_json
+    issues_json=$(backend_list_open_issues_raw "$repo" "blocked") || issues_json="[]"
+
+    local candidates
+    candidates=$(ISS="$issues_json" python3 - <<'PY'
+import json, os, datetime as dt
+issues = json.loads(os.environ['ISS'])
+now = dt.datetime.now(dt.timezone.utc)
+for iss in issues:
+    up = dt.datetime.fromisoformat(iss['updatedAt'].replace('Z', '+00:00'))
+    age_s = int((now - up).total_seconds())
+    if age_s < 1800:   # 30-min grace: might have just been blocked
+        continue
+    print(f"{iss['number']}\t{age_s}\t{iss['title'][:60]}")
+PY
+)
+
+    if [ -z "$candidates" ]; then
+        log "[$repo] no stale blocked issues"
+        return 0
+    fi
+
+    while IFS=$'\t' read -r num age title; do
+        [ -z "$num" ] && continue
+        log "[$repo] stale-blocked issue #$num (${age}s): $title — Opus escalation"
+        $DRY_RUN && continue
+
+        backend_remove_label "$repo" "$num" blocked 2>/dev/null || true
+        backend_add_label "$repo" "$num" dev 2>/dev/null || true
+
+        local iss_event
+        iss_event=$(python3 -c "import json; print(json.dumps({'type':'loop.dev_issue','payload':{'slug':'${slug}','repo':'${repo}','issue_number':'${num}','issue_title':''}}))" 2>/dev/null || true)
+        if [ -n "$iss_event" ]; then
+            LOOP_AGENT_MODEL=claude-opus-4-7 LOOP_EVENT_JSON="$iss_event" \
+                nohup timeout "${HANDLER_TIMEOUT_SECONDS:-3600}" \
+                "$LOOP_ROOT/scripts/dev-handler.sh" \
+                >> "$LOOP_LOG_DIR/loop-dev-handler.log" 2>&1 &
+            log "[$repo] Opus dev-handler dispatched for blocked issue #$num (PID $!)"
+        fi
+        loop_notify "Loop reconciler: $repo — stale blocked issue #$num escalated to Opus (age=${age}s)"
+    done <<< "$candidates"
 }
 
 run_project() {
@@ -956,6 +1018,7 @@ run_project() {
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_conflict_blocked_prs "$REPO"
+    reconcile_stale_blocked_issues "$REPO"
     reconcile_qa_failures "$REPO"
     reconcile_worktrees "$slug" "$REPO"
 }
