@@ -54,6 +54,7 @@ _GL_ISSUE_SORT='
       title,
       url: .web_url,
       labels: $L,
+      author: (.author.username // ""),
       _p: (
         if   ($L | index("p0-critical")) then 0
         elif ($L | index("p1-high"))     then 1
@@ -99,7 +100,7 @@ _GL_MR_SORT='
 backend_list_issues_with_label() {
     local repo="$1" label="$2"
     _gl_parse_repo "$repo"
-    glab issue list --repo "$_GL_REPO" --label "$label" --state opened \
+    glab issue list --repo "$_GL_REPO" --label "$label" \
         --output json 2>/dev/null \
     | jq -c "$_GL_ISSUE_SORT" 2>/dev/null || true
 }
