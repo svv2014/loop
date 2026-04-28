@@ -28,6 +28,8 @@ source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/recovery.sh
+source "$LOOP_ROOT/lib/recovery.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-reconciler.log"
 LOCK_FILE="/tmp/loop-reconciler.lock"
@@ -729,6 +731,8 @@ run_project() {
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_worktrees "$slug" "$REPO"
+    recovery_check_stuck_labels "$slug"
+    recovery_prune_orphan_worktrees
 }
 
 acquire_lock
