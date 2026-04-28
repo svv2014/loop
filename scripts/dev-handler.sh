@@ -146,7 +146,7 @@ $( [ -n "$DEV_VALIDATION_CMD" ] && echo "4. Run validation: ${DEV_VALIDATION_CMD
    If there are no changes to commit, comment on the issue explaining why (e.g. already implemented, out of scope) and add label 'needs-clarification' instead of opening an empty PR.
 6. Commit: git commit -m '[${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>'
 7. Push the branch and open a PR:
-   gh pr create --repo ${REPO} --draft --title 'Draft: [${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>' \\
+   gh pr create --repo ${REPO} --title '[${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>' \\
      --body 'Closes #${ISSUE_NUM}
 
 ## Changes

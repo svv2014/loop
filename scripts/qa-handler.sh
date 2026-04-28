@@ -65,16 +65,12 @@ case "$PR_STATE" in
         ;;
 esac
 
-# Draft check — skip QA without touching retry counter.
+# Auto-promote drafts — PRs are no longer opened as drafts, but promote any legacy ones.
 _is_draft=$(gh pr view "$PR_NUM" --repo "$REPO" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
 if [ "$_is_draft" = "true" ]; then
-    log "PR #$PR_NUM is a draft — skipping QA"
-    gh label create draft --color "#808080" --description "PR is in Draft state" --repo "$REPO" 2>/dev/null || true
-    backend_remove_label "$REPO" "$PR_NUM" needs-qa
-    backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
-    backend_add_label    "$REPO" "$PR_NUM" draft
-    backend_comment_pr   "$REPO" "$PR_NUM" "PR is in Draft state — review skipped. When ready: mark the PR ready for review on GitHub, remove the \`draft\` label, and re-apply \`needs-review\` to re-enter the pipeline."
-    exit 0
+    log "PR #$PR_NUM is a draft — auto-promoting to ready"
+    gh pr ready "$PR_NUM" --repo "$REPO" 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" draft 2>/dev/null || true
 fi
 
 if [ -z "${QA_VALIDATION_CMD:-}" ]; then
