@@ -273,6 +273,27 @@ backend_merge_pr() {
     glab mr merge "${gl_args[@]}"
 }
 
+# backend_find_pr_for_issue <repo> <issue_num>
+# Prints the open MR number whose description references the given issue, or
+# empty string. Always exits 0.
+backend_find_pr_for_issue() {
+    local repo="$1" issue_num="$2"
+    _gl_parse_repo "$repo"
+    local result
+    result=$(glab mr list --repo "$_GL_REPO" --state opened --output json \
+        2>/dev/null \
+        | python3 -c "
+import json, sys
+mrs = json.load(sys.stdin)
+ref = '#' + sys.argv[1]
+for mr in mrs:
+    if ref in (mr.get('description') or ''):
+        print(mr['iid'])
+        break
+" "$issue_num" 2>/dev/null || true)
+    printf '%s' "${result:-}"
+}
+
 # ---------------------------------------------------------------------------
 # Extended interface — bulk operations used by scanner/reconciler
 # ---------------------------------------------------------------------------

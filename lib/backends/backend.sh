@@ -70,6 +70,10 @@
 #   backend_issue_unmet_deps <repo> <number>
 #     Print each unmet dependency (#NNN) declared in the issue's "## Dependencies"
 #     section, one per line. Empty output = all deps met or none declared.
+#
+#   backend_find_pr_for_issue <repo> <issue_num>
+#     Print the open PR/MR number whose body references the given issue, or
+#     empty string if none found. Always exits 0.
 
 set -euo pipefail
 

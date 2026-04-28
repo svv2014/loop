@@ -284,3 +284,10 @@ print(urllib.parse.quote(jql))
 }
 
 # backend_list_open_prs_raw and backend_list_merged_prs_raw are inherited from gitlab.sh.
+
+# backend_find_pr_for_issue <repo> <issue_num>
+# Jira issues use project-scoped keys (e.g. PROJ-42), not numeric GitHub/GitLab
+# references, so MR description search is not reliable. Return empty; exits 0.
+backend_find_pr_for_issue() {
+    return 0
+}
