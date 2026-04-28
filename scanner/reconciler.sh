@@ -33,6 +33,7 @@ LOG_FILE="${LOOP_LOG_DIR}/loop-reconciler.log"
 LOCK_FILE="/tmp/loop-reconciler.lock"
 # Notifications via loop_notify (configured in loop.env)
 STALE_PR_HOURS="${LOOP_STALE_PR_HOURS:-24}"
+HANDLER_TIMEOUT_MIN="${LOOP_HANDLER_TIMEOUT:-120}"
 
 DRY_RUN=false
 ONLY_SLUG=""
@@ -782,6 +783,67 @@ print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/
     done
 }
 
+# --- Check 12: stuck operational labels on PRs (HANDLER_TIMEOUT × 1.5) --------
+# PRs carrying `in-progress`, `in-rework`, or `in-review` with no active
+# handler (updatedAt older than HANDLER_TIMEOUT × 1.5 minutes) are recovered:
+# the operational label is stripped and the upstream trigger label is restored
+# so the scanner re-queues the PR.
+# Mapping: in-progress→dev  in-rework→needs-rework  in-review→needs-review
+# 10-minute grace window avoids racing a live handler.
+reconcile_stuck_labels() {
+    local repo="$1"
+    local slug="$2"
+    local threshold_min
+    threshold_min=$(python3 -c "print(int(${HANDLER_TIMEOUT_MIN} * 1.5))")
+    log "[$repo] scanning for stuck operational PR labels (>${threshold_min}min)"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    local stuck
+    stuck=$(PJSON="$prs_json" THRESHOLD_MIN="$threshold_min" python3 - <<'PY'
+import json, os, datetime as dt
+prs = json.loads(os.environ['PJSON'])
+threshold_sec = float(os.environ['THRESHOLD_MIN']) * 60
+grace_sec = 600  # 10-min grace window
+op_labels = {'in-progress', 'in-rework', 'in-review'}
+upstream = {'in-progress': 'dev', 'in-rework': 'needs-rework', 'in-review': 'needs-review'}
+now = dt.datetime.now(dt.timezone.utc)
+for pr in prs:
+    lbls = {l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])}
+    matched = op_labels & lbls
+    if not matched:
+        continue
+    up = dt.datetime.fromisoformat(pr['updatedAt'].replace('Z', '+00:00'))
+    age_sec = (now - up).total_seconds()
+    if age_sec < grace_sec or age_sec < threshold_sec:
+        continue
+    for lbl in sorted(matched):
+        print(f"{pr['number']}\t{lbl}\t{upstream[lbl]}\t{int(age_sec // 60)}\t{pr['title'][:60]}")
+PY
+)
+
+    if [ -z "$stuck" ]; then
+        log "[$repo] no stuck operational PR labels"
+        return 0
+    fi
+
+    while IFS=$'\t' read -r pr_num op_label trigger_label age_min title; do
+        [ -z "$pr_num" ] && continue
+        if project_locked "$slug"; then
+            log "[$repo] project locked — skip stuck-label recovery for PR#$pr_num"
+            continue
+        fi
+        log "[$repo] STUCK PR#$pr_num has ${op_label} for ${age_min}min (>${threshold_min}min); restoring ${trigger_label}: $title"
+        loop_notify "Loop reconciler: $repo — PR#$pr_num stuck with ${op_label} (${age_min}min); stripping → restoring ${trigger_label}"
+        $DRY_RUN && continue
+        backend_remove_label "$repo" "$pr_num" "$op_label" \
+            || log "[$repo] WARN: failed to remove ${op_label} from PR#$pr_num"
+        backend_add_label "$repo" "$pr_num" "$trigger_label" \
+            || log "[$repo] WARN: failed to add ${trigger_label} to PR#$pr_num"
+    done <<< "$stuck"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -801,6 +863,7 @@ run_project() {
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_conflict_blocked_prs "$REPO"
+    reconcile_stuck_labels "$REPO" "$slug"
     reconcile_worktrees "$slug" "$REPO"
 }
 
