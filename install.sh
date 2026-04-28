@@ -199,6 +199,23 @@ bootstrap_register_launchd() {
             echo "[launchd] WARNING: could not load com.user.loop-reconciler (check Console.app)" >&2
         fi
     fi
+
+    local digest_plist="$agents_dir/com.user.loop-digest.plist"
+    if [ -f "$digest_plist" ]; then
+        echo "[launchd] com.user.loop-digest already registered — skipping"
+    else
+        sed \
+            -e "s|__LOOP_ROOT__|$LOOP_ROOT|g" \
+            -e "s|__LOG_DIR__|$log_dir|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__EXTRA_PATH__|$extra_path|g" \
+            "$template_dir/com.user.loop-digest.plist.template" > "$digest_plist"
+        if launchctl load "$digest_plist" 2>/dev/null; then
+            echo "[launchd] com.user.loop-digest loaded (08:00 + 18:00 daily)"
+        else
+            echo "[launchd] WARNING: could not load com.user.loop-digest (check Console.app)" >&2
+        fi
+    fi
 }
 
 # Register scanner + reconciler via crontab (Linux). Idempotent: skips if marker present.
@@ -288,6 +305,7 @@ bootstrap_pipeline() {
 Log paths:
   Scanner:    $log_dir/loop-scanner.log
   Reconciler: $log_dir/loop-reconciler.log
+  Digest:     $log_dir/loop-digest.log
 
 To add your first project:
   $0 /path/to/your/project [--auto]
