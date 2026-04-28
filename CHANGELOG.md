@@ -13,6 +13,9 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+
+### Changed
+- [LOOP-29] Fix backend abstraction bypass and loop_run_agent cwd handling (#52)
 ## [0.1.0] - 2026-04-27
 
 Initial public release. Loop is the public rebrand of a prior internal
