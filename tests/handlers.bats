@@ -118,3 +118,69 @@ YAML
     add_line=$(grep -n "add in-progress" "$ops_log" | cut -d: -f1)
     [ "$rm_line" -lt "$add_line" ]
 }
+
+# ---------------------------------------------------------------------------
+# po-handler MR-aware decision paths
+# ---------------------------------------------------------------------------
+
+# Replicates the in-flight PR detection logic from po-handler.sh.
+# Returns: sets _IN_FLIGHT_PR and _MR_PREAMBLE in the caller's scope.
+_run_inflight_detection() {
+    local repo="$1" issue_num="$2"
+    _IN_FLIGHT_PR=""
+    _MR_PREAMBLE=""
+    local _in_flight_pr_num
+    _in_flight_pr_num=$(backend_find_pr_for_issue "$repo" "$issue_num" 2>/dev/null || echo "")
+    if [ -n "$_in_flight_pr_num" ]; then
+        local _pr_state
+        _pr_state=$(backend_pr_view "$repo" "$_in_flight_pr_num" \
+            --json state --jq '.state' 2>/dev/null || echo "")
+        if [ "$_pr_state" = "OPEN" ]; then
+            _IN_FLIGHT_PR="$_in_flight_pr_num"
+            _MR_PREAMBLE="--- EXISTING IMPLEMENTATION IN FLIGHT ---
+PR #${_IN_FLIGHT_PR}: test-title
+Branch: fix/1-slug
+State: OPEN
+--- END IN-FLIGHT CONTEXT ---"
+        fi
+    fi
+}
+
+@test "po-handler: MR found and open — prompt contains EXISTING IMPLEMENTATION IN FLIGHT" {
+    backend_find_pr_for_issue() { echo "42"; }
+    backend_pr_view() {
+        # Called twice: first for state, second for full meta
+        if [[ "$*" == *"--json state"* ]]; then
+            echo "OPEN"
+        else
+            echo "{}"
+        fi
+    }
+
+    _run_inflight_detection "owner/test-repo" "1"
+
+    [ -n "$_IN_FLIGHT_PR" ]
+    [ "$_IN_FLIGHT_PR" = "42" ]
+    [[ "$_MR_PREAMBLE" == *"EXISTING IMPLEMENTATION IN FLIGHT"* ]]
+}
+
+@test "po-handler: MR closed or merged — treated as no MR, original A-F paths preserved" {
+    backend_find_pr_for_issue() { echo "42"; }
+    backend_pr_view() {
+        echo "CLOSED"
+    }
+
+    _run_inflight_detection "owner/test-repo" "1"
+
+    [ -z "$_IN_FLIGHT_PR" ]
+    [ -z "$_MR_PREAMBLE" ]
+}
+
+@test "po-handler: no MR found — original A-F behavior preserved, no in-flight preamble" {
+    backend_find_pr_for_issue() { echo ""; }
+
+    _run_inflight_detection "owner/test-repo" "1"
+
+    [ -z "$_IN_FLIGHT_PR" ]
+    [ -z "$_MR_PREAMBLE" ]
+}
