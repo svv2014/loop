@@ -550,6 +550,9 @@ labels_spec=(
     "blocked|8B0000|Failed 3x, needs human"
     "needs-clarification|FF69B4|Dev hit ambiguity"
     "done|006400|Merged and closed"
+    "semver:major|b60205|Bump major version on next release"
+    "semver:minor|0075ca|Bump minor version on next release"
+    "release-pr|0075ca|Automated release PR"
 )
 
 if [ "$BACKEND_MODE" = "gitlab" ] || [ "$BACKEND_MODE" = "jira-gitlab" ]; then
