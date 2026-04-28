@@ -193,6 +193,7 @@ backend_open_pr() {
         --title "$title" \
         --description "$body" \
         --label "$label" \
+        --draft \
         2>/dev/null || true
 }
 
