@@ -119,7 +119,8 @@ emit() {
             local age
             age=$(( $(date +%s) - $(stat -f%m "$key_file" 2>/dev/null || echo 0) ))
             if [ "$age" -lt 1800 ]; then
-                return 0  # Already emitted recently, skip
+                log "skip (dedup): $dedup_id"
+                return 0
             fi
         fi
     fi
