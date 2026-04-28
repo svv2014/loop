@@ -1,7 +1,13 @@
 # Loop — Autonomous Dev Pipeline for GitHub Projects
 
+<img src="assets/wolf-logo.svg" alt="Loop wolf mascot" width="120">
+
+> *Loop — the pack that ships.*
+
 > Label an issue. Walk away. Loop opens a PR, reviews it, runs QA, merges.
 > 24/7. Multi-project. Bring-your-own AI agent.
+
+The name is a nod to _loup_, French for wolf — a predator that hunts in packs, never stops, and always ships.
 
 ```
    You label an issue                  ┌──────────────────────────────┐

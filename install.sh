@@ -285,6 +285,7 @@ bootstrap_register_services() {
 bootstrap_pipeline() {
     echo "═══════════════════════════════════════════════"
     echo " Loop — Bootstrap (first-time setup)"
+    echo " Loop — the pack that ships."
     echo "═══════════════════════════════════════════════"
     echo
 
