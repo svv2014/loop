@@ -56,6 +56,8 @@ make_mock_gh() {
     # $1 = path to write mock script
     # $2 = shell snippet to embed (receives "$@" as gh args)
     local dest="$1" snippet="$2"
+    # Remove any existing symlink before writing so we don't corrupt the target.
+    rm -f "$dest"
     cat > "$dest" <<SCRIPT
 #!/usr/bin/env bash
 ${snippet}
