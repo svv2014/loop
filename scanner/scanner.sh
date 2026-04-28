@@ -18,6 +18,10 @@ source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# workflow helpers (loop_polled_labels, loop_handler_for_label, loop_stage_trigger,
+# loop_workflow_for_project) are already loaded via lib/env.sh → lib/workflow.sh.
+# The line below is for shellcheck only.
+# shellcheck source=../lib/workflow.sh
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
@@ -41,6 +45,20 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# _handler_to_event_type <handler_base_name>
+# Maps a workflow handler name (from workflow YAML) to a loop event type string.
+_handler_to_event_type() {
+    case "$1" in
+        po-handler)          echo "loop.po_review" ;;
+        dev-handler)         echo "loop.dev_issue" ;;
+        review-handler)      echo "loop.pr_review" ;;
+        dev-rework-handler)  echo "loop.dev_rework" ;;
+        qa-handler)          echo "loop.pr_qa" ;;
+        merge-handler)       echo "loop.pr_merge" ;;
+        *)                   echo "loop.$1" ;;
+    esac
+}
 
 # Map event type to handler script (dispatch_direct mode).
 dispatch_direct() {
@@ -122,16 +140,36 @@ emit() {
     fi
 }
 
-# Dedup marker: has this issue/PR already been handed to a handler?
-# Checks both old and new label names for each stage.
+# issue_is_claimed <slug> <repo> <num>
+# Returns 0 if the issue has been dispatched or moved past the issue stage.
+# Claimed labels are derived from the project's workflow PR trigger labels
+# plus a fixed set of handler-set operational labels (in-progress, build, blocked).
 issue_is_claimed() {
-    local repo="$1" num="$2"
+    local slug="$1" repo="$2" num="$3"
+    local pr_trigger_labels
+    pr_trigger_labels=$(loop_polled_labels "$slug" pr 2>/dev/null | tr '\n' ' ')
+    # shellcheck disable=SC2086
     backend_issue_has_any_label "$repo" "$num" \
-        in-progress build blocked \
-        review-pending needs-review \
-        ready-for-qa needs-qa \
-        qa-pass approved \
-        'done'
+        in-progress build blocked 'done' \
+        ${pr_trigger_labels}
+}
+
+# _pr_downstream_labels <slug> <from_label>
+# Returns space-separated PR stage trigger labels that appear after from_label
+# in the project's workflow. Used to determine whether a PR has already moved
+# past the stage we are about to dispatch.
+_pr_downstream_labels() {
+    local slug="$1" from_label="$2"
+    local found=false
+    local result=""
+    while IFS= read -r lbl; do
+        if $found; then
+            result="$result $lbl"
+        elif [ "$lbl" = "$from_label" ]; then
+            found=true
+        fi
+    done < <(loop_polled_labels "$slug" pr 2>/dev/null)
+    echo "$result"
 }
 
 # author_is_allowed <author_login>
@@ -146,38 +184,20 @@ author_is_allowed() {
     return 1
 }
 
-pr_is_claimed_for_review() {
-    local repo="$1" num="$2"
-    backend_pr_has_any_label "$repo" "$num" \
-        in-review \
-        ready-for-qa needs-qa \
-        qa-pass approved \
-        'done'
-}
-
-pr_is_claimed_for_qa() {
-    local repo="$1" num="$2"
-    backend_pr_has_any_label "$repo" "$num" qa-pass approved 'done'
-}
-
-pr_is_claimed_for_rework() {
-    local repo="$1" num="$2"
-    backend_pr_has_any_label "$repo" "$num" in-rework blocked
-}
-
-# count_inflight_prs <repo>
+# count_inflight_prs <slug> <repo>
 # Count open PRs that carry at least one pipeline label.
+# Pipeline labels are derived from the project's workflow PR trigger labels
+# plus handler-set in-flight labels (in-progress, in-review, in-rework).
 count_inflight_prs() {
-    local repo="$1"
+    local slug="$1" repo="$2"
+    local pr_labels
+    pr_labels=$(loop_polled_labels "$slug" pr 2>/dev/null | tr '\n' ' ')
     local raw
     raw=$(backend_list_open_prs_raw "$repo")
+    PIPELINE_LABELS="in-progress in-review in-rework ${pr_labels}" \
     printf '%s\n' "$raw" | python3 -c "
-import json, sys
-pipeline_labels = {
-    'in-progress', 'build', 'review-pending', 'needs-review', 'in-review',
-    'ready-for-qa', 'needs-qa', 'in-rework', 'changes-requested', 'needs-rework',
-    'qa-fail', 'qa-failed', 'qa-pass', 'approved',
-}
+import json, sys, os
+pipeline_labels = set(os.environ.get('PIPELINE_LABELS', '').split())
 prs = json.load(sys.stdin)
 print(sum(
     1 for pr in prs
@@ -186,80 +206,111 @@ print(sum(
 "
 }
 
-scan_project() {
-    local slug="$1"
-    loop_load_project "$slug" || { log "skip: slug '$slug' unloadable"; return; }
-    loop_load_backend
-    local repo="$REPO"
+# _emit_issue_event <type> <slug> <repo> <num> <title> <url>
+# Build and print an issue event JSON string.
+_emit_issue_event() {
+    local type="$1" slug="$2" repo="$3" num="$4" title="$5" url="$6"
+    python3 -c "
+import json,sys
+print(json.dumps({
+    'type': sys.argv[1],
+    'payload': {
+        'slug': sys.argv[2],
+        'repo': sys.argv[3],
+        'issue_number': int(sys.argv[4]),
+        'issue_title': sys.argv[5],
+        'issue_url': sys.argv[6],
+    }
+}))
+" "$type" "$slug" "$repo" "$num" "$title" "$url"
+}
 
-    local _wf
-    _wf=$(loop_workflow_for_project "$slug")
-    log "scan: $slug ($repo) workflow=$_wf"
+# _emit_pr_event <type> <slug> <repo> <num> <title> <url> [extra_key] [extra_val]
+# Build and print a PR event JSON string. extra_key/extra_val add one optional payload field.
+_emit_pr_event() {
+    local type="$1" slug="$2" repo="$3" num="$4" title="$5" url="$6"
+    local extra_key="${7:-}" extra_val="${8:-}"
+    python3 -c "
+import json,sys
+p = {
+    'slug': sys.argv[2],
+    'repo': sys.argv[3],
+    'pr_number': int(sys.argv[4]),
+    'pr_title': sys.argv[5],
+    'pr_url': sys.argv[6],
+}
+if sys.argv[7]:
+    p[sys.argv[7]] = sys.argv[8]
+print(json.dumps({'type': sys.argv[1], 'payload': p}))
+" "$type" "$slug" "$repo" "$num" "$title" "$url" "$extra_key" "$extra_val"
+}
 
-    # --- po-review issues: rough ideas awaiting PO expansion -----------------
+# _scan_issue_stage <slug> <repo> <trigger_label> <handler> <event_type>
+# Handles a single issue stage. dev-handler gets slot/priority/dep-gate logic;
+# all other handlers get a simple poll-and-emit loop.
+_scan_issue_stage() {
+    local slug="$1" repo="$2" trigger_label="$3" handler="$4" event_type="$5"
+
+    if [ "$handler" = "dev-handler" ]; then
+        _scan_dev_issue_stage "$slug" "$repo" "$trigger_label" "$event_type"
+        return
+    fi
+
+    # Simple issue stage (e.g. po-handler)
     while IFS= read -r row; do
         [ -z "$row" ] && continue
-        local num title url
-        num=$(echo "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-        title=$(echo "$row"  | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-        url=$(echo "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
-        local author
-        author=$(echo "$row" | python3 -c "import json,sys; print(json.load(sys.stdin).get('author',''))")
+        local num title url author
+        num=$(printf '%s' "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
+        title=$(printf '%s' "$row"  | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+        url=$(printf '%s' "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
+        author=$(printf '%s' "$row" | python3 -c "import json,sys; print(json.load(sys.stdin).get('author',''))")
         if ! author_is_allowed "$author"; then
-            log "skip po-review #$num: author '$author' not in ALLOWED_AUTHORS"
+            log "skip $event_type #$num: author '$author' not in ALLOWED_AUTHORS"
             continue
         fi
-        if issue_is_claimed "$repo" "$num"; then
+        if issue_is_claimed "$slug" "$repo" "$num"; then
             continue
         fi
         local evt
-        evt=$(python3 -c "
-import json,sys
-print(json.dumps({
-    'type':'loop.po_review',
-    'payload':{
-        'slug': sys.argv[1],
-        'repo': sys.argv[2],
-        'issue_number': int(sys.argv[3]),
-        'issue_title': sys.argv[4],
-        'issue_url': sys.argv[5],
-    }
-}))
-" "$slug" "$repo" "$num" "$title" "$url")
-        log "emit loop.po_review #$num $title"
-        emit "$evt" "po_review:${slug}:${num}"
-    done < <(backend_list_issues_with_label "$repo" "$(loop_stage_trigger "$slug" "po" "issue")")
+        evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$num" "$title" "$url")
+        log "emit $event_type #$num $title"
+        emit "$evt" "${event_type}:${slug}:${num}"
+    done < <(backend_list_issues_with_label "$repo" "$trigger_label")
+}
 
-    # --- dev issues: workflow-driven label (canonical 'plan'). The project's
-    # active workflow + label overrides decide the actual label name (e.g.
-    # 'dev' for projects on `workflow: current`, 'plan' for `default`).
-    local _inflight _slots _rows_tmp _seen_tmp _emitted _di_num _di_title _di_url _di_unmet _di_evt
-    _inflight=$(count_inflight_prs "$repo")
+# _scan_dev_issue_stage — dev_issue with concurrent slot limiting, priority sort, dep gating.
+_scan_dev_issue_stage() {
+    local slug="$1" repo="$2" trigger_label="$3" event_type="$4"
+
+    local _inflight _slots
+    _inflight=$(count_inflight_prs "$slug" "$repo")
     _slots=$(( MAX_CONCURRENT_PRS - _inflight ))
     log "dev_issue: max=${MAX_CONCURRENT_PRS} in-flight=${_inflight} slots=${_slots}"
 
     if [ "$_slots" -le 0 ]; then
         log "skip dev_issue for $slug: ${_inflight}/${MAX_CONCURRENT_PRS} pipeline PRs in flight"
-    else
-        _rows_tmp=$(mktemp)
-        _seen_tmp=$(mktemp)
+        return
+    fi
 
-        # Collect from the project's resolved 'plan' label.
-        # Already priority-sorted by backend_list_issues_with_label.
-        while IFS= read -r _r; do
-            [ -z "$_r" ] && continue
-            _di_num=$(printf '%s' "$_r" | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-            if ! grep -qxF "$_di_num" "$_seen_tmp" 2>/dev/null; then
-                printf '%s\n' "$_di_num" >> "$_seen_tmp"
-                printf '%s\n' "$_r" >> "$_rows_tmp"
-            fi
-        done < <(backend_list_issues_with_label "$repo" "$(loop_stage_trigger "$slug" "plan" "issue" 2>/dev/null || loop_stage_trigger "$slug" "dev" "issue")")
+    local _rows_tmp _seen_tmp
+    _rows_tmp=$(mktemp)
+    _seen_tmp=$(mktemp)
 
-        # Re-sort the combined list by (priority, issue_number) so that cross-label
-        # ordering is correct (e.g. a p0 in 'plan' beats a p2 in 'dev').
-        local _sorted_tmp
-        _sorted_tmp=$(mktemp)
-        _ROWS_FILE="$_rows_tmp" python3 <<'PY' > "$_sorted_tmp"
+    # Collect and deduplicate issues from the workflow's dev trigger label.
+    while IFS= read -r _r; do
+        [ -z "$_r" ] && continue
+        local _n
+        _n=$(printf '%s' "$_r" | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
+        if ! grep -qxF "$_n" "$_seen_tmp" 2>/dev/null; then
+            printf '%s\n' "$_n" >> "$_seen_tmp"
+            printf '%s\n' "$_r" >> "$_rows_tmp"
+        fi
+    done < <(backend_list_issues_with_label "$repo" "$trigger_label")
+
+    # Sort by (priority-label, issue_number) so high-priority issues fire first.
+    local _sorted_tmp
+    _sorted_tmp=$(mktemp)
+    _ROWS_FILE="$_rows_tmp" python3 <<'PY' > "$_sorted_tmp"
 import json, sys, os
 PRIORITY = {'p0-critical': 0, 'p1-high': 1, 'p2-medium': 2, 'p3-low': 3}
 rows = []
@@ -276,203 +327,114 @@ rows.sort(key=lambda x: (x[0], x[1]))
 for _, _, line in rows:
     print(line)
 PY
-        mv "$_sorted_tmp" "$_rows_tmp"
+    mv "$_sorted_tmp" "$_rows_tmp"
 
-        _emitted=0
-        while IFS= read -r _row; do
-            [ "$_emitted" -ge "$_slots" ] && break
-            [ -z "$_row" ] && continue
-            _di_num=$(printf '%s' "$_row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-            _di_title=$(printf '%s' "$_row"  | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-            _di_url=$(printf '%s' "$_row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
-            local _di_author
-            _di_author=$(printf '%s' "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin).get('author',''))")
-            if ! author_is_allowed "$_di_author"; then
-                log "skip dev_issue #$_di_num: author '$_di_author' not in ALLOWED_AUTHORS"
-                continue
-            fi
-            if issue_is_claimed "$repo" "$_di_num"; then
-                continue
-            fi
-            # Dependency gate: defer if the issue body declares unmet deps in
-            # its "## Dependencies" section. Pickup resumes automatically once deps close.
-            _di_unmet=$(backend_issue_unmet_deps "$repo" "$_di_num" 2>/dev/null || true)
-            if [ -n "$_di_unmet" ]; then
-                log "defer loop.dev_issue #$_di_num $_di_title — unmet deps: $(printf '%s' "$_di_unmet" | tr '\n' ' ')"
-                continue
-            fi
-            _di_evt=$(python3 -c "
-import json,sys
-print(json.dumps({
-    'type':'loop.dev_issue',
-    'payload':{
-        'slug': sys.argv[1],
-        'repo': sys.argv[2],
-        'issue_number': int(sys.argv[3]),
-        'issue_title': sys.argv[4],
-        'issue_url': sys.argv[5],
-    }
-}))
-" "$slug" "$repo" "$_di_num" "$_di_title" "$_di_url")
-            log "emit loop.dev_issue #$_di_num $_di_title"
-            emit "$_di_evt" "dev_issue:${slug}:${_di_num}"
-            _emitted=$(( _emitted + 1 ))
-        done < "$_rows_tmp"
-        rm -f "$_rows_tmp" "$_seen_tmp"
+    local _emitted=0
+    while IFS= read -r _row; do
+        [ "$_emitted" -ge "$_slots" ] && break
+        [ -z "$_row" ] && continue
+        local _num _title _url _author _unmet _evt
+        _num=$(printf '%s' "$_row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
+        _title=$(printf '%s' "$_row"  | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+        _url=$(printf '%s' "$_row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
+        _author=$(printf '%s' "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin).get('author',''))")
+        if ! author_is_allowed "$_author"; then
+            log "skip dev_issue #$_num: author '$_author' not in ALLOWED_AUTHORS"
+            continue
+        fi
+        if issue_is_claimed "$slug" "$repo" "$_num"; then
+            continue
+        fi
+        # Dependency gate: defer if the issue body declares unmet deps.
+        _unmet=$(backend_issue_unmet_deps "$repo" "$_num" 2>/dev/null || true)
+        if [ -n "$_unmet" ]; then
+            log "defer dev_issue #$_num $_title — unmet deps: $(printf '%s' "$_unmet" | tr '\n' ' ')"
+            continue
+        fi
+        _evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$_num" "$_title" "$_url")
+        log "emit $event_type #$_num $_title"
+        emit "$_evt" "${event_type}:${slug}:${_num}"
+        _emitted=$(( _emitted + 1 ))
+    done < "$_rows_tmp"
+    rm -f "$_rows_tmp" "$_seen_tmp"
+}
+
+# _scan_pr_stage <slug> <repo> <trigger_label> <handler> <event_type>
+# Polls for PRs carrying trigger_label and emits the appropriate event.
+# A PR is skipped if it has already moved downstream (has a later-stage trigger
+# label) or is actively being handled (in-review / in-rework operational labels).
+_scan_pr_stage() {
+    local slug="$1" repo="$2" trigger_label="$3" handler="$4" event_type="$5"
+
+    local downstream
+    downstream=$(_pr_downstream_labels "$slug" "$trigger_label")
+
+    # For dev-rework-handler: when the trigger label is NOT the workflow's
+    # primary rework trigger (i.e., it comes from a qa-fail stage), add
+    # rework_context so the handler knows the origin.
+    local rework_context_key="" rework_context_val=""
+    if [ "$handler" = "dev-rework-handler" ]; then
+        local rework_trigger
+        rework_trigger=$(loop_stage_trigger "$slug" "rework" "pr" 2>/dev/null || true)
+        if [ -n "$rework_trigger" ] && [ "$trigger_label" != "$rework_trigger" ]; then
+            rework_context_key="rework_context"
+            rework_context_val="qa-fail"
+        fi
     fi
 
-    # --- PRs: review-pending / needs-review (new name); shared dedup key -----
-    _emit_pr_review() {
-        local _row="$1"
-        [ -z "$_row" ] && return 0
+    while IFS= read -r row; do
+        [ -z "$row" ] && continue
         local num title url
-        num=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-        title=$(echo "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-        url=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
-        if pr_is_claimed_for_review "$repo" "$num"; then
-            return 0
-        fi
-        local evt
-        evt=$(python3 -c "
-import json,sys
-print(json.dumps({
-    'type':'loop.pr_review',
-    'payload':{
-        'slug': sys.argv[1],
-        'repo': sys.argv[2],
-        'pr_number': int(sys.argv[3]),
-        'pr_title': sys.argv[4],
-        'pr_url': sys.argv[5],
-    }
-}))
-" "$slug" "$repo" "$num" "$title" "$url")
-        log "emit loop.pr_review PR#$num $title"
-        emit "$evt" "pr_review:${slug}:${num}"
-    }
-    while IFS= read -r row; do _emit_pr_review "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "review" "pr")")
+        num=$(printf '%s' "$row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
+        title=$(printf '%s' "$row" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+        url=$(printf '%s' "$row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
 
-    # --- PRs: changes-requested / needs-rework (new name) → dev_rework ------
-    _emit_dev_rework_cr() {
-        local _row="$1"
-        [ -z "$_row" ] && return 0
-        local num title url
-        num=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-        title=$(echo "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-        url=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
-        if pr_is_claimed_for_rework "$repo" "$num"; then
-            return 0
+        # Skip if the PR has moved to a downstream stage or is actively being handled.
+        # in-review / in-rework are handler-set operational labels (not in workflow YAML).
+        # shellcheck disable=SC2086
+        if backend_pr_has_any_label "$repo" "$num" \
+               in-review in-rework 'done' blocked \
+               ${downstream}; then
+            continue
         fi
-        local evt
-        evt=$(python3 -c "
-import json,sys
-print(json.dumps({
-    'type':'loop.dev_rework',
-    'payload':{
-        'slug': sys.argv[1],
-        'repo': sys.argv[2],
-        'pr_number': int(sys.argv[3]),
-        'pr_title': sys.argv[4],
-        'pr_url': sys.argv[5],
-    }
-}))
-" "$slug" "$repo" "$num" "$title" "$url")
-        log "emit loop.dev_rework PR#$num $title"
-        emit "$evt" "dev_rework:${slug}:${num}"
-    }
-    while IFS= read -r row; do _emit_dev_rework_cr "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "rework" "pr")")
 
-    # --- PRs: qa-fail / qa-failed (new name) → dev_rework -------------------
-    _emit_dev_rework_qa() {
-        local _row="$1"
-        [ -z "$_row" ] && return 0
-        local num title url
-        num=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-        title=$(echo "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-        url=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
-        if pr_is_claimed_for_rework "$repo" "$num"; then
-            return 0
-        fi
         local evt
-        evt=$(python3 -c "
-import json,sys
-print(json.dumps({
-    'type':'loop.dev_rework',
-    'payload':{
-        'slug': sys.argv[1],
-        'repo': sys.argv[2],
-        'pr_number': int(sys.argv[3]),
-        'pr_title': sys.argv[4],
-        'pr_url': sys.argv[5],
-        'rework_context': 'qa-fail',
-    }
-}))
-" "$slug" "$repo" "$num" "$title" "$url")
-        log "emit loop.dev_rework (qa-fail) PR#$num $title"
-        emit "$evt" "dev_rework_qa:${slug}:${num}"
-    }
-    while IFS= read -r row; do _emit_dev_rework_qa "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_label_for "$slug" "qa-fail" 2>/dev/null)")
+        evt=$(_emit_pr_event "$event_type" "$slug" "$repo" "$num" "$title" "$url" \
+              "$rework_context_key" "$rework_context_val")
+        log "emit $event_type PR#$num $title"
+        emit "$evt" "${event_type}:${slug}:${num}"
+    done < <(backend_list_prs_with_label "$repo" "$trigger_label")
+}
 
-    # --- PRs: ready-for-qa / needs-qa (new name); shared dedup key -----------
-    _emit_pr_qa() {
-        local _row="$1"
-        [ -z "$_row" ] && return 0
-        local num title url
-        num=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-        title=$(echo "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-        url=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
-        if pr_is_claimed_for_qa "$repo" "$num"; then
-            return 0
-        fi
-        local evt
-        evt=$(python3 -c "
-import json,sys
-print(json.dumps({
-    'type':'loop.pr_qa',
-    'payload':{
-        'slug': sys.argv[1],
-        'repo': sys.argv[2],
-        'pr_number': int(sys.argv[3]),
-        'pr_title': sys.argv[4],
-        'pr_url': sys.argv[5],
-    }
-}))
-" "$slug" "$repo" "$num" "$title" "$url")
-        log "emit loop.pr_qa PR#$num $title"
-        emit "$evt" "pr_qa:${slug}:${num}"
-    }
-    while IFS= read -r row; do _emit_pr_qa "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "qa" "pr")")
+scan_project() {
+    local slug="$1"
+    loop_load_project "$slug" || { log "skip: slug '$slug' unloadable"; return; }
+    loop_load_backend
+    local repo="$REPO"
 
-    # --- PRs: qa-pass / approved (new name); shared dedup key ---------------
-    _emit_pr_merge() {
-        local _row="$1"
-        [ -z "$_row" ] && return 0
-        local num title url
-        num=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-        title=$(echo "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-        url=$(echo "$_row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
-        local evt
-        evt=$(python3 -c "
-import json,sys
-print(json.dumps({
-    'type':'loop.pr_merge',
-    'payload':{
-        'slug': sys.argv[1],
-        'repo': sys.argv[2],
-        'pr_number': int(sys.argv[3]),
-        'pr_title': sys.argv[4],
-        'pr_url': sys.argv[5],
-    }
-}))
-" "$slug" "$repo" "$num" "$title" "$url")
-        log "emit loop.pr_merge PR#$num $title"
-        emit "$evt" "pr_merge:${slug}:${num}"
-    }
-    while IFS= read -r row; do _emit_pr_merge "$row"; done \
-        < <(backend_list_prs_with_label "$repo" "$(loop_stage_trigger "$slug" "merge" "pr")")
+    local wf_name
+    wf_name=$(loop_workflow_for_project "$slug")
+    log "scan: $slug ($repo) workflow=$wf_name"
+
+    # Issue stages — iterated from the project's active workflow.
+    while IFS= read -r trigger_label; do
+        [ -z "$trigger_label" ] && continue
+        local handler event_type
+        handler=$(loop_handler_for_label "$slug" "$trigger_label" 2>/dev/null || true)
+        [ -z "$handler" ] && continue
+        event_type=$(_handler_to_event_type "$handler")
+        _scan_issue_stage "$slug" "$repo" "$trigger_label" "$handler" "$event_type"
+    done < <(loop_polled_labels "$slug" issue)
+
+    # PR stages — iterated from the project's active workflow.
+    while IFS= read -r trigger_label; do
+        [ -z "$trigger_label" ] && continue
+        local handler event_type
+        handler=$(loop_handler_for_label "$slug" "$trigger_label" 2>/dev/null || true)
+        [ -z "$handler" ] && continue
+        event_type=$(_handler_to_event_type "$handler")
+        _scan_pr_stage "$slug" "$repo" "$trigger_label" "$handler" "$event_type"
+    done < <(loop_polled_labels "$slug" pr)
 }
 
 run_once() {
