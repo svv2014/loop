@@ -106,6 +106,27 @@ if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FIL
     exit 1
 fi
 
+# ── Release-PR: tag + publish GitHub release ─────────────────────────────────
+# If this was a release PR, tag the merged commit and publish a GitHub release.
+# Non-fatal: all git/gh calls are guarded with || true.
+if backend_pr_has_any_label "$REPO" "$PR_NUM" "release-pr"; then
+    git -C "$ROOT" pull origin "$DEFAULT_BRANCH" --ff-only 2>/dev/null || true
+    _release_version=$(cat "$ROOT/VERSION" 2>/dev/null || echo "")
+    if [ -n "$_release_version" ]; then
+        log "[$REPO] release-pr merged: tagging v${_release_version}"
+        git -C "$ROOT" tag "v${_release_version}" 2>/dev/null || true
+        git -C "$ROOT" push origin "v${_release_version}" 2>/dev/null || true
+        gh release create "v${_release_version}" \
+            --repo "$REPO" \
+            --notes-from-tag \
+            --title "v${_release_version}" \
+            2>/dev/null || true
+        log "[$REPO] GitHub release v${_release_version} created"
+    else
+        log "WARN: release-pr merged but VERSION file not found or empty — skipping tag"
+    fi
+fi
+
 # Find all linked issues via "Closes #N" in PR body (handles multiple closes).
 LINKED_ISSUES=$(backend_pr_view "$REPO" "$PR_NUM" --json body --jq .body 2>/dev/null \
     | python3 -c "import re,sys; print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))")
