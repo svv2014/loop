@@ -57,6 +57,8 @@ fi
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
+_po_trigger=$(loop_label_for "$SLUG" "po-review")
+
 # Per-issue lock — PO writes only to one issue's body and labels, so two PO
 # workers on different issues in the same project are safe in parallel. The
 # lock still serializes duplicate dispatches for the same issue.
@@ -72,7 +74,7 @@ retry_clear() { rm -f "$RETRY_FILE"; }
 retries=$(retry_count)
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
     log "issue #$ISSUE_NUM already failed PO ${retries}x — labeling needs-clarification"
-    backend_remove_label "$REPO" "$ISSUE_NUM" po-review
+    backend_remove_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
     backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
     exit 0
@@ -84,7 +86,6 @@ loop_notify "▶️ [$SLUG] #$ISSUE_NUM po-review starting"
 
 # Claim so scanner doesn't re-emit: strip workflow trigger label before adding in-progress
 # so the issue never carries both simultaneously.
-_po_trigger=$(loop_label_for "$SLUG" "po-review")
 backend_remove_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
 backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 
@@ -92,9 +93,9 @@ backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 _IN_PROGRESS_CLAIMED=1
 _po_label_cleanup() {
     [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
-    log "EXIT trap: clearing orphaned in-progress on #$ISSUE_NUM — restoring to po-review"
+    log "EXIT trap: clearing orphaned in-progress on #$ISSUE_NUM — restoring to ${_po_trigger}"
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
-    backend_add_label "$REPO" "$ISSUE_NUM" po-review 2>/dev/null || true
+    backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger" 2>/dev/null || true
 }
 trap '_po_label_cleanup' EXIT TERM INT
 
@@ -176,7 +177,7 @@ H - SUPERSEDE (requirements changed enough the MR is wrong — wrong approach or
 
 I - EXPAND-CROSS-PROJECT (MR implementation is correct but related work needed elsewhere):
    - Do not touch the current MR
-   - Create new child issues for the related work, each labeled po-review
+   - Create new child issues for the related work, each labeled ${_po_trigger}
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: MR looks correct. Filed related work: #X, #Y.'
    - Leave issue label unchanged
 
@@ -238,8 +239,8 @@ C - CANCEL / OUT OF SCOPE (idea contradicts project goals, irrelevant, or explic
 
 D - UPGRADE TO EPIC (idea is too big for one dev cycle, more than 1 day of work):
    - Convert this issue to a tracker/epic (add label "tracker")
-   - Create 2-4 child issues, each scoped to less than 1 day, each with "po-review" label
-   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label tracker --remove-label in-progress --remove-label po-review
+   - Create 2-4 child issues, each scoped to less than 1 day, each with "${_po_trigger}" label
+   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label tracker --remove-label in-progress --remove-label ${_po_trigger}
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: decomposed into child issues: #X, #Y, #Z.'
 
 E - NEEDS CLARIFICATION (request is ambiguous, one specific question can unblock it):
@@ -323,7 +324,7 @@ else
         loop_notify "❌ [$SLUG] #$ISSUE_NUM po-review failed: agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
-        backend_add_label "$REPO" "$ISSUE_NUM" po-review
+        backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
     fi
     exit 1
 fi
