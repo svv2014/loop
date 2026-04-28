@@ -568,7 +568,7 @@ reconcile_worktrees() {
 # Open issues that have no Loop pipeline label at all are invisible to the
 # scanner and all handlers. Detect them and send back to po-review so the PO
 # agent can triage (re-spec, close, cancel, or upgrade to epic).
-LOOP_PIPELINE_LABELS="po-review dev in-progress review-pending needs-review in-review needs-qa ready-for-qa in-rework needs-rework changes-requested needs-clarification blocked qa-fail qa-pass done tracker"
+LOOP_PIPELINE_LABELS="po-review plan dev in-progress review-pending needs-review in-review needs-qa ready-for-qa in-rework needs-rework changes-requested needs-clarification blocked qa-fail qa-pass done tracker"
 
 reconcile_lost_issues() {
     local repo="$1"
