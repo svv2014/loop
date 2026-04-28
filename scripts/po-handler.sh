@@ -80,8 +80,10 @@ log "po: slug=$SLUG repo=$REPO issue=#$ISSUE_NUM attempt=$((retries + 1))/$MAX_R
 bounty_report "po_start" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
 loop_notify "▶️ [$SLUG] #$ISSUE_NUM po-review starting"
 
-# Claim so scanner doesn't re-emit
-backend_remove_label "$REPO" "$ISSUE_NUM" po-review
+# Claim so scanner doesn't re-emit: strip workflow trigger label before adding in-progress
+# so the issue never carries both simultaneously.
+_po_trigger=$(loop_label_for "$SLUG" "po-review")
+backend_remove_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
 backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
