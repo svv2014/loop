@@ -40,6 +40,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-43] add `scripts/auto-release-pr.sh`: idempotent release PR + merge-handler tag/publish + semver labels in bootstrap (#120)
 
 - [LOOP-96] Wolf mascot — loup/loop dual identity branding (#125)
+- [LOOP-123] simplify README Install section to 3-command Claude+GitHub quickstart (#126)
 ### Added
 - `tests/po-body-preserve.bats`: 5 tests for the original-brief extraction logic
 - `scripts/auto-release-pr.sh`: new script that maintains one open `chore: release vX.Y.Z` PR; idempotent, computes next version from `semver:*` labels, promotes CHANGELOG, supports `--dry-run`
