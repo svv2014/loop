@@ -53,3 +53,9 @@ pr_stages:
     trigger_label: qa-pass
     handler: merge-handler
     on_done: done
+
+  - id: qa-rework
+    trigger_label: qa-fail
+    handler: dev-rework-handler
+    on_done: needs-review
+    on_failed_after_max: blocked
