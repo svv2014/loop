@@ -77,7 +77,10 @@ loop_notify "▶️ [$SLUG] #$ISSUE_NUM dev starting"
 # Fetch issue body
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
 
-# Claim the issue
+# Claim the issue: strip the workflow trigger label (plan/override) then mark in-progress
+# so the issue never carries both simultaneously.
+_dev_trigger=$(loop_label_for "$SLUG" "plan")
+backend_remove_label "$REPO" "$ISSUE_NUM" "$_dev_trigger"
 backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 
 # Isolated worktree per issue — prevents parallel dev-handlers from stomping on
