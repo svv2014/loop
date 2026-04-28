@@ -23,6 +23,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/cli-hint.sh
+source "$LOOP_ROOT/lib/cli-hint.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-review-handler.log"
 MAX_RETRIES=2
@@ -134,6 +136,7 @@ IMPORTANT: You MUST finish by applying either '${QA_LABEL}' or '${REWORK_LABEL}'
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 Report the decision you made and why, in 3 short sentences.
+$(loop_cli_hint)
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"

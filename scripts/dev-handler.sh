@@ -20,6 +20,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/cli-hint.sh
+source "$LOOP_ROOT/lib/cli-hint.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-handler.log"
 MAX_RETRIES=3
@@ -159,6 +161,7 @@ IMPORTANT: The issue MUST end this run with label '${REVIEW_LABEL}' (or 'needs-c
    gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels
 
 If blocked by missing context or an architectural decision, comment on the issue and add label 'needs-clarification' instead of opening a PR.
+$(loop_cli_hint)
 EOF
 )
 
