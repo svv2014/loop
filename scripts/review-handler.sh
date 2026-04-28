@@ -56,6 +56,18 @@ fi
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
+# Draft check — skip review without touching retry counter; re-enters when ready.
+_is_draft=$(gh pr view "$PR_NUM" --repo "$REPO" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
+if [ "$_is_draft" = "true" ]; then
+    log "PR #$PR_NUM is a draft — skipping review"
+    gh label create draft --color "#808080" --description "PR is in Draft state" --repo "$REPO" 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" needs-review
+    backend_remove_label "$REPO" "$PR_NUM" review-pending
+    backend_add_label    "$REPO" "$PR_NUM" draft
+    backend_comment_pr   "$REPO" "$PR_NUM" "PR is in Draft state. Mark ready for review when complete — it will re-enter the pipeline automatically."
+    exit 0
+fi
+
 # PR-scoped lock — allows multiple PRs in the same project to be reviewed in parallel.
 # (Review only reads from origin; no shared working tree state to protect.)
 source "$LOOP_ROOT/lib/lock.sh"
