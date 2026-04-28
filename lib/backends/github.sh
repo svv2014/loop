@@ -74,7 +74,7 @@ backend_pr_view() {
 # backend_open_pr <repo> <title> <body_file> <label>
 backend_open_pr() {
     local repo="$1" title="$2" body_file="$3" label="$4"
-    gh pr create --repo "$repo" --title "$title" --body-file "$body_file" --label "$label"
+    gh pr create --repo "$repo" --title "$title" --body-file "$body_file" --label "$label" --draft
 }
 
 # backend_close_issue <repo> <number>
