@@ -73,6 +73,23 @@ If your PR changes any of:
 …add a `BREAKING:` line to the `[Unreleased]` section of CHANGELOG.md
 explaining what changed and how operators migrate.
 
+**`BREAKING:` format** — the line must start with the literal token `BREAKING:`
+followed by a plain-English description and (where applicable) a migration
+recipe or link. `scripts/update.sh` scans CHANGELOG diffs for this exact token
+and halts the operator's upgrade until they acknowledge with `--yes`. Keep the
+description on a single line; multi-line continuations are not scanned.
+
+Example:
+
+```markdown
+### Changed
+- BREAKING: LOOP_AGENT_MODEL renamed to LOOP_AGENT. Update loop.env.
+```
+
+If your change affects loop-monitor as well, add a matching `BREAKING:` line to
+loop-monitor's `CHANGELOG.md` — `scripts/update.sh` checks both repos when
+`LOOP_MONITOR_ROOT` is configured in `loop.env`.
+
 ## Out of scope (not currently accepting)
 
 - GUI / web UI — Loop is a CLI tool. Use loop-monitor for visibility.
