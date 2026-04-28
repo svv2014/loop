@@ -710,6 +710,78 @@ PY
     done <<< "$candidates"
 }
 
+# --- Check 11: conflict-blocked PRs — close + re-queue source issue to dev -----
+# When the rework agent hits MAX_RETRIES because of a persistent rebase conflict,
+# the PR ends up with `blocked` + mergeStateStatus=CONFLICTING/DIRTY. The branch
+# is stale and the agent can't fix it — the cleanest recovery is to close the PR
+# and send the source issue back to `dev` so a fresh branch is cut from current
+# main (no conflicts). Runs every reconciler tick; safe to repeat (idempotent).
+reconcile_conflict_blocked_prs() {
+    local repo="$1"
+    log "[$repo] scanning for conflict-blocked PRs to auto-recycle"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    # Find blocked PRs that are CONFLICTING or DIRTY
+    local conflict_prs
+    conflict_prs=$(PJSON="$prs_json" python3 - <<'PY'
+import json, os
+prs = json.loads(os.environ['PJSON'])
+for pr in prs:
+    lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
+    if 'blocked' not in lbls:
+        continue
+    # backend_list_open_prs_raw does not include mergeStateStatus; we flag by body pattern
+    # The rework handler comments "Automated rework failed N times" before blocking.
+    # We identify these by the blocked+draft combo — all rework-conflict PRs stay Draft.
+    # Actual mergeability checked individually below via backend_pr_view.
+    print(pr['number'])
+PY
+)
+
+    [ -z "$conflict_prs" ] && { log "[$repo] no blocked PRs to check"; return 0; }
+
+    local pr_num pr_state issue_nums issue_num
+    for pr_num in $conflict_prs; do
+        # Check actual merge state
+        pr_state=$(backend_pr_view "$repo" "$pr_num" --json mergeable,mergeStateStatus,body 2>/dev/null || echo "{}")
+        local mergeable merge_status body
+        mergeable=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeable',''))" 2>/dev/null || echo "")
+        merge_status=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeStateStatus',''))" 2>/dev/null || echo "")
+        body=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('body',''))" 2>/dev/null || echo "")
+
+        case "$merge_status" in
+            CONFLICTING|DIRTY) : ;;
+            *) log "[$repo] PR #$pr_num blocked but merge_status=$merge_status — skip auto-recycle"; continue ;;
+        esac
+
+        # Parse linked issues from "Closes #N"
+        issue_nums=$(echo "$body" | python3 -c "
+import re, sys
+print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/dev/null || echo "")
+
+        log "[$repo] auto-recycle: PR #$pr_num conflict-blocked (merge_status=$merge_status) linked_issues='$issue_nums'"
+        $DRY_RUN && continue
+
+        backend_comment_pr "$repo" "$pr_num" \
+            "Reconciler: PR has a persistent rebase conflict that automated rework could not resolve. Closing and re-queuing the source issue(s) (\`$issue_nums\`) back to \`dev\` for a fresh branch from current main." \
+            2>/dev/null || true
+        backend_close_pr "$repo" "$pr_num" 2>/dev/null || true
+
+        for issue_num in $issue_nums; do
+            backend_remove_label "$repo" "$issue_num" blocked qa-pass changes-requested in-rework 2>/dev/null || true
+            backend_add_label "$repo" "$issue_num" dev 2>/dev/null || true
+            log "[$repo] re-queued issue #$issue_num → dev"
+        done
+
+        # If no Closes link found, just log — don't close with no re-queue plan
+        if [ -z "$issue_nums" ]; then
+            log "[$repo] WARN: PR #$pr_num has no Closes link — closed but no issue re-queued"
+        fi
+    done
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -728,6 +800,7 @@ run_project() {
     reconcile_needs_clarification "$REPO"
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
+    reconcile_conflict_blocked_prs "$REPO"
     reconcile_worktrees "$slug" "$REPO"
 }
 
