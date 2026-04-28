@@ -101,6 +101,29 @@ trap '_po_label_cleanup' EXIT TERM INT
 
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
 
+# Extract the true original body — strips any existing ## Original brief section
+# so re-triaging an already-expanded issue doesn't nest markers.
+_ORIGINAL_BRIEF=$(BODY="$ISSUE_BODY" python3 -c "
+import os, re
+body = os.environ.get('BODY', '').strip()
+# Strip existing marker and everything after it
+body = re.split(r'(?m)^---\s*\n##\s+Original brief', body)[0].rstrip()
+print(body)
+")
+
+if [ -n "$_ORIGINAL_BRIEF" ]; then
+    _ORIG_BRIEF_SECTION="After writing the full spec body above to /tmp/po-${ISSUE_NUM}-body.md, append the following to the file:
+
+---
+
+## Original brief (preserved by PO)
+
+${_ORIGINAL_BRIEF}
+"
+else
+    _ORIG_BRIEF_SECTION="(original body was empty — no brief preserved)"
+fi
+
 # Include recent comments so human steering + prior blocker context is visible to the PO agent.
 ISSUE_COMMENTS=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json comments 2>/dev/null \
     | python3 -c "
@@ -278,6 +301,9 @@ Any gotchas, relevant prior art, or constraints pulled from CLAUDE.md.
 
 ## Out of scope
 What this ticket explicitly does not cover. Prevents scope creep.
+
+ORIGINAL BRIEF PRESERVATION (for path A spec writes):
+${_ORIG_BRIEF_SECTION}
 
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
