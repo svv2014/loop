@@ -13,6 +13,21 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+### Fixed
+- Resolved unmerged git conflict markers in `scripts/review-handler.sh`,
+  `scripts/po-handler.sh`, and `scripts/dev-rework-handler.sh` left from
+  the LOOP-29 merge; all three now correctly use `backend_comment_*` (no
+  direct `gh` bypass) and post a short safe message (no internal prompt
+  content leaked into public comments).
+- Added `EXIT`/`TERM`/`INT` trap to `scripts/dev-handler.sh` and
+  `scripts/po-handler.sh`: if a handler is killed or `set -e` fires between
+  claiming `in-progress` and the explicit cleanup paths, the issue is
+  automatically restored to `dev` (or `po-review`) so the scanner re-queues
+  it on the next tick instead of leaving it permanently orphaned.
+- Added reconciler Check 10 (`reconcile_orphaned_in_progress`): every 15 min
+  the reconciler now resets any `in-progress` issue whose handler lock has no
+  live PID (covers SIGKILL and machine reboots that the EXIT trap cannot
+  catch).
 
 ### Changed
 - [LOOP-29] Fix backend abstraction bypass and loop_run_agent cwd handling (#52)
