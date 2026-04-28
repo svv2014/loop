@@ -103,7 +103,8 @@ except Exception:
     pass
 " || echo "")
 
-TASK_PROMPT=$(cat <<EOF
+_PROMPT_FILE=$(mktemp /tmp/po-prompt-XXXXXX.txt)
+cat > "$_PROMPT_FILE" <<EOF
 You are the Product Owner agent for ${NAME} (slug: ${SLUG}).
 Project root: ${ROOT}
 Repo: ${REPO}
@@ -125,40 +126,41 @@ Your job: triage this ticket and decide what to do with it. You have full author
 STEP 1 — Read the context:
 - cd ${ROOT} && read CLAUDE.md
 - Check if similar issues are already open or recently closed: gh issue list --repo ${REPO} --state all --limit 50
-- Read the rework history in comments (look for "🔁 Rework attempt" comments)
+- Read the rework history in comments (look for "Rework attempt" comments)
 
 STEP 2 — Choose a decision path:
 
-A) EXPAND & QUEUE (default — idea is clear, not duplicate, achievable in 1 day or less):
+A - EXPAND AND QUEUE (default: idea is clear, not duplicate, achievable in 1 day or less):
    - Rewrite the issue body with the spec below
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --body-file /tmp/po-${ISSUE_NUM}-body.md
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: spec written. Queuing for implementation.'
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label dev
 
-B) CLOSE AS DUPLICATE (issue already exists or was recently merged):
+B - CLOSE AS DUPLICATE (issue already exists or was recently merged):
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: closing as duplicate of #N.'
    - gh issue close ${ISSUE_NUM} --repo ${REPO} --reason "not planned"
 
-C) CANCEL / OUT OF SCOPE (idea contradicts project goals, irrelevant, or explicitly unwanted):
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: closing — out of scope. Reason: [explain].'
+C - CANCEL / OUT OF SCOPE (idea contradicts project goals, irrelevant, or explicitly unwanted):
+   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: closing out of scope. Reason: [explain].'
    - gh issue close ${ISSUE_NUM} --repo ${REPO} --reason "not planned"
 
-D) UPGRADE TO EPIC (idea is too big for one dev cycle — >1 day of work):
+D - UPGRADE TO EPIC (idea is too big for one dev cycle, more than 1 day of work):
    - Convert this issue to a tracker/epic (add label "tracker")
-   - Create 2–4 child issues, each scoped to <1 day, each with "po-review" label
+   - Create 2-4 child issues, each scoped to less than 1 day, each with "po-review" label
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label tracker --remove-label in-progress --remove-label po-review
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: decomposed into child issues: #X, #Y, #Z.'
 
-E) NEEDS CLARIFICATION (request is ambiguous — one specific question can unblock it):
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: needs clarification — [one specific question].'
+E - NEEDS CLARIFICATION (request is ambiguous, one specific question can unblock it):
+   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: needs clarification: [one specific question].'
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label needs-clarification
 
-F) REWORK RECOVERY (ticket has rework history — 1+ "🔁 Rework attempt" comments):
+F - REWORK RECOVERY (ticket has rework history, 1 or more failed rework attempts in comments):
    Read what failed. Then decide:
-   - If spec was too vague → rewrite spec more precisely and re-queue (path A with improved spec)
-   - If implementation approach was wrong → add a "## Implementation Hint" section to spec and re-queue
-   - If ticket is fundamentally broken → cancel (path C)
-   - If 3+ failed rework attempts → label blocked and notify: gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label blocked --remove-label in-progress
+   - If spec was too vague: rewrite spec more precisely and re-queue (path A with improved spec)
+   - If implementation approach was wrong: add an "Implementation Hint" section to spec and re-queue
+   - If ticket is fundamentally broken: cancel (path C)
+   - If 3 or more failed rework attempts: label blocked and notify:
+     gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label blocked --remove-label in-progress
      Comment: "PO: 3+ rework attempts failed. Flagging blocked for human review."
 
 SPEC FORMAT (for paths A and F-requeue):
@@ -167,7 +169,7 @@ SPEC FORMAT (for paths A and F-requeue):
 One or two sentences stating the goal and the motivation.
 
 ## Acceptance Criteria
-Testable checkboxes. A developer should be able to self-verify each. 3–6 bullets.
+Testable checkboxes. A developer should be able to self-verify each. 3-6 bullets.
 
 ## Files & Scope
 Which files/dirs the worker should touch; which it must NOT touch. Reference the actual repo layout.
@@ -175,7 +177,7 @@ Which files/dirs the worker should touch; which it must NOT touch. Reference the
 ## Dependencies
 Any issues or infra that must land first. If none, write "None".
 
-## Implementation Hint (optional — add when prior attempts failed)
+## Implementation Hint (optional, add when prior attempts failed)
 What approach to take or avoid, based on rework history.
 
 ## Notes
@@ -184,11 +186,12 @@ Any gotchas, relevant prior art, or constraints pulled from CLAUDE.md.
 ## Out of scope
 What this ticket explicitly does not cover. Prevents scope creep.
 
-IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker (closed).
+IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
 Report your decision (A/B/C/D/E/F) and why in 2 sentences.
 EOF
-)
+TASK_PROMPT=$(cat "$_PROMPT_FILE")
+rm -f "$_PROMPT_FILE"
 
 _post_failure_comment() {
     local target_type="$1" target_num="$2" label_ctx="$3" _attempt="$4" max="$5"
