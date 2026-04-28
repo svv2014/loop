@@ -117,6 +117,59 @@ except Exception:
     pass
 " || echo "")
 
+# Detect any open PR/MR that closes this issue and inject its context into the prompt.
+_INFLIGHT_PR_NUM=$(backend_find_pr_for_issue "$REPO" "$ISSUE_NUM" 2>/dev/null || true)
+_INFLIGHT_PR_BLOCK=""
+if [ -n "$_INFLIGHT_PR_NUM" ]; then
+    log "found in-flight PR #$_INFLIGHT_PR_NUM for issue #$ISSUE_NUM — fetching context"
+    _INFLIGHT_PR_BLOCK=$(backend_pr_view "$REPO" "$_INFLIGHT_PR_NUM" \
+        --json number,title,headRefName,state,isDraft,reviewDecision,additions,deletions,changedFiles,reviews \
+        2>/dev/null | python3 -c "
+import json, sys
+try:
+    pr = json.load(sys.stdin)
+    num    = pr.get('number', '?')
+    title  = pr.get('title', '')
+    branch = pr.get('headRefName', '')
+    state  = pr.get('state', '')
+    draft  = pr.get('isDraft', False)
+    rd     = pr.get('reviewDecision', '') or ''
+    adds   = pr.get('additions', 0)
+    dels   = pr.get('deletions', 0)
+    files  = pr.get('changedFiles', 0)
+    reviews = pr.get('reviews', []) or []
+    last_reviews = reviews[-5:] if len(reviews) > 5 else reviews
+    state_str = state
+    if draft:
+        state_str = 'DRAFT'
+    if rd:
+        state_str += f' / review={rd}'
+    lines = [
+        'EXISTING IMPLEMENTATION IN FLIGHT',
+        f'PR: #{num} — {title}',
+        f'Branch: {branch}',
+        f'State: {state_str}',
+        f'Diff stat: {files} files changed, +{adds} -{dels}',
+    ]
+    if last_reviews:
+        lines.append('Last review comments:')
+        for r in last_reviews:
+            author = (r.get('author') or {}).get('login', '?')
+            body = (r.get('body') or '').strip()
+            submitted = r.get('submittedAt', '')
+            verdict = r.get('state', '')
+            if body:
+                lines.append(f'  [{submitted}] {author} ({verdict}): {body}')
+    print('\n'.join(lines))
+except Exception as e:
+    sys.stderr.write(str(e) + '\n')
+" 2>/dev/null || echo "")
+    if [ -z "$_INFLIGHT_PR_BLOCK" ]; then
+        _INFLIGHT_PR_BLOCK="EXISTING IMPLEMENTATION IN FLIGHT
+PR: #${_INFLIGHT_PR_NUM} (context unavailable — check manually)"
+    fi
+fi
+
 _PROMPT_FILE=$(mktemp /tmp/po-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
 You are the Product Owner agent for ${NAME} (slug: ${SLUG}).
@@ -135,6 +188,8 @@ ${ISSUE_BODY}
 Recent comments (most recent last) — may include human steering, blocker context from prior dev attempts, or supplementary scope:
 ${ISSUE_COMMENTS}
 
+${_INFLIGHT_PR_BLOCK}
+
 Your job: triage this ticket and decide what to do with it. You have full authority over the ticket lifecycle.
 
 STEP 1 — Read the context:
@@ -144,7 +199,7 @@ STEP 1 — Read the context:
 
 STEP 2 — Choose a decision path:
 
-A - EXPAND AND QUEUE (default: idea is clear, not duplicate, achievable in 1 day or less):
+A - EXPAND AND QUEUE (default: idea is clear, not duplicate, achievable in 1 day or less, NO in-flight PR):
    - Rewrite the issue body with the spec below
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --body-file /tmp/po-${ISSUE_NUM}-body.md
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: spec written. Queuing for implementation.'
@@ -177,7 +232,38 @@ F - REWORK RECOVERY (ticket has rework history, 1 or more failed rework attempts
      gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label blocked --remove-label in-progress
      Comment: "PO: 3+ rework attempts failed. Flagging blocked for human review."
 
-SPEC FORMAT (for paths A and F-requeue):
+--- PATHS FOR WHEN AN IN-FLIGHT PR EXISTS (use these when "EXISTING IMPLEMENTATION IN FLIGHT" appears above) ---
+
+G - REFINE-WITH-ACTIVE-PR (spec adjustment needed but the existing PR can absorb it):
+   The implementation is in progress and the refinement is small enough to be handled
+   via a rework cycle rather than starting over.
+   - Post a comment on the PR with the refinement details:
+     gh pr comment ${_INFLIGHT_PR_NUM:-<PR_NUM>} --repo ${REPO} --body 'PO: refinement requested: [details].'
+   - Apply needs-rework label to the PR so dev-rework-handler picks it up:
+     gh pr edit ${_INFLIGHT_PR_NUM:-<PR_NUM>} --repo ${REPO} --add-label needs-rework
+   - Leave the issue at its current label (dev or in-progress); do NOT re-add dev if already there.
+   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress
+
+H - SUPERSEDE (requirements changed enough that the existing PR is wrong; start fresh):
+   - Close the existing PR with an explanation:
+     gh pr close ${_INFLIGHT_PR_NUM:-<PR_NUM>} --repo ${REPO} --comment 'PO: superseded by revised spec. Starting fresh.'
+   - Rewrite the issue spec (use SPEC FORMAT below)
+   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --body-file /tmp/po-${ISSUE_NUM}-body.md
+   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label dev
+
+I - EXPAND-CROSS-PROJECT (existing PR is correct but related work is needed in sibling repos):
+   - File new issues in the related repos with 'po-review' label, one issue per repo
+   - Post a comment on this issue summarising what was filed:
+     gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: filed related issues: [list].'
+   - Leave the existing PR alone; remove in-progress from this issue and restore it to dev:
+     gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label dev
+
+J - ACCEPT-AS-IS (comment was informational; no spec or PR change needed):
+   - Post a short acknowledgment:
+     gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: noted, no spec change needed.'
+   - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label dev
+
+SPEC FORMAT (for paths A, F-requeue, and H):
 
 ## Objective
 One or two sentences stating the goal and the motivation.
@@ -202,7 +288,7 @@ What this ticket explicitly does not cover. Prevents scope creep.
 
 IMPORTANT: The issue MUST end this run with exactly ONE of: dev / needs-clarification / blocked / tracker / closed.
 Verify: gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels,state
-Report your decision (A/B/C/D/E/F) and why in 2 sentences.
+Report your decision (A/B/C/D/E/F/G/H/I/J) and why in 2 sentences.
 $(loop_cli_hint)
 EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")

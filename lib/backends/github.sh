@@ -156,3 +156,23 @@ backend_list_open_issues_raw() {
         --json number,title,labels,body,updatedAt \
         2>/dev/null || echo "[]"
 }
+
+# backend_find_pr_for_issue <repo> <issue_num>
+# Returns the number of the open PR that references Closes #<issue_num>, or
+# empty string if none exists. Closed/merged PRs are ignored.
+backend_find_pr_for_issue() {
+    local repo="$1" issue_num="$2"
+    gh pr list --repo "$repo" --state open --limit 100 \
+        --json number,body \
+        2>/dev/null \
+    | python3 -c "
+import json, sys, re
+issue = sys.argv[1]
+prs = json.load(sys.stdin)
+pattern = re.compile(r'(?i)(closes|fixes|resolves)\s+#' + re.escape(issue) + r'\b')
+for pr in prs:
+    if pattern.search(pr.get('body', '') or ''):
+        print(pr['number'])
+        break
+" "$issue_num" 2>/dev/null || true
+}

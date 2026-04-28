@@ -321,3 +321,23 @@ backend_list_open_issues_raw() {
         updatedAt: .updated_at
       }]' 2>/dev/null || echo "[]"
 }
+
+# backend_find_pr_for_issue <repo> <issue_num>
+# Returns the MR iid that references Closes #<issue_num> in its description,
+# or empty string if none exists. Only open MRs are considered.
+backend_find_pr_for_issue() {
+    local repo="$1" issue_num="$2"
+    _gl_parse_repo "$repo"
+    glab mr list --repo "$_GL_REPO" --state opened --limit 100 \
+        --output json 2>/dev/null \
+    | python3 -c "
+import json, sys, re
+issue = sys.argv[1]
+mrs = json.load(sys.stdin)
+pattern = re.compile(r'(?i)(closes|fixes|resolves)\s+#' + re.escape(issue) + r'\b')
+for mr in mrs:
+    if pattern.search(mr.get('description', '') or ''):
+        print(mr['iid'])
+        break
+" "$issue_num" 2>/dev/null || true
+}

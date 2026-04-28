@@ -70,6 +70,10 @@
 #   backend_issue_unmet_deps <repo> <number>
 #     Print each unmet dependency (#NNN) declared in the issue's "## Dependencies"
 #     section, one per line. Empty output = all deps met or none declared.
+#
+#   backend_find_pr_for_issue <repo> <issue_num>
+#     Returns the number of the open PR/MR that closes <issue_num>, or empty
+#     string if none exists. Closed/merged PRs are ignored.
 
 set -euo pipefail
 
@@ -100,3 +104,4 @@ loop_load_backend
 
 # (declare this alongside the other backend_* interface functions)
 backend_issue_unmet_deps() { echo "backend_issue_unmet_deps not implemented" >&2; return 1; }
+backend_find_pr_for_issue() { echo "backend_find_pr_for_issue not implemented" >&2; return 1; }
