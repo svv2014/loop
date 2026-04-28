@@ -8,17 +8,19 @@ labels on success; the scanner uses labels to decide what's actionable.
 ```
 (new)
   │
-  │  human opens issue with label: plan (deprecated alias: dev)
+  │  human opens issue with label: po-review (rough idea → PO expands spec)
+  │                             or dev (pre-written spec → straight to implementation)
   ▼
-plan (dev) ──────────► build (in-progress)
-                           │
-                           │ dev-handler runs agent, opens PR
-                           ▼
-                      needs-review (review-pending)  (on issue; also set on PR)
-                           │
-                           │ merge-handler closes issue when PR merges
-                           ▼
-                         done  (issue closed)
+po-review ──► po-handler expands spec ──► dev
+dev ──────────────────────────────────────► build (in-progress)
+                                               │
+                                               │ dev-handler runs agent, opens PR
+                                               ▼
+                                          needs-review (review-pending)  (on issue; also set on PR)
+                                               │
+                                               │ merge-handler closes issue when PR merges
+                                               ▼
+                                             done  (issue closed)
 
  Failure paths:
     build ──► (retries < 3) ──► cleared, scanner re-emits next tick
@@ -56,7 +58,8 @@ Both the new canonical name and its deprecated alias trigger the same event.
 
 | Source | Emits event type | Claimed if any of these labels present |
 |---|---|---|
-| Issue has `plan` or `dev` | `loop.dev_issue` | build, in-progress, blocked, needs-review, review-pending, needs-qa, ready-for-qa, approved, qa-pass, done |
+| Issue has `po-review` | `loop.po_review` | build, in-progress, blocked, needs-review, review-pending, needs-qa, ready-for-qa, approved, qa-pass, done |
+| Issue has `dev` | `loop.dev_issue` | build, in-progress, blocked, needs-review, review-pending, needs-qa, ready-for-qa, approved, qa-pass, done |
 | PR has `needs-review` or `review-pending` | `loop.pr_review` | in-review, needs-qa, ready-for-qa, approved, qa-pass, done |
 | PR has `needs-qa` or `ready-for-qa` | `loop.pr_qa` | approved, qa-pass, done |
 | PR has `approved` or `qa-pass` | `loop.pr_merge` | (none — idempotent until merged) |

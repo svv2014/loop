@@ -37,10 +37,10 @@ Register your repo with the pipeline.
 
 ## Step 4 — Label an issue
 
-Apply `plan` to any open issue to hand it off to the agent.
+Apply `po-review` to hand off a rough idea (the PO agent expands the spec, then implements). Use `dev` to skip PO and go straight to implementation.
 
 ```bash
-gh issue edit N --repo owner/repo --add-label plan
+gh issue edit N --repo owner/repo --add-label po-review
 ```
 
 ## Step 5 — Watch it ship

@@ -63,7 +63,11 @@ LOOP_AGENT_MODEL=sonnet
 Then label an issue to start the pipeline:
 
 ```bash
-gh issue edit <number> --repo owner/repo --add-label plan
+# Rough idea — PO agent expands the spec, then implements:
+gh issue edit <number> --repo owner/repo --add-label po-review
+
+# Already have a full spec — skip PO and go straight to implementation:
+gh issue edit <number> --repo owner/repo --add-label dev
 ```
 
 The scanner picks it up within 5 minutes and opens a PR automatically.
@@ -72,7 +76,7 @@ The scanner picks it up within 5 minutes and opens a PR automatically.
 
 ## How a feature flows through Loop
 
-1. **You** open an issue, write what you want, label it `plan`.
+1. **You** open an issue, write what you want, label it `po-review` (rough idea — PO agent expands the spec first) or `dev` (pre-written spec — skip straight to implementation).
 2. **Scanner** notices the label within 5 minutes, fires the dev handler.
 3. **Dev handler** invokes your AI agent in an isolated git worktree.
    Agent reads the issue, writes code, opens a PR, labels it
@@ -97,7 +101,7 @@ Loop ships three starter workflows in `config/workflows/`:
 
 | Workflow | When to use |
 |---|---|
-| `default.yaml` | New repos. Clean canonical labels: `plan` / `needs-review` / `needs-qa` / `qa-pass`. Five-stage pipeline with PO expansion + rework loop. |
+| `default.yaml` | New repos. Clean canonical labels: `po-review` / `dev` / `needs-review` / `needs-qa` / `qa-pass`. Five-stage pipeline with PO expansion + rework loop. |
 | `minimal.yaml` | Solo prototypes. Two stages: `plan → merge`. No review, no QA. |
 | `docs-only.yaml` | Documentation and content PRs. Three stages: `plan → review → merge`. No QA gate. |
 
