@@ -99,14 +99,53 @@ _block_linked_issue() {
         2>/dev/null || true
 }
 
+SENIOR_ESCALATION_MARKER="Escalating to senior-dev for one final attempt"
+
+_is_senior_escalated() {
+    [ -z "$LINKED_ISSUE" ] && return 1
+    local count
+    count=$(gh issue view "$LINKED_ISSUE" --repo "$REPO" --json comments \
+        --jq "[.comments[] | select(.body | contains(\"${SENIOR_ESCALATION_MARKER}\"))] | length" \
+        2>/dev/null || echo "0")
+    [ "${count:-0}" -gt 0 ]
+}
+
+_escalate_to_senior() {
+    [ -z "$LINKED_ISSUE" ] && return 0
+    backend_comment_issue "$REPO" "$LINKED_ISSUE" \
+        "Dev rework exhausted ${MAX_RETRIES} attempts. Escalating to senior-dev for one final attempt." \
+        2>/dev/null || true
+    backend_add_label "$REPO" "$LINKED_ISSUE" senior-dev 2>/dev/null || true
+}
+
+_block_linked_issue_senior_failed() {
+    [ -z "$LINKED_ISSUE" ] && return 0
+    backend_add_label "$REPO" "$LINKED_ISSUE" blocked 2>/dev/null || true
+    backend_comment_issue "$REPO" "$LINKED_ISSUE" \
+        "Senior-dev attempt also failed. Marking blocked for human review." \
+        2>/dev/null || true
+}
+
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
-    log "PR #$PR_NUM rework failed ${retries}x — labeling blocked"
-    backend_remove_label "$REPO" "$PR_NUM" "$SOURCE_LABEL"
-    backend_remove_label "$REPO" "$PR_NUM" in-rework
-    backend_add_label "$REPO" "$PR_NUM" blocked
-    backend_comment_pr "$REPO" "$PR_NUM" \
-        "Automated rework failed ${MAX_RETRIES} times. Needs human eyes."
-    _block_linked_issue
+    log "PR #$PR_NUM rework failed ${retries}x — checking escalation path"
+    backend_remove_label "$REPO" "$PR_NUM" "$SOURCE_LABEL" 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" in-rework 2>/dev/null || true
+    if [ -n "$LINKED_ISSUE" ] && ! _is_senior_escalated; then
+        log "escalating issue #$LINKED_ISSUE to senior-dev"
+        _escalate_to_senior
+        backend_comment_pr "$REPO" "$PR_NUM" \
+            "Dev rework exhausted ${MAX_RETRIES} attempts. Escalating to senior-dev for one final attempt." \
+            2>/dev/null || true
+        loop_notify "⬆️ [$SLUG] PR#$PR_NUM dev-rework exhausted — escalated issue #$LINKED_ISSUE to senior-dev"
+    else
+        log "senior-dev escalation already attempted — labeling blocked"
+        backend_add_label "$REPO" "$PR_NUM" blocked
+        backend_comment_pr "$REPO" "$PR_NUM" \
+            "Senior-dev attempt also failed. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript." \
+            2>/dev/null || true
+        _block_linked_issue_senior_failed
+        loop_notify "❌ [$SLUG] PR#$PR_NUM dev-rework blocked after senior-dev escalation also failed"
+    fi
     exit 0
 fi
 
@@ -266,13 +305,23 @@ else
     bounty_report "rework_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" pr_num="$PR_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$PR_NUM" in-rework
-        backend_add_label "$REPO" "$PR_NUM" blocked
-        # Post only a short marker to the PR — never the agent log/prompt, which
-        # contains internal pipeline instructions that should not be public.
-        backend_comment_pr "$REPO" "$PR_NUM" \
-            "Automated rework failed ${MAX_RETRIES} times. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript." \
-            2>/dev/null || true
-        loop_notify "❌ [$SLUG] PR#$PR_NUM dev-rework failed: agent failed after $MAX_RETRIES attempts"
+        if [ -n "$LINKED_ISSUE" ] && ! _is_senior_escalated; then
+            log "escalating issue #$LINKED_ISSUE to senior-dev after $MAX_RETRIES failed rework attempts"
+            _escalate_to_senior
+            # Post only a short marker to the PR — never the agent log/prompt, which
+            # contains internal pipeline instructions that should not be public.
+            backend_comment_pr "$REPO" "$PR_NUM" \
+                "Dev rework exhausted ${MAX_RETRIES} attempts. Escalating to senior-dev for one final attempt." \
+                2>/dev/null || true
+            loop_notify "⬆️ [$SLUG] PR#$PR_NUM dev-rework exhausted — escalated issue #$LINKED_ISSUE to senior-dev"
+        else
+            backend_add_label "$REPO" "$PR_NUM" blocked
+            backend_comment_pr "$REPO" "$PR_NUM" \
+                "Senior-dev attempt also failed. Marking blocked for human review. Operator: see ${LOG_FILE} for the agent transcript." \
+                2>/dev/null || true
+            _block_linked_issue_senior_failed
+            loop_notify "❌ [$SLUG] PR#$PR_NUM dev-rework blocked after senior-dev escalation also failed"
+        fi
     else
         backend_remove_label "$REPO" "$PR_NUM" in-rework
         backend_add_label "$REPO" "$PR_NUM" "$SOURCE_LABEL"
