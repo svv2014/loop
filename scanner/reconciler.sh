@@ -999,6 +999,75 @@ PY
     done <<< "$candidates"
 }
 
+# --- Check 14: DIRTY rework PRs — skip rework, recycle immediately with Opus --
+# A PR in `changes-requested` (rework queue) that is already CONFLICTING/DIRTY
+# will make the rework agent fail immediately — it can't fix conflicts. Instead of
+# waiting for 2 rework failures + a block, detect this proactively and recycle now.
+reconcile_dirty_rework_prs() {
+    local repo="$1"
+    log "[$repo] scanning changes-requested PRs for DIRTY/CONFLICTING state"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    local rework_prs
+    rework_prs=$(PJSON="$prs_json" python3 - <<'PY'
+import json, os, datetime as dt
+prs = json.loads(os.environ['PJSON'])
+now = dt.datetime.now(dt.timezone.utc)
+for pr in prs:
+    lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
+    if 'changes-requested' not in lbls and 'needs-rework' not in lbls:
+        continue
+    if 'blocked' in lbls:
+        continue  # already handled by Check 11/13
+    # Grace: skip if updated <15min ago (rework handler mid-flight)
+    up = dt.datetime.fromisoformat(pr.get('updatedAt','').replace('Z','+00:00')) if pr.get('updatedAt') else now
+    if (now - up).total_seconds() < 900:
+        continue
+    print(pr['number'])
+PY
+)
+
+    [ -z "$rework_prs" ] && { log "[$repo] no rework PRs to check"; return 0; }
+
+    local pr_num pr_state merge_status body issue_nums issue_num
+    for pr_num in $rework_prs; do
+        pr_state=$(backend_pr_view "$repo" "$pr_num" --json mergeStateStatus,body 2>/dev/null || echo "{}")
+        merge_status=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeStateStatus',''))" 2>/dev/null || echo "")
+        case "$merge_status" in
+            CONFLICTING|DIRTY) : ;;
+            *) continue ;;
+        esac
+        body=$(echo "$pr_state" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('body',''))" 2>/dev/null || echo "")
+        issue_nums=$(echo "$body" | python3 -c "
+import re,sys; print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/dev/null || echo "")
+
+        log "[$repo] DIRTY rework PR #$pr_num (merge_status=$merge_status) — recycling with Opus linked=$issue_nums"
+        $DRY_RUN && continue
+
+        backend_comment_pr "$repo" "$pr_num" \
+            "Reconciler: PR is CONFLICTING/DIRTY — rework would fail immediately. Closing and re-queuing issue(s) \`$issue_nums\` for a fresh Opus branch from current main." \
+            2>/dev/null || true
+        backend_close_pr "$repo" "$pr_num" 2>/dev/null || true
+
+        for issue_num in $issue_nums; do
+            backend_remove_label "$repo" "$issue_num" blocked changes-requested in-rework needs-rework 2>/dev/null || true
+            backend_add_label "$repo" "$issue_num" dev 2>/dev/null || true
+            local iss_event
+            iss_event=$(python3 -c "import json; print(json.dumps({'type':'loop.dev_issue','payload':{'slug':'${slug}','repo':'${repo}','issue_number':'${issue_num}','issue_title':''}}))" 2>/dev/null || true)
+            if [ -n "$iss_event" ]; then
+                LOOP_AGENT_MODEL=claude-opus-4-7 LOOP_EVENT_JSON="$iss_event" \
+                    nohup timeout "${HANDLER_TIMEOUT_SECONDS:-3600}" \
+                    "$LOOP_ROOT/scripts/dev-handler.sh" \
+                    >> "$LOOP_LOG_DIR/loop-dev-handler.log" 2>&1 &
+                log "[$repo] Opus dev-handler dispatched for issue #$issue_num from dirty-rework recycle (PID $!)"
+            fi
+        done
+        [ -z "$issue_nums" ] && log "[$repo] WARN: DIRTY rework PR #$pr_num has no Closes link"
+    done
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -1017,6 +1086,7 @@ run_project() {
     reconcile_needs_clarification "$REPO"
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
+    reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
     reconcile_stale_blocked_issues "$REPO"
     reconcile_qa_failures "$REPO"
@@ -1024,6 +1094,23 @@ run_project() {
 }
 
 acquire_lock
+
+# Auto-pull: always run on the latest loop code before doing any work.
+# Uses --ff-only so it never merges or creates a dirty worktree — if the
+# pull can't fast-forward (e.g. local diverged), skip silently and continue
+# on the current checkout rather than aborting the reconcile run.
+_autopull_loop() {
+    local branch
+    branch=$(git -C "$LOOP_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+    [ "$branch" = "main" ] || return 0
+    local before after
+    before=$(git -C "$LOOP_ROOT" rev-parse HEAD 2>/dev/null || echo "")
+    git -C "$LOOP_ROOT" pull --ff-only origin main --quiet 2>/dev/null || return 0
+    after=$(git -C "$LOOP_ROOT" rev-parse HEAD 2>/dev/null || echo "")
+    [ "$before" != "$after" ] && log "auto-pull: updated $before → $after"
+}
+$DRY_RUN || _autopull_loop
+
 log "=== reconciler start (dry_run=$DRY_RUN only_slug=${ONLY_SLUG:-<all>}) ==="
 
 if [ -n "$ONLY_SLUG" ]; then
