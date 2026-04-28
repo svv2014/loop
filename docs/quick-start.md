@@ -1,15 +1,16 @@
-# Quick start — Loop in 5 minutes
+# Quick start — Loop
 
-This walkthrough takes a fresh repo from zero to a working pipeline.
+Get from zero to your first merged PR.
 
 ## Prerequisites
 
-- macOS or Linux
 - `gh` CLI authenticated (`gh auth status`)
 - `python3` with `pyyaml` (`pip3 install pyyaml`)
-- An AI agent CLI: `claude`, `codex`, `gemini`, or `aider`
+- `claude` CLI installed and authenticated
 
-## 1. Install Loop
+## Step 1 — Clone and bootstrap
+
+Clone Loop and run the one-time setup.
 
 ```bash
 git clone https://github.com/svv2014/loop.git
@@ -17,82 +18,46 @@ cd loop
 ./install.sh --bootstrap
 ```
 
-The bootstrap:
-- Verifies tools
-- Copies `loop.env.example` → `loop.env`
-- Copies `config/projects.example.yaml` → `config/projects.yaml`
-- Registers the scanner + reconciler with launchd (macOS) or cron
-  (Linux)
+## Step 2 — Configure loop.env for Claude
 
-Verify the scanner is running:
+Open `loop.env` (created by bootstrap) and set:
 
 ```bash
-launchctl list | grep loop          # macOS
-crontab -l | grep loop              # Linux
-tail -f ~/.loop/logs/loop-scanner.log
+LOOP_AGENT=claude
+LOOP_AGENT_MODEL=sonnet
 ```
 
-You should see scanner ticks every 5 minutes — they'll be empty (no
-projects yet) until step 3.
+## Step 3 — Add a GitHub project
 
-## 2. Configure your AI agent
-
-Edit `loop.env`:
-
-```bash
-LOOP_AGENT=claude              # or codex, gemini, aider
-LOOP_AGENT_MODEL=sonnet        # optional
-```
-
-Test the agent works:
-
-```bash
-echo "say hi" | claude          # for claude users
-```
-
-## 3. Add your first project
+Register your repo with the pipeline.
 
 ```bash
 ./install.sh /path/to/your-project
 ```
 
-The installer prompts for:
-- GitHub repo (`owner/repo`)
-- Project slug (short prefix, e.g. `myapp`)
-- Default branch (`main` / `master`)
-- Workflow choice (`default` recommended for new repos)
-- Validation commands (your `npm test`, `make`, etc.)
+## Step 4 — Label an issue
 
-It then:
-- Adds the project to `config/projects.yaml`
-- Creates Loop labels in the GitHub repo (`plan`, `needs-review`,
-  `needs-qa`, etc.)
-- Enables auto-merge + delete-branch-on-merge
-- Restarts the scanner
-
-## 4. Try a feature
-
-Open an issue in your project:
+Apply `plan` to any open issue to hand it off to the agent.
 
 ```bash
-gh issue create --repo owner/your-project \
-  --title "Add a hello world endpoint" \
-  --body "Add GET /hello that returns 'world' as text/plain." \
-  --label plan
+gh issue edit N --repo owner/repo --add-label plan
 ```
 
-Within ~5 minutes the scanner picks it up and the dev handler starts.
-Watch:
+## Step 5 — Watch it ship
+
+Tail the dev handler log to see the agent branch, commit, and open a PR.
 
 ```bash
 tail -f ~/.loop/logs/loop-dev-handler.log
 ```
 
-You'll see the agent log its work, commit, and open a PR. The PR
-labels go through `needs-review` → `needs-qa` → `qa-pass` → merged.
-Total elapsed for a small feature: 10–20 minutes.
+Labels progress automatically: `needs-review` → `needs-qa` → merged.
 
-## 5. Optional — install loop-monitor for visibility
+---
+
+## Optional: loop-monitor dashboard
+
+Install the companion dashboard for live agent status and bounty scores.
 
 ```bash
 git clone https://github.com/svv2014/loop-monitor.git
@@ -101,136 +66,52 @@ pip install -r requirements.txt
 ./run.sh
 ```
 
-Open http://127.0.0.1:18792. You'll see live agent status, role-level
-bounty points, and (after the next merge) an AI judge verdict on the PR.
+Open http://127.0.0.1:18792. Add `LOOP_BOUNTY_URL=http://127.0.0.1:18792` to `loop.env` to enable event reporting.
 
-In `loop.env`, set:
+## Other agents & backends
 
-```bash
-LOOP_BOUNTY_URL=http://127.0.0.1:18792
-```
+Change `LOOP_AGENT` in `loop.env` to switch agents:
 
-…to enable the bounty event reporting from Loop core to the monitor.
+| Agent | `LOOP_AGENT` value |
+|---|---|
+| Anthropic Claude | `claude` |
+| OpenAI Codex | `codex` |
+| Google Gemini | `gemini` |
+| Aider | `aider` |
 
-## What's next
-
-- **Choose or author a workflow** — `config/workflows/README.md`
-  documents the schema. Default workflow has 5 stages; you can author
-  one with 3 (skip review for solo projects) or 7 (add a security
-  audit stage).
-- **Add more projects** — re-run `./install.sh /path/to/another-project`.
-  One scanner manages all of them.
-- **Tune `pipeline_slots`** in `config/projects.yaml` to cap how many
-  PRs are in flight per project.
-- **Review the security model** — `docs/security-model.md` covers the
-  collaborator-only label gate and the `safe-to-test` flow for fork PRs.
-
-## Common operations
-
-```bash
-# Check status
-launchctl list | grep loop
-tail -50 ~/.loop/logs/loop-scanner.log
-
-# Pause the scanner (keeps reconciler running)
-launchctl unload ~/Library/LaunchAgents/com.user.loop-scanner.plist
-
-# Resume
-launchctl load ~/Library/LaunchAgents/com.user.loop-scanner.plist
-
-# One-shot scan
-./scanner/scanner.sh --once --dry-run    # preview without dispatching
-
-# Force a reconciler sweep
-./scanner/reconciler.sh --slug myapp
-
-# Show version
-./install.sh --version
-```
+For GitLab or Jira+GitLab backends, set `LOOP_BACKEND=gitlab` or `LOOP_BACKEND=jira-gitlab` in `loop.env`. See `lib/backends/` for adapter details.
 
 ## Troubleshooting
 
-**Scanner is running but nothing is happening:**
-- Confirm your project's labels match the workflow's expected names
-  (`config/workflows/<your-workflow>.yaml`). Maybe you need a `labels:`
-  override in `projects.yaml`.
+**Nothing happens after labelling:**
+- Confirm labels match your workflow: `config/workflows/<workflow>.yaml`
 - Check `~/.loop/logs/loop-scanner.log` for `scan: <slug>` lines.
 
-**Dev handler runs but PR has no labels:**
-- Check `~/.loop/logs/loop-dev-handler.log` for the agent output.
-- The handler's belt-and-braces should add `needs-review` if the agent
-  forgot. If not, re-run with `gh pr edit N --add-label needs-review`.
+**PR opened but no labels:**
+- Check `~/.loop/logs/loop-dev-handler.log` for agent output.
+- Fix manually: `gh pr edit N --add-label needs-review`
 
-**QA workflow fails on every PR:**
-- Run your `validation_cmd` manually from the project root. If it
-  fails, fix the project; if it passes, check the QA workflow logs.
+**QA fails every PR:** run your `validation_cmd` from the project root manually.
 
 **More help:** open an issue with the `bug` label.
 
 ## Updating Loop
 
-### What changes between versions
-
-Review [CHANGELOG.md](../CHANGELOG.md) before upgrading. Pre-1.0, MINOR
-version bumps (`0.1 → 0.2`) may change `loop.env` keys or the
-`config/projects.yaml` schema; the changelog always includes a migration
-recipe. PATCH bumps are safe to apply without reading the changelog.
-
-### How to update (manual, until `update.sh` ships — see [#17](https://github.com/svv2014/loop/issues/17))
+Review [CHANGELOG.md](../CHANGELOG.md) before upgrading — MINOR version bumps may change `loop.env` keys or the `config/projects.yaml` schema.
 
 ```bash
-# 1. Pull Loop core
 cd ~/projects/loop
 git pull --ff-only
-
-# 2. Pull loop-monitor (if installed)
-cd ~/projects/loop-monitor
-git pull --ff-only
-
-# 3. Restart services — macOS launchd
+# Restart — macOS launchd
 launchctl kickstart -k gui/$(id -u)/com.user.loop-scanner
 launchctl kickstart -k gui/$(id -u)/com.user.loop-reconciler
 ```
 
-On Linux, restart however your cron wrapper or process supervisor is
-configured (e.g. `systemctl --user restart loop-scanner`).
+On Linux, restart your cron wrapper or process supervisor (e.g. `systemctl --user restart loop-scanner`).
 
-### How to roll back
+To roll back: `git checkout <previous-tag>` then restart services.
 
-```bash
-cd ~/projects/loop
-git checkout <previous-tag>     # e.g. git checkout v0.1.0
-# then restart services as above
-```
-
-Tag history: `git tag --sort=-version:refname | head -10`
-
-### If a launchd service fails to restart
-
-1. Check the exit code:
-   ```bash
-   launchctl list | grep loop
-   ```
-   A non-zero PID column means it crashed on start.
-
-2. Read the error log:
-   ```bash
-   tail -50 ~/.loop/logs/loop-scanner.log
-   tail -50 ~/.loop/logs/loop-reconciler.log
-   ```
-
-3. Common causes:
-   - A new `loop.env` key is required — compare `loop.env` against
-     `loop.env.example` and add the missing variable.
-   - A shell-syntax error in a newly updated script — run
-     `bash -n lib/*.sh scripts/*.sh scanner/*.sh install.sh` to find it.
-
-4. Once fixed, reload:
-   ```bash
-   launchctl kickstart -k gui/$(id -u)/com.user.loop-scanner
-   ```
-
-### Where logs live
+### Logs reference
 
 | Log file | What it covers |
 |---|---|
