@@ -40,15 +40,17 @@ YAML
     [ "$status" -eq 0 ]
 }
 
-@test "validate: all four starter workflows pass validation" {
-    run loop_workflow_validate "$REPO_ROOT/config/workflows/default.yaml"
-    [ "$status" -eq 0 ]
-    run loop_workflow_validate "$REPO_ROOT/config/workflows/minimal.yaml"
-    [ "$status" -eq 0 ]
-    run loop_workflow_validate "$REPO_ROOT/config/workflows/docs-only.yaml"
-    [ "$status" -eq 0 ]
-    run loop_workflow_validate "$REPO_ROOT/config/workflows/current.yaml"
-    [ "$status" -eq 0 ]
+@test "validate: all shipped starter workflows pass validation" {
+    # current.yaml is gitignored (operator-local), so it's only present on dev
+    # machines, not in CI. Validate every workflow yaml that's actually checked
+    # in — anything in config/workflows/ except README.md and current.yaml.
+    for f in "$REPO_ROOT"/config/workflows/*.yaml; do
+        case "$(basename "$f")" in
+            current.yaml) continue ;;
+        esac
+        run loop_workflow_validate "$f"
+        [ "$status" -eq 0 ]
+    done
 }
 
 # ---------------------------------------------------------------------------
