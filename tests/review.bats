@@ -38,7 +38,7 @@ teardown() {
 
     backend_remove_label() { echo "remove $3" >> "$ops_log"; }
     backend_add_label()    { echo "add $3"    >> "$ops_log"; }
-    backend_comment_pr()   { echo "comment: $4" >> "$comment_log"; }
+    backend_comment_pr()   { echo "comment: $3" >> "$comment_log"; }
     gh() {
         case "$*" in
             *isDraft*) echo "true" ;;
@@ -103,7 +103,7 @@ teardown() {
 
     backend_remove_label() { echo "remove $3" >> "$ops_log"; }
     backend_add_label()    { echo "add $3"    >> "$ops_log"; }
-    backend_comment_pr()   { echo "comment: $4" >> "$comment_log"; }
+    backend_comment_pr()   { echo "comment: $3" >> "$comment_log"; }
     gh() {
         case "$*" in
             *isDraft*) echo "true" ;;
