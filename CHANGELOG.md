@@ -33,6 +33,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-29] Fix backend abstraction bypass and loop_run_agent cwd handling (#52)
 - Draft: [LOOP-68] bounty: add loop_id field to every event payload (#77)
 - Draft: [LOOP-30] add lib/cli-hint.sh and inject glab hint into handler prompts (#80)
+- Draft: [LOOP-89] Add daily operator digest of stuck pipeline items (#94)
 ## [0.1.0] - 2026-04-27
 
 Initial public release. Loop is the public rebrand of a prior internal
