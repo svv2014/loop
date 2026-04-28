@@ -651,6 +651,65 @@ reconcile_labels() {
     log "[$repo] labels ok (created=$created)"
 }
 
+# --- Check 10: orphaned in-progress issues (no live handler lock) --------------
+# An issue stuck with `in-progress` but no live dev-handler or po-handler process
+# will never self-recover — the EXIT trap added in the handlers handles normal
+# crashes, but SIGKILL or a machine reboot can still leave these stranded.
+# After a 10-minute grace window, reset to `dev` so the scanner re-queues it.
+reconcile_orphaned_in_progress() {
+    local repo="$1"
+    local slug="$2"
+    log "[$repo] scanning for orphaned in-progress issues (no live handler)"
+
+    local issues_json
+    issues_json=$(backend_list_open_issues_raw "$repo" "in-progress")
+
+    local candidates
+    candidates=$(ISS="$issues_json" python3 - <<'PY'
+import json, os, datetime as dt
+issues = json.loads(os.environ['ISS'])
+now = dt.datetime.now(dt.timezone.utc)
+for iss in issues:
+    up = dt.datetime.fromisoformat(iss['updatedAt'].replace('Z', '+00:00'))
+    age_s = (now - up).total_seconds()
+    if age_s < 600:  # 10-min grace: handler may still be starting up
+        continue
+    print(f"{iss['number']}\t{int(age_s)}\t{iss['title'][:60]}")
+PY
+)
+
+    if [ -z "$candidates" ]; then
+        log "[$repo] no orphaned in-progress issues"
+        return 0
+    fi
+
+    local lock_dir="${LOOP_LOCK_DIR:-/tmp/loop-locks}"
+    local handler_alive lf pid
+
+    while IFS=$'\t' read -r num age title; do
+        [ -z "$num" ] && continue
+        handler_alive=false
+        for lf in "$lock_dir/${slug}-issue-${num}.lock" "$lock_dir/po-${slug}-${num}.lock"; do
+            [ -f "$lf" ] || continue
+            pid=$(cat "$lf" 2>/dev/null || echo "")
+            if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+                handler_alive=true; break
+            fi
+        done
+        if $handler_alive; then
+            log "[$repo] issue #$num in-progress with live handler (age=${age}s) — skip"
+            continue
+        fi
+        log "[$repo] ORPHAN in-progress #$num (no live handler, ${age}s): $title"
+        loop_notify "Loop reconciler: $repo — issue #$num orphaned in-progress (no handler, ${age}s); resetting to dev"
+        $DRY_RUN && continue
+        backend_remove_label "$repo" "$num" in-progress \
+            || log "[$repo] WARN: failed to remove in-progress from #$num"
+        backend_add_label "$repo" "$num" dev \
+            || log "[$repo] WARN: failed to add dev to #$num"
+    done <<< "$candidates"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -668,6 +727,7 @@ run_project() {
     reconcile_stale_prs "$REPO"
     reconcile_needs_clarification "$REPO"
     reconcile_unblock "$REPO"
+    reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_worktrees "$slug" "$REPO"
 }
 
