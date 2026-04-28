@@ -23,6 +23,7 @@ lib/config.sh               # loop_load_project <slug> → exports REPO ROOT etc
 lib/github.sh               # gh/jq wrappers: list issues/PRs, add/remove labels
 lib/runner.sh               # loop_run_agent — invokes the selected agent CLI
 lib/lock.sh                 # Per-project advisory lock (/tmp/loop-locks/<slug>.lock)
+lib/workflow.sh             # Workflow loader: loop_label_for, loop_polled_labels, loop_handler_for_label, loop_workflow_validate
 lib/backends/               # Adapter layer: github (default), gitlab, jira-gitlab
 scanner/scanner.sh          # Continuous poller — emits events per project label state
 scanner/reconciler.sh       # Periodic housekeeping (duplicate PRs, orphaned claims)
