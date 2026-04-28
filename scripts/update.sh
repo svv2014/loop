@@ -99,23 +99,20 @@ record_history() {
 if $OPT_ROLLBACK; then
     [[ -f "$UPDATE_HISTORY" ]] || die "No update history found at $UPDATE_HISTORY"
     log "Rolling back from update history …"
-    declare -A PREV_SHAS
-    # Read last recorded SHA for each label
-    while IFS=' ' read -r _ts label sha; do
-        PREV_SHAS["$label"]="$sha"
-    done < "$UPDATE_HISTORY"
+    _core_sha=$(grep " core " "$UPDATE_HISTORY" 2>/dev/null | tail -1 | awk '{print $3}')
+    _monitor_sha=$(grep " monitor " "$UPDATE_HISTORY" 2>/dev/null | tail -1 | awk '{print $3}')
 
     for label in core monitor; do
-        sha="${PREV_SHAS[$label]:-}"
+        if [[ "$label" == "core" ]]; then
+            sha="$_core_sha"
+            local_dir="$LOOP_CORE_DIR"
+        else
+            sha="$_monitor_sha"
+            local_dir="$LOOP_MONITOR_DIR"
+        fi
         if [[ -z "$sha" ]]; then
             info "  No previous SHA recorded for $label — skipping"
             continue
-        fi
-        local_dir=""
-        if [[ "$label" == "core" ]]; then
-            local_dir="$LOOP_CORE_DIR"
-        else
-            local_dir="$LOOP_MONITOR_DIR"
         fi
         if [[ ! -d "$local_dir" ]]; then
             info "  $label dir not found at $local_dir — skipping"
