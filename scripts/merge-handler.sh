@@ -75,6 +75,9 @@ case "$MERGE_STATE" in
         ;;
 esac
 
+# Dev-handler opens all PRs as drafts; promote to ready before merging.
+backend_pr_ready "$REPO" "$PR_NUM" 2>&1 | tee -a "$LOG_FILE" || true
+
 if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FILE"; then
     # Check if the failure was a conflict discovered at merge time.
     POST_STATE=$(backend_pr_view "$REPO" "$PR_NUM" --json mergeable,mergeStateStatus 2>/dev/null \

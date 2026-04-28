@@ -110,6 +110,13 @@ backend_comment_pr() {
     gh pr comment "$number" --repo "$repo" --body "$body" 2>/dev/null || true
 }
 
+# backend_pr_ready <repo> <number>
+# Promotes a draft PR to ready-for-review. No-op if already ready.
+backend_pr_ready() {
+    local repo="$1" number="$2"
+    gh pr ready "$number" --repo "$repo" 2>/dev/null || true
+}
+
 # backend_merge_pr <repo> <number> <strategy_flag>
 # <strategy_flag> is one of: --squash, --merge, --rebase
 backend_merge_pr() {

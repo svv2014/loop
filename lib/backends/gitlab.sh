@@ -251,6 +251,14 @@ backend_comment_pr() {
     glab mr comment "$number" --repo "$_GL_REPO" --body "$body" 2>/dev/null || true
 }
 
+# backend_pr_ready <repo> <number>
+# Promotes a draft MR to ready. No-op if already ready.
+backend_pr_ready() {
+    local repo="$1" number="$2"
+    _gl_parse_repo "$repo"
+    glab mr update "$number" --repo "$_GL_REPO" --draft=false 2>/dev/null || true
+}
+
 # backend_merge_pr <repo> <number> <strategy_flag>
 # <strategy_flag>: --squash | --merge | --rebase
 backend_merge_pr() {
