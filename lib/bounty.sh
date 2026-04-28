@@ -24,6 +24,24 @@ _bounty_core_version() {
     printf 'unknown'
 }
 
+# Resolve a stable per-instance identifier.
+# Overridable via LOOP_ID env var; otherwise derived from hostname + first 8 hex
+# chars of the sha256 hash of $LOOP_ROOT (md5 fallback on macOS without coreutils).
+_bounty_loop_id() {
+    if [ -n "${LOOP_ID:-}" ]; then
+        printf '%s' "$LOOP_ID"
+        return
+    fi
+    local host root_hash
+    host="$(hostname 2>/dev/null || printf 'localhost')"
+    if command -v sha256sum >/dev/null 2>&1; then
+        root_hash="$(printf '%s' "${LOOP_ROOT:-/}" | sha256sum | cut -c1-8)"
+    else
+        root_hash="$(printf '%s' "${LOOP_ROOT:-/}" | md5 -q 2>/dev/null | cut -c1-8)"
+    fi
+    printf '%s-%s' "$host" "${root_hash:-00000000}"
+}
+
 # bounty_report <event> [key=value ...]
 # Keys: agent model role project issue_num pr_num detail
 # Example: bounty_report "dev_start" role=dev model=sonnet project=myapp issue_num=42
@@ -52,7 +70,7 @@ bounty_report() {
 
     local payload
     payload=$(
-        _API="$api_ver" _CV="$(_bounty_core_version)" \
+        _API="$api_ver" _CV="$(_bounty_core_version)" _LI="$(_bounty_loop_id)" \
         _BE="$event" _BA="$agent" _BM="$model" _BR="$role" \
         _BP="$project" _BD="$detail" _BI="$issue_num" _BPN="$pr_num" \
         python3 - <<'PY'
@@ -60,6 +78,7 @@ import json, os, datetime
 d = {
     "api":          os.environ.get("_API") or "1.0",
     "core_version": os.environ.get("_CV") or "unknown",
+    "loop_id":      os.environ.get("_LI") or "unknown",
     "event":        os.environ.get("_BE", "unknown"),
     "agent":        os.environ.get("_BA") or None,
     "model":        os.environ.get("_BM") or None,
