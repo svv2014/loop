@@ -30,7 +30,7 @@ YAML
     source "$REPO_ROOT/lib/workflow.sh"
 
     # Ops log captures every label/comment call.
-    OPS_LOG="$BATS_TMPDIR/ops.log"
+    export OPS_LOG="$BATS_TMPDIR/ops.log"
     rm -f "$OPS_LOG"
 
     # Globals needed by recovery functions.
@@ -46,10 +46,10 @@ YAML
     # backend_list_open_issues_raw honours GH_MOCK_ISSUES or MOCK_ISSUES_JSON
     backend_list_open_issues_raw() { echo "${GH_MOCK_ISSUES:-${MOCK_ISSUES_JSON:-[]}}"; }
     backend_list_open_prs_raw()    { echo "${MOCK_PRS_JSON:-[]}"; }
-    backend_remove_label()         { echo "remove_label $3" >> "$OPS_LOG"; }
-    backend_add_label()            { echo "add_label $3"    >> "$OPS_LOG"; }
-    backend_comment_issue()        { echo "comment_issue $2" >> "$OPS_LOG"; }
-    backend_comment_pr()           { echo "comment_pr $2"   >> "$OPS_LOG"; }
+    backend_remove_label()         { echo "remove_label $2 $3" >> "$OPS_LOG"; }
+    backend_add_label()            { echo "add_label $2 $3"    >> "$OPS_LOG"; }
+    backend_comment_issue()        { echo "comment_issue $2"   >> "$OPS_LOG"; }
+    backend_comment_pr()           { echo "comment_pr $2"      >> "$OPS_LOG"; }
     backend_find_pr_for_issue()    { echo "${GH_MOCK_PR_NUM:-}"; }
 
     # Stub gh: returns state based on GH_STATE_MAP entries "num:STATE num:STATE ...".
@@ -205,57 +205,6 @@ teardown() {
     grep -q "remove_label 50 blocked"   "$OPS_LOG"
     grep -q "add_label 50 needs-review" "$OPS_LOG"
     grep -q "comment_pr 50"             "$OPS_LOG"
-=======
-# tests/reconciler.bats — unit tests for lib/recovery.sh helpers.
-#
-# Tests are self-contained: gh, backend_*, loop_label_for, loop_notify, and log
-# are all stubbed so no real GitHub or filesystem state is needed.
-
-setup() {
-    REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
-
-    # Expose mock-gh.sh as the gh binary via a per-test temp bin directory.
-    mkdir -p "$BATS_TMPDIR/bin"
-    ln -sf "$BATS_TEST_DIRNAME/test_helper/mock-gh.sh" "$BATS_TMPDIR/bin/gh"
-    chmod +x "$BATS_TMPDIR/bin/gh"
-    export PATH="$BATS_TMPDIR/bin:$PATH"
-
-    export LOOP_LOG_DIR="$BATS_TMPDIR/logs"
-    mkdir -p "$LOOP_LOG_DIR"
-    export LOOP_EXTRA_PATH=""
-    export LOOP_LOCK_DIR="$BATS_TMPDIR/locks"
-    mkdir -p "$LOOP_LOCK_DIR"
-
-    # Set required globals that recovery.sh functions depend on.
-    export LOOP_ROOT="$REPO_ROOT"
-    export REPO="owner/test-repo"
-    export ROOT="$BATS_TMPDIR/fake-root"
-    export DRY_RUN=false
-    export HANDLER_TIMEOUT=3600
-
-    # Stub library functions so we can source recovery.sh in isolation.
-    loop_label_for()              { echo "$2"; }
-    loop_notify()                 { :; }
-    log()                         { :; }
-    backend_list_open_issues_raw(){ echo "${GH_MOCK_ISSUES:-[]}"; }
-    backend_remove_label()        { echo "remove_label $3" >> "$BATS_TMPDIR/ops.log"; }
-    backend_add_label()           { echo "add_label $3"    >> "$BATS_TMPDIR/ops.log"; }
-    # Default: no open PR found for any issue
-    backend_find_pr_for_issue()   { echo "${GH_MOCK_PR_NUM:-}"; }
-
-    # Source only recovery.sh (it does not call acquire_lock on source).
-    # shellcheck disable=SC1090
-    source "$REPO_ROOT/lib/recovery.sh"
-
-    rm -f "$BATS_TMPDIR/ops.log"
-}
-
-teardown() {
-    rm -rf "$BATS_TMPDIR/bin" "$BATS_TMPDIR/logs" \
-           "$BATS_TMPDIR/locks" "$BATS_TMPDIR/ops.log" \
-           "$BATS_TMPDIR/fake-root" 2>/dev/null || true
-    # Clean up any worktree dirs created during tests
-    rm -rf /tmp/loop-worktree-bats-test-* 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------------------
@@ -287,8 +236,8 @@ print(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
     # No lock file → handler not alive
     run recovery_check_stuck_labels "test-proj"
     [ "$status" -eq 0 ]
-    grep -q "remove_label in-progress" "$BATS_TMPDIR/ops.log"
-    grep -q "add_label dev"            "$BATS_TMPDIR/ops.log"
+    grep -q "remove_label 42 in-progress" "$BATS_TMPDIR/ops.log"
+    grep -q "add_label 42 dev"            "$BATS_TMPDIR/ops.log"
 }
 
 @test "recovery_check_stuck_labels: skips issue with live handler lock" {
@@ -329,8 +278,8 @@ print(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
 
     run recovery_check_stuck_labels "test-proj"
     [ "$status" -eq 0 ]
-    grep -q "remove_label in-rework"   "$BATS_TMPDIR/ops.log"
-    grep -q "add_label needs-rework"   "$BATS_TMPDIR/ops.log"
+    grep -q "remove_label 55 in-rework"   "$BATS_TMPDIR/ops.log"
+    grep -q "add_label 55 needs-rework"   "$BATS_TMPDIR/ops.log"
 }
 
 @test "recovery_check_stuck_labels: dry-run suppresses label mutations" {
@@ -427,5 +376,4 @@ print(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
     # Dir must survive in dry-run
     [ -d "$wt_dir" ]
     rm -rf "$wt_dir"
->>>>>>> f680355 ([LOOP-69] add lib/recovery.sh: stuck-label timeout + orphan worktree cleanup)
 }
