@@ -56,6 +56,14 @@ fi
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
+# Resolve workflow-specific labels for this project so the agent prompt + the
+# belt-and-braces apply the right names per active workflow.
+_REVIEW_LABEL=$(loop_label_for "$SLUG" "needs-review")
+_REWORK_LABEL=$(loop_label_for "$SLUG" "needs-rework")
+_QA_LABEL=$(loop_label_for "$SLUG" "needs-qa")
+_QA_PASS_LABEL=$(loop_label_for "$SLUG" "qa-pass")
+_QA_FAIL_LABEL=$(loop_label_for "$SLUG" "qa-fail")
+
 # Auto-promote drafts — PRs are no longer opened as drafts, but promote any legacy ones.
 _is_draft=$(gh pr view "$PR_NUM" --repo "$REPO" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
 if [ "$_is_draft" = "true" ]; then
@@ -77,12 +85,12 @@ retry_clear() { rm -f "$RETRY_FILE"; }
 
 retries=$(retry_count)
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
-    log "PR #$PR_NUM already failed review ${retries}x — labeling needs-rework"
+    log "PR #$PR_NUM already failed review ${retries}x — labeling ${_REWORK_LABEL}"
     backend_remove_label "$REPO" "$PR_NUM" needs-review
     backend_remove_label "$REPO" "$PR_NUM" review-pending
     backend_remove_label "$REPO" "$PR_NUM" in-review
-    backend_remove_label "$REPO" "$PR_NUM" changes-requested
-    backend_add_label "$REPO" "$PR_NUM" needs-rework
+    backend_remove_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+    backend_add_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
     exit 0
 fi
 
@@ -94,10 +102,6 @@ backend_remove_label "$REPO" "$PR_NUM" needs-review
 backend_remove_label "$REPO" "$PR_NUM" review-pending
 backend_add_label "$REPO" "$PR_NUM" in-review
 
-# Resolve workflow-specific labels for this project so the agent prompt + the
-# belt-and-braces apply the right names per active workflow.
-QA_LABEL=$(loop_stage_trigger "$SLUG" qa pr 2>/dev/null || echo ready-for-qa)
-REWORK_LABEL=$(loop_stage_trigger "$SLUG" rework pr 2>/dev/null || echo changes-requested)
 _BACKEND_CLI_NOTE=$(backend_cli_note)
 
 _PROMPT_FILE=$(mktemp /tmp/review-prompt-XXXXXX.txt)
@@ -133,15 +137,15 @@ Your job -- do all of these in sequence:
 
 If APPROVE:
    gh pr review ${PR_NUM} --repo ${REPO} --approve --body '<2-4 sentence summary of what looks good>'
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label needs-review --remove-label review-pending --remove-label ready-for-qa --remove-label needs-qa --add-label ${QA_LABEL}
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label ${_REVIEW_LABEL} --remove-label ${_QA_LABEL} --add-label ${_QA_LABEL}
 
 If REQUEST_CHANGES:
    gh pr review ${PR_NUM} --repo ${REPO} --request-changes --body '<specific, actionable feedback -- what to change and why>'
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label needs-review --remove-label review-pending --remove-label changes-requested --remove-label needs-rework --add-label ${REWORK_LABEL}
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label ${_REVIEW_LABEL} --remove-label ${_REWORK_LABEL} --add-label ${_REWORK_LABEL}
 
 Be strict but fair. Approve content-adjacent bookkeeping (formatting, docs) liberally. Push back on logic errors, security issues, missing tests where the issue asked for tests, or content that contradicts the cited source (e.g. a lesson that miscites CAR Part X).
 
-IMPORTANT: You MUST finish by applying either '${QA_LABEL}' or '${REWORK_LABEL}' label. The pipeline stalls if neither is applied. Verify with:
+IMPORTANT: You MUST finish by applying either '${_QA_LABEL}' or '${_REWORK_LABEL}' label. The pipeline stalls if neither is applied. Verify with:
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 Report the decision you made and why, in 3 short sentences.
@@ -160,9 +164,9 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     # Belt-and-braces: if agent forgot to apply a decision label, default to rework
     # (workflow-resolved) so the PR doesn't silently disappear from the pipeline.
     if ! backend_pr_has_any_label "$REPO" "$PR_NUM" needs-qa ready-for-qa needs-rework changes-requested blocked 'done'; then
-        log "WARN: PR #$PR_NUM has no decision label after review agent — defaulting to '${REWORK_LABEL}'"
+        log "WARN: PR #$PR_NUM has no decision label after review agent — defaulting to '${_REWORK_LABEL}'"
         backend_remove_label "$REPO" "$PR_NUM" needs-rework changes-requested
-        backend_add_label "$REPO" "$PR_NUM" "$REWORK_LABEL"
+        backend_add_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
     fi
 else
     n=$(retry_incr)
@@ -170,8 +174,8 @@ else
     bounty_report "review_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$PR_NUM" in-review
-        backend_remove_label "$REPO" "$PR_NUM" changes-requested
-        backend_add_label "$REPO" "$PR_NUM" needs-rework
+        backend_remove_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+        backend_add_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
         # Post only a short marker — never the agent log/prompt, which contains
         # internal pipeline instructions that must not become public.
         backend_comment_pr "$REPO" "$PR_NUM" \

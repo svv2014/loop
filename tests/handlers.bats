@@ -210,3 +210,89 @@ State: OPEN
     # qa-failed must NOT be added (the typo we fixed)
     ! grep -q "add qa-failed" "$ops_log"
 }
+
+# ---------------------------------------------------------------------------
+# dev-handler prompt label resolution (current vs default workflow)
+# ---------------------------------------------------------------------------
+
+@test "dev-handler prompt: current workflow project — resolved labels used, no canonical default names" {
+    cat > "$BATS_TMPDIR/current.yaml" <<'YAML'
+version: 1
+projects:
+  - slug: current-proj
+    name: Current Project
+    repo: owner/current-repo
+    root: /tmp/fake
+    default_branch: main
+    workflow: default
+    labels:
+      needs-review: review-pending
+      needs-rework: changes-requested
+      needs-qa: ready-for-qa
+YAML
+    export LOOP_CONFIG="$BATS_TMPDIR/current.yaml"
+
+    local _REVIEW_LABEL _REWORK_LABEL _QA_LABEL _QA_PASS_LABEL _QA_FAIL_LABEL
+    _REVIEW_LABEL=$(loop_label_for "current-proj" "needs-review")
+    _REWORK_LABEL=$(loop_label_for "current-proj" "needs-rework")
+    _QA_LABEL=$(loop_label_for "current-proj" "needs-qa")
+    _QA_PASS_LABEL=$(loop_label_for "current-proj" "qa-pass")
+    _QA_FAIL_LABEL=$(loop_label_for "current-proj" "qa-fail")
+
+    # Verify resolution
+    [ "$_REVIEW_LABEL" = "review-pending" ]
+    [ "$_REWORK_LABEL" = "changes-requested" ]
+    [ "$_QA_LABEL" = "ready-for-qa" ]
+    [ "$_QA_PASS_LABEL" = "qa-pass" ]
+    [ "$_QA_FAIL_LABEL" = "qa-fail" ]
+
+    # Build the prompt snippet the same way dev-handler.sh does (unquoted <<EOF)
+    local SLUG=current-proj REPO=owner/current-repo ISSUE_NUM=99
+    local prompt
+    prompt=$(cat <<EOF
+Create PR: gh pr create --repo ${REPO} --label ${_REVIEW_LABEL}
+Edit issue: gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --remove-label dev --remove-label plan --remove-label ${_REVIEW_LABEL} --add-label ${_REVIEW_LABEL}
+If reviewer requests changes: issue gets label '${_REWORK_LABEL}'.
+If ready for QA: issue gets label '${_QA_LABEL}'.
+IMPORTANT: label '${_REVIEW_LABEL}' (or 'needs-clarification' if blocked).
+EOF
+    )
+
+    # Must NOT contain canonical (default-workflow) names
+    [[ "$prompt" != *"needs-review"* ]]
+    [[ "$prompt" != *"needs-rework"* ]]
+    [[ "$prompt" != *"needs-qa"* ]]
+
+    # Must contain resolved (current-workflow) names
+    [[ "$prompt" == *"review-pending"* ]]
+    [[ "$prompt" == *"changes-requested"* ]]
+    [[ "$prompt" == *"ready-for-qa"* ]]
+}
+
+@test "dev-handler prompt: default workflow project — canonical label names appear in prompt" {
+    # Uses setup fixture.yaml with workflow: default and no label overrides
+
+    local _REVIEW_LABEL _REWORK_LABEL _QA_LABEL
+    _REVIEW_LABEL=$(loop_label_for "test-proj" "needs-review")
+    _REWORK_LABEL=$(loop_label_for "test-proj" "needs-rework")
+    _QA_LABEL=$(loop_label_for "test-proj" "needs-qa")
+
+    [ "$_REVIEW_LABEL" = "needs-review" ]
+    [ "$_REWORK_LABEL" = "needs-rework" ]
+    [ "$_QA_LABEL" = "needs-qa" ]
+
+    local SLUG=test-proj REPO=owner/test-repo ISSUE_NUM=1
+    local prompt
+    prompt=$(cat <<EOF
+Create PR: gh pr create --repo ${REPO} --label ${_REVIEW_LABEL}
+Edit issue: gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --remove-label dev --remove-label plan --remove-label ${_REVIEW_LABEL} --add-label ${_REVIEW_LABEL}
+If reviewer requests changes: issue gets label '${_REWORK_LABEL}'.
+If ready for QA: issue gets label '${_QA_LABEL}'.
+IMPORTANT: label '${_REVIEW_LABEL}' (or 'needs-clarification' if blocked).
+EOF
+    )
+
+    # Default workflow: canonical names must appear in the prompt
+    [[ "$prompt" == *"needs-review"* ]]
+    [[ "$prompt" != *"review-pending"* ]]
+}

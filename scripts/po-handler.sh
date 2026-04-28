@@ -58,9 +58,7 @@ loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
 _po_trigger=$(loop_label_for "$SLUG" "po-review")
-# Resolve workflow-specific PR labels so paths like G (REFINE-WITH-ACTIVE-MR) use
-# the right rework trigger on `current` workflow projects (changes-requested, not needs-rework).
-_REWORK_LABEL=$(loop_stage_trigger "$SLUG" rework pr 2>/dev/null || echo needs-rework)
+_REWORK_LABEL=$(loop_label_for "$SLUG" "needs-rework")
 
 # Per-issue lock — PO writes only to one issue's body and labels, so two PO
 # workers on different issues in the same project are safe in parallel. The

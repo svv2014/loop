@@ -113,7 +113,11 @@ log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
 # Resolve workflow-specific labels for this project so the agent prompt + the
 # belt-and-braces apply the right names per the project's active workflow
 # (e.g. needs-review on default, review-pending on current).
-REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
+_REVIEW_LABEL=$(loop_label_for "$SLUG" "needs-review")
+_REWORK_LABEL=$(loop_label_for "$SLUG" "needs-rework")
+_QA_LABEL=$(loop_label_for "$SLUG" "needs-qa")
+_QA_PASS_LABEL=$(loop_label_for "$SLUG" "qa-pass")
+_QA_FAIL_LABEL=$(loop_label_for "$SLUG" "qa-fail")
 _BACKEND_CLI_NOTE=$(backend_cli_note)
 
 TASK_PROMPT=$(cat <<EOF
@@ -154,11 +158,11 @@ $( [ -n "$DEV_VALIDATION_CMD" ] && echo "4. Run validation: ${DEV_VALIDATION_CMD
 
 ## Test Plan
 <what QA should verify>' \\
-     --label ${REVIEW_LABEL}
+     --label ${_REVIEW_LABEL}
 8. On your own issue — this step is MANDATORY to signal success to the pipeline:
-   gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --remove-label dev --remove-label plan --remove-label needs-review --remove-label review-pending --add-label ${REVIEW_LABEL}
+   gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --remove-label dev --remove-label plan --remove-label ${_REVIEW_LABEL} --add-label ${_REVIEW_LABEL}
 
-IMPORTANT: The issue MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clarification' if blocked). Verify with:
+IMPORTANT: The issue MUST end this run with label '${_REVIEW_LABEL}' (or 'needs-clarification' if blocked). Verify with:
    gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels
 
 If blocked by missing context or an architectural decision, comment on the issue and add label 'needs-clarification' instead of opening a PR.
@@ -204,8 +208,8 @@ if matches:
         log "belt-and-braces: found PR #$_dev_pr_num for issue #$ISSUE_NUM"
         if ! backend_pr_has_any_label "$REPO" "$_dev_pr_num" \
                 review-pending needs-review changes-requested needs-rework in-review needs-clarification blocked 'done'; then
-            log "WARN: PR #$_dev_pr_num has no progression label after dev agent — adding '${REVIEW_LABEL}'"
-            backend_add_label "$REPO" "$_dev_pr_num" "$REVIEW_LABEL"
+            log "WARN: PR #$_dev_pr_num has no progression label after dev agent — adding '${_REVIEW_LABEL}'"
+            backend_add_label "$REPO" "$_dev_pr_num" "$_REVIEW_LABEL"
         fi
         # Strip both legacy and canonical issue-side names so the issue ends single-state
         backend_remove_label "$REPO" "$ISSUE_NUM" needs-review review-pending plan dev in-progress
