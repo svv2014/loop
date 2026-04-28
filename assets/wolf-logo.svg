@@ -1,0 +1,37 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200" width="200" height="200">
+  <!-- Outer circle (loop symbol) -->
+  <circle cx="100" cy="100" r="96" fill="#1a1a2e" stroke="#e0e0e0" stroke-width="3"/>
+
+  <!-- Wolf ears -->
+  <polygon points="62,56 50,22 82,48" fill="#e0e0e0"/>
+  <polygon points="138,56 150,22 118,48" fill="#e0e0e0"/>
+  <!-- Inner ear -->
+  <polygon points="63,52 55,32 78,50" fill="#a0a0b8"/>
+  <polygon points="137,52 145,32 122,50" fill="#a0a0b8"/>
+
+  <!-- Wolf head -->
+  <ellipse cx="100" cy="95" rx="42" ry="38" fill="#e0e0e0"/>
+
+  <!-- Snout -->
+  <ellipse cx="100" cy="118" rx="22" ry="16" fill="#c8c8d8"/>
+
+  <!-- Nose -->
+  <ellipse cx="100" cy="108" rx="9" ry="6" fill="#1a1a2e"/>
+
+  <!-- Eyes -->
+  <ellipse cx="83" cy="84" rx="7" ry="7" fill="#1a1a2e"/>
+  <ellipse cx="117" cy="84" rx="7" ry="7" fill="#1a1a2e"/>
+  <!-- Eye shine -->
+  <circle cx="86" cy="81" r="2" fill="#ffffff"/>
+  <circle cx="120" cy="81" r="2" fill="#ffffff"/>
+
+  <!-- Mouth / muzzle line -->
+  <path d="M 91 120 Q 100 128 109 120" stroke="#1a1a2e" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+  <!-- Cheek fur lines -->
+  <path d="M 58 90 Q 65 86 72 92" stroke="#a0a0b8" stroke-width="2" fill="none" stroke-linecap="round"/>
+  <path d="M 142 90 Q 135 86 128 92" stroke="#a0a0b8" stroke-width="2" fill="none" stroke-linecap="round"/>
+
+  <!-- Tagline text -->
+  <text x="100" y="170" text-anchor="middle" font-family="monospace" font-size="10" fill="#a0a0b8" letter-spacing="1">loup · loop · wolf</text>
+</svg>
