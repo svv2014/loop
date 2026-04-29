@@ -13,6 +13,8 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-04-29
+
 ### Fixed
 - Resolved unmerged git conflict markers in `scripts/review-handler.sh`,
   `scripts/po-handler.sh`, and `scripts/dev-rework-handler.sh` left from
