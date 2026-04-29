@@ -88,11 +88,40 @@ bootstrap_check_tools() {
 }
 
 # Detect the first available agent CLI and write LOOP_AGENT to loop.env.
+# If LOOP_AGENT is already set in the environment, honour it without probing PATH.
 # Returns 1 if no agent is found.
 bootstrap_detect_agent() {
     local env_file="$LOOP_ROOT/loop.env"
     local detected=""
     local _agent
+
+    # Honour explicit env override — do not probe PATH when the caller already
+    # knows which agent to use.
+    if [ -n "${LOOP_AGENT:-}" ]; then
+        detected="$LOOP_AGENT"
+        echo "[agent] Using LOOP_AGENT from environment: $detected"
+        if [ -f "$env_file" ]; then
+            if grep -q '^LOOP_AGENT=' "$env_file"; then
+                python3 - "$env_file" "$detected" <<'PY'
+import sys, re
+path, agent = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    content = f.read()
+content = re.sub(r'^LOOP_AGENT=.*$', f'LOOP_AGENT="{agent}"', content, flags=re.MULTILINE)
+with open(path, 'w') as f:
+    f.write(content)
+PY
+                echo "[agent] Updated LOOP_AGENT=\"$detected\" in loop.env"
+            else
+                echo "LOOP_AGENT=\"$detected\"" >> "$env_file"
+                echo "[agent] Appended LOOP_AGENT=\"$detected\" to loop.env"
+            fi
+        else
+            echo "LOOP_AGENT=\"$detected\"" > "$env_file"
+            echo "[agent] Created loop.env with LOOP_AGENT=\"$detected\""
+        fi
+        return 0
+    fi
 
     for _agent in claude codex gemini aider; do
         if command -v "$_agent" >/dev/null 2>&1; then
@@ -494,7 +523,9 @@ status_check() {
         fi
         local threshold=$(( poll_interval * 2 ))
         local last_modified
-        last_modified=$(python3 -c "import os,time; print(int(time.time()-os.path.getmtime('$scanner_log')))" 2>/dev/null || echo "9999")
+        last_modified=$(scanner_log="$scanner_log" python3 -c \
+            "import os,time; p=os.environ['scanner_log']; print(int(time.time()-os.path.getmtime(p)))" \
+            2>/dev/null || echo "9999")
         if [ "$last_modified" -le "$threshold" ] 2>/dev/null; then
             echo "  [ok]  scanner last tick ${last_modified}s ago (within ${threshold}s window)"
         else
@@ -596,11 +627,17 @@ smoke_test_scanner() {
         local now
         now=$(date '+%H:%M:%S')
         echo "[smoke] Scanner picked up '$slug' at $now"
+        rm -f "$scan_out"
     else
+        # Persist the captured output to the scanner log so the path we show
+        # the user actually contains the diagnostic information.
+        if [ -s "$scan_out" ]; then
+            cat "$scan_out" >> "$scanner_log"
+        fi
+        rm -f "$scan_out"
         echo "[smoke] WARNING: scanner did not pick up '$slug' in ${timeout_secs}s"
         echo "        See $scanner_log"
     fi
-    rm -f "$scan_out"
 }
 
 # ─────────────────────────────────────────────────────────────────────────────

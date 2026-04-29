@@ -240,3 +240,76 @@ bootstrap_detect_agent 2>&1
     # Should not have duplicate lines
     [ "$(grep -c 'LOOP_AGENT=' "$loop_env")" -eq 1 ]
 }
+
+@test "bootstrap_detect_agent: honours LOOP_AGENT env var without probing PATH" {
+    local loop_env="$FAKE_LOOP_ROOT/loop.env"
+    rm -f "$loop_env"
+    cp "$FAKE_LOOP_ROOT/loop.env.example" "$loop_env"
+
+    local func_body
+    func_body=$(_extract_detect_func)
+
+    # LOOP_AGENT=gemini is set in the env; no agent CLIs are available in PATH.
+    # The function should write gemini to loop.env and exit 0 without failing.
+    run bash -c "
+set -euo pipefail
+LOOP_ROOT=\"$FAKE_LOOP_ROOT\"
+LOOP_AGENT=\"gemini\"
+export LOOP_AGENT
+
+# Override command -v so no agent CLIs appear in PATH
+command() {
+    if [ \"\${1:-}\" = \"-v\" ]; then
+        local name=\"\${2:-}\"
+        case \"\$name\" in
+            claude|codex|gemini|aider) return 1 ;;
+        esac
+    fi
+    builtin command \"\$@\"
+}
+export -f command 2>/dev/null || true
+
+${func_body}
+bootstrap_detect_agent
+"
+    [ "$status" -eq 0 ]
+    [[ "$output" == *"gemini"* ]]
+    grep -q 'LOOP_AGENT="gemini"' "$loop_env"
+}
+
+@test "bootstrap_detect_agent: LOOP_AGENT env overrides a different agent already in loop.env" {
+    local loop_env="$FAKE_LOOP_ROOT/loop.env"
+    # loop.env already has claude
+    printf 'LOOP_AGENT="claude"\n' > "$loop_env"
+
+    local func_body
+    func_body=$(_extract_detect_func)
+
+    # LOOP_AGENT=aider is in the environment; claude is not in PATH either.
+    run bash -c "
+set -euo pipefail
+LOOP_ROOT=\"$FAKE_LOOP_ROOT\"
+LOOP_AGENT=\"aider\"
+export LOOP_AGENT
+
+command() {
+    if [ \"\${1:-}\" = \"-v\" ]; then
+        local name=\"\${2:-}\"
+        case \"\$name\" in
+            claude|codex|gemini|aider) return 1 ;;
+        esac
+    fi
+    builtin command \"\$@\"
+}
+export -f command 2>/dev/null || true
+
+${func_body}
+bootstrap_detect_agent
+"
+    [ "$status" -eq 0 ]
+    grep -q 'LOOP_AGENT="aider"' "$loop_env"
+    # Should not have duplicate lines
+    local count
+    count=$(grep -c 'LOOP_AGENT=' "$loop_env")
+    [ "$count" -eq 1 ]
+}
