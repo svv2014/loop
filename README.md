@@ -43,22 +43,18 @@ The name is a nod to _loup_, French for wolf — a predator that hunts in packs,
 - **Backend agnostic** — GitHub default; GitLab and Jira+GitLab adapters
   ship in `lib/backends/`.
 
-## Install (5 minutes)
+## Install
 
-Clone, bootstrap, and add your first project:
+Three commands. No file editing required.
 
 ```bash
 git clone https://github.com/svv2014/loop.git && cd loop
-./install.sh --bootstrap            # check tools, write loop.env, register scanner
-./install.sh /path/to/your-project  # add a project to the pipeline
+./install.sh --bootstrap            # auto-detects agent, writes loop.env, registers scanner
+./install.sh /path/to/your-project  # registers project + smoke-tests the scanner
 ```
 
-Set your agent in `loop.env`:
-
-```bash
-LOOP_AGENT=claude
-LOOP_AGENT_MODEL=sonnet
-```
+Bootstrap auto-detects your agent (`claude`, `codex`, `gemini`, or `aider`) and writes
+`LOOP_AGENT` to `loop.env`. No manual editing needed for the happy path.
 
 Then label an issue to start the pipeline:
 
@@ -72,7 +68,31 @@ gh issue edit <number> --repo owner/repo --add-label dev
 
 The scanner picks it up within 5 minutes and opens a PR automatically.
 
-[More options](docs/quick-start.md) — GitLab, other agents, loop-monitor, and advanced config.
+```bash
+# Check that everything is healthy at any time:
+./install.sh status
+```
+
+<details>
+<summary>Advanced config — agent override, GitLab, other agents, loop-monitor</summary>
+
+To override the detected agent, edit `loop.env`:
+
+```bash
+LOOP_AGENT=codex           # or: gemini, aider, custom
+LOOP_AGENT_MODEL=o4-mini   # optional model override
+```
+
+Or re-bootstrap with an explicit agent:
+
+```bash
+LOOP_AGENT=gemini ./install.sh --bootstrap
+```
+
+For GitLab, Jira+GitLab, loop-monitor integration, and full configuration reference —
+see [docs/quick-start.md](docs/quick-start.md).
+
+</details>
 
 ## How a feature flows through Loop
 

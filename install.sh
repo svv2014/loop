@@ -87,6 +87,63 @@ bootstrap_check_tools() {
     [ "$ok" = "true" ]
 }
 
+# Detect the first available agent CLI and write LOOP_AGENT to loop.env.
+# Returns 1 if no agent is found.
+bootstrap_detect_agent() {
+    local env_file="$LOOP_ROOT/loop.env"
+    local detected=""
+    local _agent
+
+    for _agent in claude codex gemini aider; do
+        if command -v "$_agent" >/dev/null 2>&1; then
+            detected="$_agent"
+            break
+        fi
+    done
+
+    if [ -z "$detected" ]; then
+        cat >&2 <<'ERR'
+[agent] ERROR: No supported agent CLI found in PATH.
+        Install one of the following, then re-run --bootstrap:
+          - claude   https://docs.anthropic.com/en/docs/claude-code
+          - codex    https://github.com/openai/codex
+          - gemini   https://github.com/google-gemini/gemini-cli
+          - aider    https://aider.chat
+
+        To override: LOOP_AGENT=<name> ./install.sh --bootstrap
+ERR
+        return 1
+    fi
+
+    echo "[agent] Detected: $detected"
+
+    # Write or update LOOP_AGENT in loop.env
+    if [ -f "$env_file" ]; then
+        if grep -q '^LOOP_AGENT=' "$env_file"; then
+            # Replace existing value
+            python3 - "$env_file" "$detected" <<'PY'
+import sys, re
+path, agent = sys.argv[1], sys.argv[2]
+with open(path) as f:
+    content = f.read()
+content = re.sub(r'^LOOP_AGENT=.*$', f'LOOP_AGENT="{agent}"', content, flags=re.MULTILINE)
+with open(path, 'w') as f:
+    f.write(content)
+PY
+            echo "[agent] Updated LOOP_AGENT=\"$detected\" in loop.env"
+        else
+            echo "LOOP_AGENT=\"$detected\"" >> "$env_file"
+            echo "[agent] Appended LOOP_AGENT=\"$detected\" to loop.env"
+        fi
+    else
+        echo "LOOP_AGENT=\"$detected\"" > "$env_file"
+        echo "[agent] Created loop.env with LOOP_AGENT=\"$detected\""
+    fi
+
+    echo "[agent] To override: LOOP_AGENT=<other> ./install.sh --bootstrap"
+    echo "        Available: claude, codex, gemini, aider"
+}
+
 # Write loop.env from loop.env.example (skips if already exists).
 # Substitutes ${HOME} with the actual home directory for launchd/cron safety.
 bootstrap_write_env() {
@@ -291,6 +348,7 @@ bootstrap_pipeline() {
 
     bootstrap_check_tools || return 1
     bootstrap_write_env
+    bootstrap_detect_agent || return 1
     bootstrap_write_projects_yaml
     bootstrap_chmod_scripts
     bootstrap_register_services
@@ -308,16 +366,246 @@ Log paths:
   Reconciler: $log_dir/loop-reconciler.log
   Digest:     $log_dir/loop-digest.log
 
-To add your first project:
-  $0 /path/to/your/project [--auto]
+Next step:
+  $0 /path/to/your/project
 
-To verify scanner is running:
-  tail -f $log_dir/loop-scanner.log
+To check health:
+  $0 status
 
 DONE
 }
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Status subcommand — one-shot health check
+# ─────────────────────────────────────────────────────────────────────────────
+
+status_check() {
+    local all_ok=true
+    local env_file="$LOOP_ROOT/loop.env"
+
+    echo "Loop Status"
+    echo "─────────────────────────────────────────────────"
+
+    # 1. loop.env present + LOOP_AGENT set
+    if [ -f "$env_file" ]; then
+        local agent_val
+        agent_val=$(grep '^LOOP_AGENT=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+        if [ -n "$agent_val" ]; then
+            echo "  [ok]  loop.env present, LOOP_AGENT=$agent_val"
+        else
+            echo "  [!!]  loop.env present but LOOP_AGENT not set"
+            all_ok=false
+        fi
+    else
+        echo "  [!!]  loop.env not found — run: ./install.sh --bootstrap"
+        all_ok=false
+        agent_val=""
+    fi
+
+    # 2. Agent CLI in PATH
+    local _detected_agent=""
+    if [ -f "$env_file" ]; then
+        _detected_agent=$(grep '^LOOP_AGENT=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+    fi
+    if [ -n "$_detected_agent" ]; then
+        if command -v "$_detected_agent" >/dev/null 2>&1; then
+            echo "  [ok]  agent CLI '$_detected_agent' in PATH"
+        else
+            echo "  [!!]  agent CLI '$_detected_agent' not found in PATH"
+            all_ok=false
+        fi
+    else
+        local _found_agent=""
+        local _a
+        for _a in claude codex gemini aider; do
+            if command -v "$_a" >/dev/null 2>&1; then
+                _found_agent="$_a"
+                break
+            fi
+        done
+        if [ -n "$_found_agent" ]; then
+            echo "  [ok]  agent CLI '$_found_agent' in PATH (LOOP_AGENT not set)"
+        else
+            echo "  [!!]  no agent CLI found (claude/codex/gemini/aider)"
+            all_ok=false
+        fi
+    fi
+
+    # 3. gh auth status
+    if command -v gh >/dev/null 2>&1; then
+        if gh auth status >/dev/null 2>&1; then
+            echo "  [ok]  gh authenticated"
+        else
+            echo "  [!!]  gh not authenticated — run: gh auth login"
+            all_ok=false
+        fi
+    else
+        echo "  [!!]  gh CLI not found"
+        all_ok=false
+    fi
+
+    # 4. Scanner running
+    local scanner_running=false
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if launchctl list 2>/dev/null | grep -q "com.user.loop-scanner"; then
+            echo "  [ok]  scanner running (launchd)"
+            scanner_running=true
+        else
+            echo "  [!!]  scanner not running — run: ./install.sh --bootstrap"
+            all_ok=false
+        fi
+    else
+        if crontab -l 2>/dev/null | grep -q "loop-scanner"; then
+            echo "  [ok]  scanner registered (cron)"
+            scanner_running=true
+        else
+            echo "  [!!]  scanner not registered — run: ./install.sh --bootstrap"
+            all_ok=false
+        fi
+    fi
+
+    # 5. Reconciler running
+    if [ "$(uname -s)" = "Darwin" ]; then
+        if launchctl list 2>/dev/null | grep -q "com.user.loop-reconciler"; then
+            echo "  [ok]  reconciler running (launchd)"
+        else
+            echo "  [!!]  reconciler not running — run: ./install.sh --bootstrap"
+            all_ok=false
+        fi
+    else
+        if crontab -l 2>/dev/null | grep -q "loop-reconciler"; then
+            echo "  [ok]  reconciler registered (cron)"
+        else
+            echo "  [!!]  reconciler not registered — run: ./install.sh --bootstrap"
+            all_ok=false
+        fi
+    fi
+
+    # 6. Latest scanner tick within 2x POLL_INTERVAL (default: 5 min → 10 min window)
+    local log_dir
+    log_dir=$(bootstrap_resolve_log_dir)
+    local scanner_log="$log_dir/loop-scanner.log"
+    if [ -f "$scanner_log" ]; then
+        local poll_interval=300
+        if [ -f "$env_file" ]; then
+            local _pi
+            _pi=$(grep '^POLL_INTERVAL=' "$env_file" 2>/dev/null | head -1 | cut -d= -f2- | tr -d '"')
+            [ -n "$_pi" ] && poll_interval="$_pi"
+        fi
+        local threshold=$(( poll_interval * 2 ))
+        local last_modified
+        last_modified=$(python3 -c "import os,time; print(int(time.time()-os.path.getmtime('$scanner_log')))" 2>/dev/null || echo "9999")
+        if [ "$last_modified" -le "$threshold" ] 2>/dev/null; then
+            echo "  [ok]  scanner last tick ${last_modified}s ago (within ${threshold}s window)"
+        else
+            echo "  [!!]  scanner last tick ${last_modified}s ago — expected within ${threshold}s"
+            all_ok=false
+        fi
+    elif $scanner_running; then
+        echo "  [--]  scanner log not found yet (may not have ticked)"
+    fi
+
+    # 7. Registered projects accessible
+    if [ -f "$PROJECTS_YAML" ] && command -v python3 >/dev/null 2>&1; then
+        local slugs
+        slugs=$(python3 -c "
+import yaml, sys
+with open('$PROJECTS_YAML') as f:
+    data = yaml.safe_load(f) or {}
+for p in (data.get('projects') or []):
+    print(p.get('slug','') + '|' + p.get('repo','') + '|' + p.get('root',''))
+" 2>/dev/null || true)
+        if [ -z "$slugs" ]; then
+            echo "  [--]  no projects registered"
+        else
+            while IFS='|' read -r _slug _repo _root; do
+                [ -z "$_slug" ] && continue
+                if [ -n "$_root" ] && [ ! -d "$_root" ]; then
+                    echo "  [!!]  project '$_slug': root '$_root' not accessible"
+                    all_ok=false
+                elif [ -n "$_repo" ] && ! gh repo view "$_repo" >/dev/null 2>&1; then
+                    echo "  [!!]  project '$_slug': repo '$_repo' not accessible via gh"
+                    all_ok=false
+                else
+                    echo "  [ok]  project '$_slug' (${_repo:-?})"
+                fi
+            done <<< "$slugs"
+        fi
+    else
+        echo "  [--]  config/projects.yaml not found — no projects registered"
+    fi
+
+    echo "─────────────────────────────────────────────────"
+    if $all_ok; then
+        echo "  All checks passed."
+        return 0
+    else
+        echo "  One or more checks failed. See above."
+        return 1
+    fi
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Smoke test — kick scanner once after project add, wait for slug in output
+# ─────────────────────────────────────────────────────────────────────────────
+
+smoke_test_scanner() {
+    local slug="$1"
+    local log_dir
+    log_dir=$(bootstrap_resolve_log_dir)
+    local scanner_log="$log_dir/loop-scanner.log"
+    local scan_script="$LOOP_ROOT/scanner/scanner.sh"
+    local timeout_secs=30
+
+    echo
+    echo "[smoke] Kicking scanner once to verify it picks up '$slug'..."
+
+    # Run one scan in background, capturing output
+    local scan_out="$log_dir/smoke-test-$slug.log"
+    mkdir -p "$log_dir"
+
+    if [ ! -x "$scan_script" ]; then
+        echo "[smoke] Scanner not executable — skipping smoke test"
+        return 0
+    fi
+
+    "$scan_script" --once >"$scan_out" 2>&1 &
+    local scan_pid=$!
+
+    local elapsed=0
+    local found=false
+    while [ $elapsed -lt $timeout_secs ]; do
+        if grep -q "$slug" "$scan_out" 2>/dev/null; then
+            found=true
+            break
+        fi
+        if ! kill -0 $scan_pid 2>/dev/null; then
+            # scanner finished — check one final time
+            grep -q "$slug" "$scan_out" 2>/dev/null && found=true
+            break
+        fi
+        sleep 2
+        elapsed=$(( elapsed + 2 ))
+    done
+
+    # Clean up background process if still running
+    kill $scan_pid 2>/dev/null || true
+    wait $scan_pid 2>/dev/null || true
+
+    if $found; then
+        local now
+        now=$(date '+%H:%M:%S')
+        echo "[smoke] Scanner picked up '$slug' at $now"
+    else
+        echo "[smoke] WARNING: scanner did not pick up '$slug' in ${timeout_secs}s"
+        echo "        See $scanner_log"
+    fi
+    rm -f "$scan_out"
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+
+STATUS_MODE=false
 
 for arg in "$@"; do
     case "$arg" in
@@ -330,9 +618,15 @@ for arg in "$@"; do
             exit 0
             ;;
         -h|--help) sed -n '1,20p' "$0"; exit 0 ;;
+        status) STATUS_MODE=true ;;
         *) PROJECT_PATH="$arg" ;;
     esac
 done
+
+if $STATUS_MODE; then
+    status_check
+    exit $?
+fi
 
 if $BOOTSTRAP_MODE; then
     bootstrap_pipeline
@@ -341,6 +635,8 @@ fi
 
 if [ -z "$PROJECT_PATH" ]; then
     echo "Usage: $0 <project-path> [--auto]" >&2
+    echo "       $0 --bootstrap" >&2
+    echo "       $0 status" >&2
     exit 2
 fi
 PROJECT_PATH="$(cd "$PROJECT_PATH" && pwd)"
@@ -361,6 +657,14 @@ DEFAULT_BRANCH=$(git -C "$PROJECT_PATH" symbolic-ref refs/remotes/origin/HEAD 2>
 DEFAULT_SLUG=$(basename "$PROJECT_PATH" | tr '[:upper:]' '[:lower:]' | tr ' ' '-')
 DEFAULT_PREFIX=$(echo "$DEFAULT_SLUG" | tr '[:lower:]' '[:upper:]' | cut -c1-3)
 DEFAULT_NAME=$(basename "$PROJECT_PATH")
+
+# --auto is now the default when git root is detectable; fall back to interactive
+# if auto-detect fails (e.g., git remote not found).
+if ! $AUTO_MODE; then
+    if git -C "$PROJECT_PATH" remote get-url origin >/dev/null 2>&1; then
+        AUTO_MODE=true
+    fi
+fi
 
 if $AUTO_MODE; then
     SLUG="$DEFAULT_SLUG"
@@ -632,6 +936,12 @@ if [ -f "$SCANNER_LOCK" ]; then
 else
     echo "[scanner] not running — will pick up $SLUG when it starts"
 fi
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. Smoke test — kick scanner and verify it sees the new slug
+# ─────────────────────────────────────────────────────────────────────────────
+
+smoke_test_scanner "$SLUG"
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Done
