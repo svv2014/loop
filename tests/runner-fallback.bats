@@ -155,3 +155,26 @@ SH
     grep -q "claude"            "$ATTEMPTS_LOG"
     grep -q "custom-local-model" "$ATTEMPTS_LOG"
 }
+
+@test "claude branch never passes --cwd flag (regression of LOOP-29 / LOOP-152)" {
+    # Stub records full argv so we can assert no --cwd is passed.
+    cat > "$STUB_DIR/claude" <<'STUB'
+#!/usr/bin/env bash
+echo "claude $*" >> "$ATTEMPTS_LOG"
+exit 0
+STUB
+    chmod +x "$STUB_DIR/claude"
+
+    export LOOP_AGENT="claude"
+    unset _PROJECT_FALLBACK
+
+    run loop_run_agent "do something" "$BATS_TMPDIR"
+    [ "$status" -eq 0 ]
+    ! grep -q -- "--cwd" "$ATTEMPTS_LOG"
+
+    rm -f "$ATTEMPTS_LOG"
+
+    run loop_run_senior_agent "do something" "$BATS_TMPDIR"
+    [ "$status" -eq 0 ]
+    ! grep -q -- "--cwd" "$ATTEMPTS_LOG"
+}
