@@ -50,7 +50,11 @@ Classify the outcome as exactly one of:
 Then compute per-role points:
 - dev role:      clean=+3, rework=-1, qa-fail-rework=-2, blocked=0
 - reviewer role: clean=+1, rework=0, qa-fail-rework=-1, blocked=0
-- qa role:       clean=+1, rework=0, qa-fail-rework=+1, blocked=0
+- qa role:       clean=+3, rework=0, qa-fail-rework=+3 if the QA comment shows unmet acceptance criteria (NOT_FOUND or PARTIAL) else +1, blocked=0
+
+Note: for the qa role, check PR comments for a "### QA verification" block. If that block contains
+NOT_FOUND or PARTIAL criteria, the qa-fail-rework outcome is a valid catch worth +3.
+If the QA comment is absent or shows only validation failures (no AC analysis), award +1.
 
 Output ONLY valid JSON with these exact keys (no markdown, no explanation):
 {
