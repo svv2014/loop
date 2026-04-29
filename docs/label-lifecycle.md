@@ -44,7 +44,7 @@ in-review
   │                   │ qa-handler validates (or QA workflow for Loop repo)
   │                   ├── pass ──► approved (qa-pass) ──► merge-handler ──► merged + branch deleted
   │                   │
-  │                   └── fail ──► qa-failed (qa-fail) (requires human or re-dev)
+  │                   └── fail ──► qa-fail (qa-failed) (requires human or re-dev)
   │
   └── reject ──► needs-rework (changes-requested) (back to dev-handler with feedback)
 ```
@@ -69,7 +69,18 @@ Both the new canonical name and its deprecated alias trigger the same event.
 - `done` — issue closed, PR merged. No further events.
 - `blocked` — needs human attention. No automation until a human removes the label.
 - `needs-clarification` — waiting on issue author.
-- `qa-failed` (`qa-fail`) — waiting on human review of the QA failure.
+- `qa-fail` (`qa-failed`) — canonical failure label; waiting on human review. `qa-failed` is the deprecated alias.
+
+## QA handler — four-phase smart verification
+
+The QA handler (`scripts/qa-handler.sh`) performs four phases before reaching a verdict:
+
+1. **AC verification** — reads the issue body, checks each acceptance criterion against the diff
+2. **Targeted test creation** — writes tests for any AC that lacks coverage
+3. **Module regression** — runs existing tests for all modules touched by the PR
+4. **`validation_cmd`** — runs the project's configured validation command (e.g. `npm test`, `make`)
+
+The agent posts a structured `### QA verification` comment on the PR summarising each phase, then applies either `qa-pass` or `qa-fail`. Labels are resolved via `loop_label_for` so per-project overrides are respected.
 
 ## Loop repo (dogfooding)
 

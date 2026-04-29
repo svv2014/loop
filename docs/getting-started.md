@@ -4,16 +4,18 @@
 
 - `gh` CLI authenticated: `gh auth status`
 - `python3` with `pyyaml`: `python3 -c "import yaml"`
-- `claude` CLI installed: `claude --version`
+- One of: `claude`, `codex`, `gemini`, or `aider` CLI installed and on PATH
 - A GitHub repo you want to automate
 
-## Step 1 — Clone and configure
+## Step 1 — Clone and bootstrap
+
+Bootstrap auto-detects your agent and writes `loop.env`. No manual editing
+required for the happy path.
 
 ```bash
 git clone https://github.com/svv2014/loop.git
 cd loop
-cp loop.env.example loop.env
-# Edit loop.env — set log directory and optional integrations
+./install.sh --bootstrap
 ```
 
 ## Step 2 — Add your project
@@ -42,24 +44,19 @@ The dev handler instructs the agent to read this file before every task.
 
 ## Step 4 — Start the scanner
 
-```bash
-# Foreground (testing)
-bash scanner/scanner.sh
-
-# Cron (production)
-echo "*/5 * * * * $(pwd)/scanner/scanner.sh --once" | crontab -
-
-# Optional: reconciler (fixes stuck states)
-echo "*/15 * * * * $(pwd)/scanner/reconciler.sh" | crontab -
-```
-
-## Step 5 — Dry run
+`--bootstrap` registers the scanner and reconciler automatically (launchd
+on macOS, cron on Linux). To start them manually or for testing:
 
 ```bash
+# Foreground (testing / dry-run)
 bash scanner/scanner.sh --dry-run
-```
 
-Shows every event that would be emitted without acting.
+# macOS — restart launchd service
+launchctl kickstart -k gui/$(id -u)/com.user.loop-scanner
+
+# Linux — restart cron wrapper or systemd unit
+systemctl --user restart loop-scanner
+```
 
 ## Step 6 — Create an issue
 

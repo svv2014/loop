@@ -6,11 +6,12 @@ Get from zero to your first merged PR.
 
 - `gh` CLI authenticated (`gh auth status`)
 - `python3` with `pyyaml` (`pip3 install pyyaml`)
-- `claude` CLI installed and authenticated
+- One of: `claude`, `codex`, `gemini`, or `aider` CLI installed and on PATH
 
 ## Step 1 — Clone and bootstrap
 
-Clone Loop and run the one-time setup.
+Clone Loop and run the one-time setup. Bootstrap auto-detects your agent
+and writes `loop.env` — no manual editing required for the happy path.
 
 ```bash
 git clone https://github.com/svv2014/loop.git
@@ -18,21 +19,19 @@ cd loop
 ./install.sh --bootstrap
 ```
 
-## Step 2 — Configure loop.env for Claude
+## Step 2 — Add a GitHub project
 
-Open `loop.env` (created by bootstrap) and set:
-
-```bash
-LOOP_AGENT=claude
-LOOP_AGENT_MODEL=sonnet
-```
-
-## Step 3 — Add a GitHub project
-
-Register your repo with the pipeline.
+Register your repo. This runs a smoke test to confirm the scanner picks
+up the project.
 
 ```bash
 ./install.sh /path/to/your-project
+```
+
+## Step 3 — Check pipeline health
+
+```bash
+./install.sh status
 ```
 
 ## Step 4 — Label an issue

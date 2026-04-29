@@ -120,8 +120,8 @@ systemctl enable --now loop-scanner
 # Interactive (prompts for repo, branch, validation commands)
 ./install.sh /path/to/your/project
 
-# Non-interactive (auto-detects from git remote)
-./install.sh --auto /path/to/your/project
+# Non-interactive (auto-detects everything from git remote)
+./install.sh /path/to/your/project --auto
 ```
 
 `install.sh` will:
@@ -129,24 +129,28 @@ systemctl enable --now loop-scanner
 2. Create Loop labels on the GitHub repo
 3. Enable auto-merge and delete-branch-on-merge
 4. Copy issue/PR templates into the repo
+5. Run a smoke test confirming the scanner picks up the new project
 
 ---
 
 ## 5. Verify the Pipeline
 
 ```bash
-# 1. Confirm the scanner can read your project config
-bash scanner/scanner.sh --once
+# 1. Overall health (scanner running, gh auth, projects registered)
+./install.sh status
 
-# 2. Create a test issue
+# 2. Dry-run: confirm the scanner can read your project config
+bash scanner/scanner.sh --dry-run
+
+# 3. Create a test issue
 gh issue create --repo owner/your-repo \
     --title "Test Loop pipeline" \
     --label dev
 
-# 3. Watch the logs
+# 4. Watch the logs
 tail -f /tmp/loop-scanner.log
 
-# 4. Confirm the issue transitions through the label lifecycle:
+# 5. Confirm the issue transitions through the label lifecycle:
 #    dev → in-progress → review-pending → in-review → ready-for-qa → qa-pass → done
 ```
 

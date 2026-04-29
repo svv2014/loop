@@ -77,8 +77,8 @@ actual work.
 | `dev-handler.sh` | `dev` (or workflow-equivalent) on issue | Implements in worktree, opens PR, labels `needs-review` |
 | `review-handler.sh` | `needs-review` on PR | AI reviewer reads diff, approves or requests changes |
 | `dev-rework-handler.sh` | `needs-rework` or `qa-fail` on PR | Re-runs dev agent with rework context |
-| `qa-handler.sh` | `needs-qa` on PR | Runs project's `validation_cmd`; passes/fails |
-| `merge-handler.sh` | `qa-pass` on PR | Squash-merges, closes linked issue, records bounty |
+| `qa-handler.sh` | `needs-qa` on PR | Four-phase smart QA: AC verification, targeted test creation, module regression, `validation_cmd`; posts structured `### QA verification` comment; applies `qa-pass` or `qa-fail` |
+| `merge-handler.sh` | `qa-pass` on PR | Squash-merges, closes linked issue, records bounty; if PR carries `release-pr` label, tags the merged commit and publishes a GitHub release |
 
 Each handler also has a short-name alias (`builder.sh`, `planner.sh`,
 `reviewer.sh`, `reviser.sh`, `tester.sh`, `merger.sh`) that is a thin
@@ -233,6 +233,7 @@ loop/
 │   ├── reviewer.sh                 thin alias → review-handler.sh
 │   ├── tester.sh                   thin alias → qa-handler.sh
 │   ├── merger.sh                   thin alias → merge-handler.sh
+│   ├── auto-release-pr.sh          open/update a "chore: release vX.Y.Z" PR; merge-handler tags + publishes
 │   ├── adopt.sh                    heuristic label-mapping for existing repos
 │   ├── judge.sh                    AI judge — runs after merge
 │   ├── bounty-board.sh             leaderboard CLI
