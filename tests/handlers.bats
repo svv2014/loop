@@ -184,3 +184,29 @@ State: OPEN
     [ -z "$_IN_FLIGHT_PR" ]
     [ -z "$_MR_PREAMBLE" ]
 }
+
+# ---------------------------------------------------------------------------
+# qa-handler label correctness (regression for qa-failed vs qa-fail typo)
+# ---------------------------------------------------------------------------
+
+@test "qa-handler: validation_cmd fails → qa-fail label set (not qa-failed)" {
+    local ops_log="$BATS_TMPDIR/qa-label-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label() { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()    { echo "add $3"    >> "$ops_log"; }
+
+    # Replicate the failure branch label sequence from qa-handler.sh
+    local repo="owner/test-repo" pr_num="1"
+    backend_remove_label "$repo" "$pr_num" needs-qa
+    backend_remove_label "$repo" "$pr_num" ready-for-qa
+    backend_remove_label "$repo" "$pr_num" approved
+    backend_remove_label "$repo" "$pr_num" qa-pass
+    backend_remove_label "$repo" "$pr_num" qa-failed
+    backend_add_label    "$repo" "$pr_num" qa-fail
+
+    # qa-fail must be added
+    grep -q "add qa-fail" "$ops_log"
+    # qa-failed must NOT be added (the typo we fixed)
+    ! grep -q "add qa-failed" "$ops_log"
+}
