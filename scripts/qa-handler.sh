@@ -5,7 +5,7 @@
 # Event payload: {"slug","repo","pr_number","pr_title","pr_url"}
 #
 # Flow: run qa.validation_cmd if configured — on zero exit, label 'qa-pass';
-# on non-zero, label 'qa-failed'. If no validation_cmd is configured for the
+# on non-zero, label 'qa-fail'. If no validation_cmd is configured for the
 # project, auto-pass (trust the review handler's decision).
 
 set -euo pipefail
@@ -105,8 +105,8 @@ else
     backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
     backend_remove_label "$REPO" "$PR_NUM" approved
     backend_remove_label "$REPO" "$PR_NUM" qa-pass
-    backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_add_label "$REPO" "$PR_NUM" qa-failed
+    backend_remove_label "$REPO" "$PR_NUM" qa-failed
+    backend_add_label "$REPO" "$PR_NUM" qa-fail
     backend_comment_pr "$REPO" "$PR_NUM" \
         "QA validation failed. See loop-qa-handler.log for details."
     exit 1

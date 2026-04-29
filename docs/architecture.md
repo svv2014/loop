@@ -74,7 +74,7 @@ actual work.
 | Handler | Trigger | What it does |
 |---|---|---|
 | `po-handler.sh` | `po-review` on issue | Expands rough idea into structured spec; relabels for dev |
-| `dev-handler.sh` | `plan` (or workflow-equivalent) on issue | Implements in worktree, opens PR, labels `needs-review` |
+| `dev-handler.sh` | `dev` (or workflow-equivalent) on issue | Implements in worktree, opens PR, labels `needs-review` |
 | `review-handler.sh` | `needs-review` on PR | AI reviewer reads diff, approves or requests changes |
 | `dev-rework-handler.sh` | `needs-rework` or `qa-fail` on PR | Re-runs dev agent with rework context |
 | `qa-handler.sh` | `needs-qa` on PR | Runs project's `validation_cmd`; passes/fails |
@@ -98,10 +98,10 @@ Every 15 minutes, sweeps for drift the scanner doesn't self-correct:
 
 - Duplicate PRs (same `Closes #N`) — closes the older one
 - Orphaned `needs-review` issues (PR was closed without merging) —
-  resets to `plan`
+  resets to `dev`
 - Stale PRs (>24h with no movement) — notification only
 - Dependency unblock — parses `## Dependencies` section, re-labels
-  to `plan` once all referenced issues are closed
+  to `dev` once all referenced issues are closed
 - Missing-label routing — issues with no pipeline label get `po-review`
 
 ### Lock layer (`lib/lock.sh`)
@@ -139,12 +139,12 @@ to look up canonical-vs-actual label names.
                                                  Time →
 operator
   │
-  └─ labels issue #42 "plan"   ····························
+  └─ labels issue #42 "dev"   ····························
                                                             │
   scanner (next tick, ≤5 min)   ◀──────────────────────────┤
   │                                                         │
   ├─ load workflow for project ··                           │
-  ├─ poll issues with trigger_label="plan"                  │
+  ├─ poll issues with trigger_label="dev"                  │
   └─ emit loop.dev_issue PR#42                              │
                                                             │
   dev-handler.sh                ◀──────────────────────────┤
@@ -206,7 +206,7 @@ loop/
 │   └── workflows/
 │       ├── README.md               schema docs
 │       ├── default.yaml            new-repo recommended workflow
-│       ├── docs-only.yaml          documentation-only pipeline (plan→review→done)
+│       ├── docs-only.yaml          documentation-only pipeline (dev→review→done)
 │       └── minimal.yaml            solo prototype
 ├── lib/
 │   ├── env.sh                      loads loop.env, sets PATH, sources version + workflow

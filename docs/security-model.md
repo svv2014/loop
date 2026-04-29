@@ -29,7 +29,7 @@ Untrusted at code-execution level:
 ### Gate 1 — pipeline activation requires labels (collaborator-only)
 
 The scanner only acts on issues/PRs carrying a workflow trigger label
-(`plan`, `needs-review`, `needs-qa`, etc.). GitHub permissions enforce
+(`dev`, `needs-review`, `needs-qa`, etc.). GitHub permissions enforce
 that **only repo collaborators can apply labels**. A drive-by user can
 open an issue but cannot label it; the scanner will ignore it.
 
@@ -100,7 +100,7 @@ and you need to push a hotfix, follow the regular flow.
 
 ### Agent autonomy surface
 
-- **Trigger:** Issue labeled `plan`
+- **Trigger:** Issue labeled `dev`
 - **Sensitive operation:** Agent CLI runs with operator shell access
 - **Defense:** Agent runs in an isolated git worktree (file scope), but
   shell access is full. Same trust posture as Claude Code or any
