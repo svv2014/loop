@@ -204,7 +204,11 @@ if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
 fi
 
 # Resolve workflow-specific labels for this project (default vs current).
-REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
+_REVIEW_LABEL=$(loop_label_for "$SLUG" "needs-review")
+_REWORK_LABEL=$(loop_label_for "$SLUG" "needs-rework")
+_QA_LABEL=$(loop_label_for "$SLUG" "needs-qa")
+_QA_PASS_LABEL=$(loop_label_for "$SLUG" "qa-pass")
+_QA_FAIL_LABEL=$(loop_label_for "$SLUG" "qa-fail")
 
 if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
     _REWORK_TRIGGER="a QA failure"
@@ -266,9 +270,9 @@ ${_VALIDATION_STEP}
 7. Post a PR comment summarizing what you changed in response:
 ${_STEP7}
 8. Swap labels -- this is MANDATORY to signal success to the pipeline:
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-rework --remove-label needs-rework --remove-label changes-requested --remove-label qa-fail --remove-label qa-failed --add-label ${REVIEW_LABEL}
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-rework --remove-label ${_REWORK_LABEL} --remove-label ${_QA_FAIL_LABEL} --add-label ${_REVIEW_LABEL}
 
-IMPORTANT: The PR MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clarification'/'blocked' if appropriate). Verify with:
+IMPORTANT: The PR MUST end this run with label '${_REVIEW_LABEL}' (or 'needs-clarification'/'blocked' if appropriate). Verify with:
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
 
 If the feedback is unclear or requires architectural input, add label 'needs-clarification' and comment on the PR instead of guessing.
@@ -295,8 +299,8 @@ if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; the
     backend_remove_label "$REPO" "$PR_NUM" in-rework needs-rework changes-requested qa-fail qa-failed
     # Belt-and-braces: if agent forgot step 8, ensure PR has a progression label.
     if ! backend_pr_has_any_label "$REPO" "$PR_NUM" review-pending needs-review needs-clarification blocked 'done'; then
-        log "WARN: PR #$PR_NUM has no progression label after rework agent — adding '${REVIEW_LABEL}'"
-        backend_add_label "$REPO" "$PR_NUM" "$REVIEW_LABEL"
+        log "WARN: PR #$PR_NUM has no progression label after rework agent — adding '${_REVIEW_LABEL}'"
+        backend_add_label "$REPO" "$PR_NUM" "$_REVIEW_LABEL"
     fi
     cleanup_worktree
 else

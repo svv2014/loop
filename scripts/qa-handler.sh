@@ -46,6 +46,10 @@ fi
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
+# Resolve workflow-specific labels for this project.
+_QA_PASS_LABEL=$(loop_label_for "$SLUG" "qa-pass")
+_QA_FAIL_LABEL=$(loop_label_for "$SLUG" "qa-fail")
+
 # Per-project lock — only one Loop handler at a time per repo.
 source "$LOOP_ROOT/lib/lock.sh"
 loop_acquire_lock "$SLUG" || { log "ERROR: couldn't acquire lock for $SLUG within 1hr — exiting"; exit 1; }
@@ -79,8 +83,8 @@ if [ -z "${QA_VALIDATION_CMD:-}" ]; then
     backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
     backend_remove_label "$REPO" "$PR_NUM" qa-failed
     backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_remove_label "$REPO" "$PR_NUM" qa-pass
-    backend_add_label "$REPO" "$PR_NUM" qa-pass
+    backend_remove_label "$REPO" "$PR_NUM" "$_QA_PASS_LABEL"
+    backend_add_label "$REPO" "$PR_NUM" "$_QA_PASS_LABEL"
     exit 0
 fi
 
@@ -96,7 +100,7 @@ if (cd "$ROOT" && timeout "$QA_TIMEOUT" bash -c "$QA_VALIDATION_CMD") 2>&1 | tee
     backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
     backend_remove_label "$REPO" "$PR_NUM" qa-failed
     backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_add_label "$REPO" "$PR_NUM" qa-pass
+    backend_add_label "$REPO" "$PR_NUM" "$_QA_PASS_LABEL"
 else
     log "qa failed for PR #$PR_NUM"
     bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
@@ -106,7 +110,8 @@ else
     backend_remove_label "$REPO" "$PR_NUM" approved
     backend_remove_label "$REPO" "$PR_NUM" qa-pass
     backend_remove_label "$REPO" "$PR_NUM" qa-failed
-    backend_add_label "$REPO" "$PR_NUM" qa-fail
+    backend_remove_label "$REPO" "$PR_NUM" qa-fail
+    backend_add_label "$REPO" "$PR_NUM" "$_QA_FAIL_LABEL"
     backend_comment_pr "$REPO" "$PR_NUM" \
         "QA validation failed. See loop-qa-handler.log for details."
     exit 1
