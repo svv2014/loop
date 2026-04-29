@@ -44,7 +44,7 @@ _qa_has_ac() {
     local body="$1"
     printf '%s' "$body" | python3 -c "
 import sys, re
-print('yes' if re.search(r'^##\s+Acceptance Criteria', sys.stdin.read(), re.MULTILINE) else 'no')
+print('yes' if re.search(r'^##\s+Acceptance Criteria', sys.stdin.read(), re.MULTILINE | re.IGNORECASE) else 'no')
 "
 }
 
@@ -54,7 +54,7 @@ _qa_parse_acs() {
     printf '%s' "$body" | python3 -c "
 import sys, re
 body = sys.stdin.read()
-m = re.search(r'^##\s+Acceptance Criteria\s*\n(.*?)(?=\n##\s|\Z)', body, re.DOTALL | re.MULTILINE)
+m = re.search(r'^##\s+Acceptance Criteria\s*\n(.*?)(?=\n##\s|\Z)', body, re.DOTALL | re.MULTILINE | re.IGNORECASE)
 if not m:
     sys.exit(0)
 items = []
