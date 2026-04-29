@@ -195,7 +195,7 @@ _extract_ac_list() {
     ISSUE_BODY="$body" python3 -c "
 import os, re
 body = os.environ.get('ISSUE_BODY', '').strip()
-match = re.search(r'(?m)^\#{1,3}\s+Acceptance Criteria\s*$', body)
+match = re.search(r'(?m)^\#{1,3}\s+Acceptance Criteria\s*$', body, re.IGNORECASE)
 if not match:
     print('__NO_AC_SECTION__')
 else:
@@ -256,23 +256,108 @@ BODY
     [ "$result" = "__NO_AC_SECTION__" ]
 }
 
-@test "qa-handler prompt: AC list injected when ACs found" {
-    local ac_list
-    ac_list="$(printf '1. First criterion\n2. Second criterion')"
+@test "qa-handler AC extraction: case-insensitive heading — ACCEPTANCE CRITERIA uppercase matches" {
+    local body
+    body="$(cat <<'BODY'
+## ACCEPTANCE CRITERIA
+- [ ] Uppercase heading criterion
 
-    # Simulate how the prompt is assembled when ACs are present
+## Notes
+Nothing else.
+BODY
+)"
+    local result
+    result=$(_extract_ac_list "$body")
+
+    [[ "$result" != "__NO_AC_SECTION__" ]]
+    echo "$result" | grep -q "1\. Uppercase heading criterion"
+}
+
+@test "qa-handler AC extraction: case-insensitive heading — mixed case 'Acceptance criteria' matches" {
+    local body
+    body="$(cat <<'BODY'
+## Acceptance criteria
+- [ ] Mixed-case heading criterion
+
+## Notes
+Nothing else.
+BODY
+)"
+    local result
+    result=$(_extract_ac_list "$body")
+
+    [[ "$result" != "__NO_AC_SECTION__" ]]
+    echo "$result" | grep -q "1\. Mixed-case heading criterion"
+}
+
+@test "qa-handler linked issue: Fixes #N pattern extracted correctly" {
+    # Test that the grep pattern used in qa-handler matches 'Fixes #N'
+    local pr_body="This PR implements the feature.\n\nFixes #99"
+    local issue_num
+    issue_num=$(printf '%b' "$pr_body" \
+        | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "")
+    [ "$issue_num" = "99" ]
+}
+
+@test "qa-handler linked issue: Resolves #N pattern extracted correctly" {
+    local pr_body="Resolves #123 — implements feature X"
+    local issue_num
+    issue_num=$(printf '%b' "$pr_body" \
+        | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "")
+    [ "$issue_num" = "123" ]
+}
+
+@test "qa-handler linked issue: no link keyword — issue num is empty" {
+    local pr_body="This PR does something without a linked issue"
+    local issue_num
+    issue_num=$(printf '%b' "$pr_body" \
+        | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "")
+    [ -z "$issue_num" ]
+}
+
+@test "qa-handler prompt: AC section built from _extract_ac_list output when issue linked" {
+    # Mock LINKED_ISSUE_NUM and ISSUE_BODY, verify AC_SECTION is assembled correctly
+    local LINKED_ISSUE_NUM="42"
+    local body
+    body="$(cat <<'BODY'
+## Acceptance Criteria
+- [ ] First criterion
+- [x] Second criterion
+BODY
+)"
+    local ac_list
+    ac_list=$(_extract_ac_list "$body")
+
+    # ac_list must not be sentinel
+    [[ "$ac_list" != "__NO_AC_SECTION__" ]]
+
+    # assemble the AC section as qa-handler does
     local ac_section
-    ac_section="## Acceptance Criteria (from issue #42)
+    ac_section="## Acceptance Criteria (from issue #${LINKED_ISSUE_NUM})
 
 ${ac_list}"
 
+    [[ "$ac_section" == *"issue #42"* ]]
     [[ "$ac_section" == *"1. First criterion"* ]]
     [[ "$ac_section" == *"2. Second criterion"* ]]
-    [[ "$ac_section" == *"issue #42"* ]]
 }
 
-@test "qa-handler prompt: fallback note when no ACs found" {
-    local ac_section="(No acceptance criteria found — falling back to validation_cmd only)"
+@test "qa-handler prompt: fallback path when no AC section found" {
+    local body="## Objective
+No acceptance criteria here."
+    local ac_list
+    ac_list=$(_extract_ac_list "$body")
+
+    [ "$ac_list" = "__NO_AC_SECTION__" ]
+
+    # Replicate label-fallback path from qa-handler.sh
+    local ac_section ac_instruction
+    if [ "$ac_list" = "__NO_AC_SECTION__" ]; then
+        ac_section="(No acceptance criteria found — falling back to validation_cmd only)"
+        ac_instruction=""
+    fi
+
     [[ "$ac_section" == *"No acceptance criteria found"* ]]
     [[ "$ac_section" == *"falling back to validation_cmd only"* ]]
+    [ -z "$ac_instruction" ]
 }

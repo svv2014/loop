@@ -96,7 +96,7 @@ fi
 AC_LIST=$(ISSUE_BODY="$ISSUE_BODY" python3 -c "
 import os, re
 body = os.environ.get('ISSUE_BODY', '').strip()
-match = re.search(r'(?m)^\#{1,3}\s+Acceptance Criteria\s*$', body)
+match = re.search(r'(?m)^\#{1,3}\s+Acceptance Criteria\s*$', body, re.IGNORECASE)
 if not match:
     print('__NO_AC_SECTION__')
 else:
@@ -132,14 +132,14 @@ fi
 
 QA_TIMEOUT="${QA_TIMEOUT_SECONDS:-600}"
 if [ -n "${QA_VALIDATION_CMD:-}" ]; then
-    VALIDATION_SECTION="## Phase 4: validation_cmd
+    VALIDATION_SECTION="## Phase 3: validation_cmd
 
 Run the project validation command (timeout ${QA_TIMEOUT}s):
   cd ${ROOT} && timeout ${QA_TIMEOUT} bash -c \"${QA_VALIDATION_CMD}\"
 
 If this exits non-zero, the verdict must be qa-fail even if all ACs are VERIFIED."
 else
-    VALIDATION_SECTION="## Phase 4: validation_cmd
+    VALIDATION_SECTION="## Phase 3: validation_cmd
 
 No validation_cmd is configured for this project. Skip this phase."
 fi
@@ -160,22 +160,22 @@ You are reviewing pull request #${PR_NUM} for QA.
 
 Your job — do all of these in sequence:
 
-0. Check PR state before proceeding:
+Phase 0: Check PR state before proceeding:
    gh pr view ${PR_NUM} --repo ${REPO} --json state,merged
    If state=MERGED or state=CLOSED: remove labels needs-qa and ready-for-qa, leave a brief comment, and stop.
 
-1. Fetch the PR diff:
+Phase 1: Fetch the PR diff:
    gh pr diff ${PR_NUM} --repo ${REPO}
 
-2. Evaluate acceptance criteria:
+Phase 2: Evaluate acceptance criteria:
 
 ${AC_SECTION}
 
 ${AC_INSTRUCTION}
 
-3. ${VALIDATION_SECTION}
+Phase 3: ${VALIDATION_SECTION}
 
-4. Post a structured comment on the PR using this template:
+Phase 4: Post a structured comment on the PR using this template:
 
 \`\`\`
 ### QA verification — issue #${LINKED_ISSUE_NUM:-N/A}
@@ -183,7 +183,7 @@ ${AC_INSTRUCTION}
 **Phase 1: Acceptance criteria**
 <numbered AC results with VERIFIED/NOT_FOUND/PARTIAL and rationale>
 
-**Phase 4: validation_cmd**
+**Phase 3: validation_cmd**
 <result of running validation_cmd, or "skipped — not configured">
 
 **Verdict:** <qa-pass or qa-fail — one-line reason>
@@ -192,7 +192,7 @@ ${AC_INSTRUCTION}
    Post the comment:
    gh pr comment ${PR_NUM} --repo ${REPO} --body '<the structured comment>'
 
-5. Apply labels based on the verdict:
+Phase 5: Apply labels based on the verdict:
 
    If qa-pass (all ACs VERIFIED and validation_cmd passed or not configured):
      gh pr edit ${PR_NUM} --repo ${REPO} --remove-label needs-qa --remove-label ready-for-qa --remove-label qa-failed --remove-label qa-fail --remove-label qa-pass --add-label qa-pass
