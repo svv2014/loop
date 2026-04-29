@@ -27,6 +27,89 @@ source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
 source "$LOOP_ROOT/lib/cli-hint.sh"
 
+# ── structured-comment helpers ────────────────────────────────────────────
+
+# Print the first Closes/Fixes/Resolves #N issue number from PR body, or empty string.
+_qa_linked_issue() {
+    local pr_body="$1"
+    printf '%s' "$pr_body" | python3 -c "
+import sys, re
+m = re.search(r'(?i)(closes|fixes|resolves)\s+#(\d+)', sys.stdin.read())
+print(m.group(2) if m else '')
+"
+}
+
+# Print 'yes' if issue body has a ## Acceptance Criteria section.
+_qa_has_ac() {
+    local body="$1"
+    printf '%s' "$body" | python3 -c "
+import sys, re
+print('yes' if re.search(r'^##\s+Acceptance Criteria', sys.stdin.read(), re.MULTILINE) else 'no')
+"
+}
+
+# Print numbered AC items extracted from ## Acceptance Criteria section.
+_qa_parse_acs() {
+    local body="$1"
+    printf '%s' "$body" | python3 -c "
+import sys, re
+body = sys.stdin.read()
+m = re.search(r'^##\s+Acceptance Criteria\s*\n(.*?)(?=\n##\s|\Z)', body, re.DOTALL | re.MULTILINE)
+if not m:
+    sys.exit(0)
+items = []
+for line in m.group(1).splitlines():
+    stripped = re.sub(r'^\s*-\s*\[[ xX]\]\s*', '', line)
+    if stripped != line:
+        items.append(stripped.strip())
+for i, item in enumerate(items, 1):
+    print(str(i) + '. ' + item)
+"
+}
+
+# Build and print the structured QA PR comment.
+# Args: issue_num verdict validation_cmd ac_list has_ac
+_qa_build_comment() {
+    local issue_num="$1" verdict="$2" validation_cmd="$3" ac_list="$4" has_ac="$5"
+
+    local phase1_body
+    if [ "$has_ac" = "no" ] || [ -z "$ac_list" ]; then
+        phase1_body="No acceptance criteria found — validation_cmd only"
+    else
+        phase1_body=""
+        local n=1
+        while IFS= read -r item; do
+            [ -z "$item" ] && continue
+            local ac_text="${item#*. }"
+            phase1_body="${phase1_body}${n}. ${ac_text}
+   _Based on validation_cmd result below._
+"
+            n=$((n + 1))
+        done <<< "$ac_list"
+    fi
+
+    local phase4_body
+    if [ -n "$validation_cmd" ]; then
+        if [ "$verdict" = "qa-pass" ]; then
+            phase4_body="- \`${validation_cmd}\` → [✓ pass]"
+        else
+            phase4_body="- \`${validation_cmd}\` → [✗ fail]"
+        fi
+    else
+        phase4_body="- (no validation_cmd configured — Phase 4 skipped)"
+    fi
+
+    local verdict_line
+    if [ "$verdict" = "qa-pass" ]; then
+        verdict_line="qa-pass"
+    else
+        verdict_line="qa-fail — validation command failed"
+    fi
+
+    printf '### QA verification — issue #%s\n\n**Phase 1: Acceptance criteria**\n%s\n**Phase 4: validation_cmd**\n%s\n\n**Verdict:** %s\n' \
+        "$issue_num" "$phase1_body" "$phase4_body" "$verdict_line"
+}
+
 LOG_FILE="${LOOP_LOG_DIR}/loop-qa-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [qa-handler] $*" | tee -a "$LOG_FILE"; }
 
@@ -82,9 +165,9 @@ loop_notify "▶️ [$SLUG] PR#$PR_NUM qa starting"
 
 # ── Linked issue + AC extraction ────────────────────────────────────────────
 
-# Resolve linked issue from PR body ("Closes #N").
-LINKED_ISSUE_NUM=$(gh pr view "$PR_NUM" --repo "$REPO" --json body --jq '.body' 2>/dev/null \
-    | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "")
+# Resolve linked issue from PR body ("Closes/Fixes/Resolves #N").
+_PR_BODY=$(gh pr view "$PR_NUM" --repo "$REPO" --json body --jq '.body' 2>/dev/null || echo "")
+LINKED_ISSUE_NUM=$(_qa_linked_issue "$_PR_BODY")
 
 ISSUE_BODY=""
 if [ -n "$LINKED_ISSUE_NUM" ]; then
@@ -142,6 +225,26 @@ else
     VALIDATION_SECTION="## Phase 4: validation_cmd
 
 No validation_cmd is configured for this project. Skip this phase."
+fi
+
+# No validation_cmd — auto-pass without invoking the agent.
+if [ -z "${QA_VALIDATION_CMD:-}" ]; then
+    log "no qa.validation_cmd configured for $SLUG — auto-passing"
+    _HAS_AC="no"
+    _AC_LIST_COMMENT=""
+    if [ "$AC_LIST" != "__NO_AC_SECTION__" ]; then
+        _HAS_AC="yes"
+        _AC_LIST_COMMENT="$AC_LIST"
+    fi
+    _QA_COMMENT=$(_qa_build_comment "${LINKED_ISSUE_NUM:-0}" "qa-pass" "" "$_AC_LIST_COMMENT" "$_HAS_AC")
+    backend_comment_pr "$REPO" "$PR_NUM" "$_QA_COMMENT" 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" needs-qa
+    backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
+    backend_remove_label "$REPO" "$PR_NUM" qa-failed
+    backend_remove_label "$REPO" "$PR_NUM" qa-fail
+    backend_remove_label "$REPO" "$PR_NUM" qa-pass
+    backend_add_label "$REPO" "$PR_NUM" qa-pass
+    exit 0
 fi
 
 # ── Agent prompt ─────────────────────────────────────────────────────────────
@@ -215,7 +318,6 @@ rm -f "$_PROMPT_FILE"
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     log "qa agent succeeded for PR #$PR_NUM"
     bounty_report "qa_pass" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
-    loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
     # Belt-and-braces: if agent forgot to apply a decision label, default to qa-fail
     # so the PR doesn't silently disappear from the pipeline.
     if ! backend_pr_has_any_label "$REPO" "$PR_NUM" qa-pass qa-fail blocked 'done'; then
@@ -224,6 +326,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
         backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
         backend_add_label "$REPO" "$PR_NUM" qa-fail
     fi
+    loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
 else
     log "qa agent failed for PR #$PR_NUM"
     bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
