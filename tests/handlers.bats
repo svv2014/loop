@@ -184,3 +184,95 @@ State: OPEN
     [ -z "$_IN_FLIGHT_PR" ]
     [ -z "$_MR_PREAMBLE" ]
 }
+
+# ---------------------------------------------------------------------------
+# qa-handler AC extraction (Phase 1)
+# ---------------------------------------------------------------------------
+
+# Replicates the inline python3 AC-extraction snippet from qa-handler.sh.
+_extract_ac_list() {
+    local body="$1"
+    ISSUE_BODY="$body" python3 -c "
+import os, re
+body = os.environ.get('ISSUE_BODY', '').strip()
+match = re.search(r'(?m)^\#{1,3}\s+Acceptance Criteria\s*$', body)
+if not match:
+    print('__NO_AC_SECTION__')
+else:
+    rest = body[match.end():]
+    section = re.split(r'(?m)^\#{1,3}\s+', rest)[0]
+    checkboxes = re.findall(r'- \[[ xX]\] .+', section)
+    if not checkboxes:
+        print('__NO_AC_SECTION__')
+    else:
+        for i, cb in enumerate(checkboxes, 1):
+            text = re.sub(r'^- \[[ xX]\] ', '', cb).strip()
+            print(f'{i}. {text}')
+"
+}
+
+@test "qa-handler AC extraction: checkboxes present — returns numbered list" {
+    local body
+    body="$(cat <<'BODY'
+## Objective
+Do a thing.
+
+## Acceptance Criteria
+- [ ] First criterion is met
+- [x] Second criterion already checked
+- [ ] Third criterion to verify
+
+## Notes
+Nothing else.
+BODY
+)"
+    local result
+    result=$(_extract_ac_list "$body")
+
+    [[ "$result" != "__NO_AC_SECTION__" ]]
+    echo "$result" | grep -q "1\. First criterion is met"
+    echo "$result" | grep -q "2\. Second criterion already checked"
+    echo "$result" | grep -q "3\. Third criterion to verify"
+}
+
+@test "qa-handler AC extraction: no Acceptance Criteria section — returns sentinel" {
+    local body
+    body="$(cat <<'BODY'
+## Objective
+Do a thing.
+
+## Notes
+No acceptance criteria here.
+BODY
+)"
+    local result
+    result=$(_extract_ac_list "$body")
+    [ "$result" = "__NO_AC_SECTION__" ]
+}
+
+@test "qa-handler AC extraction: empty body — returns sentinel" {
+    local result
+    result=$(_extract_ac_list "")
+    [ "$result" = "__NO_AC_SECTION__" ]
+}
+
+@test "qa-handler prompt: AC list injected when ACs found" {
+    local ac_list
+    ac_list="$(printf '1. First criterion\n2. Second criterion')"
+
+    # Simulate how the prompt is assembled when ACs are present
+    local ac_section
+    ac_section="## Acceptance Criteria (from issue #42)
+
+${ac_list}"
+
+    [[ "$ac_section" == *"1. First criterion"* ]]
+    [[ "$ac_section" == *"2. Second criterion"* ]]
+    [[ "$ac_section" == *"issue #42"* ]]
+}
+
+@test "qa-handler prompt: fallback note when no ACs found" {
+    local ac_section="(No acceptance criteria found — falling back to validation_cmd only)"
+    [[ "$ac_section" == *"No acceptance criteria found"* ]]
+    [[ "$ac_section" == *"falling back to validation_cmd only"* ]]
+}

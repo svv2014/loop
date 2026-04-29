@@ -4,9 +4,10 @@
 #
 # Event payload: {"slug","repo","pr_number","pr_title","pr_url"}
 #
-# Flow: run qa.validation_cmd if configured — on zero exit, label 'qa-pass';
-# on non-zero, label 'qa-fail'. If no validation_cmd is configured for the
-# project, auto-pass (trust the review handler's decision).
+# Phase 1 (smart QA): extracts ## Acceptance Criteria checkboxes from the linked
+# issue and injects them into the agent prompt so the agent can verify each
+# criterion against the PR diff.  Falls back to validation_cmd-only when no
+# AC section is found.
 
 set -euo pipefail
 
@@ -16,11 +17,15 @@ LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/env.sh
 source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/config.sh"
+# shellcheck source=../lib/runner.sh
+source "$LOOP_ROOT/lib/runner.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/cli-hint.sh
+source "$LOOP_ROOT/lib/cli-hint.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-qa-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [qa-handler] $*" | tee -a "$LOG_FILE"; }
@@ -73,34 +78,156 @@ if [ "$_is_draft" = "true" ]; then
     backend_remove_label "$REPO" "$PR_NUM" draft 2>/dev/null || true
 fi
 
-if [ -z "${QA_VALIDATION_CMD:-}" ]; then
-    log "no qa.validation_cmd configured for $SLUG — auto-passing"
-    backend_remove_label "$REPO" "$PR_NUM" needs-qa
-    backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
-    backend_remove_label "$REPO" "$PR_NUM" qa-failed
-    backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_remove_label "$REPO" "$PR_NUM" qa-pass
-    backend_add_label "$REPO" "$PR_NUM" qa-pass
-    exit 0
-fi
-
 loop_notify "▶️ [$SLUG] PR#$PR_NUM qa starting"
 
+# ── Linked issue + AC extraction ────────────────────────────────────────────
+
+# Resolve linked issue from PR body ("Closes #N").
+LINKED_ISSUE_NUM=$(gh pr view "$PR_NUM" --repo "$REPO" --json body --jq '.body' 2>/dev/null \
+    | grep -oiE '(closes|fixes|resolves) #[0-9]+' | grep -oE '[0-9]+' | head -1 || echo "")
+
+ISSUE_BODY=""
+if [ -n "$LINKED_ISSUE_NUM" ]; then
+    ISSUE_BODY=$(backend_issue_view "$REPO" "$LINKED_ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
+    log "linked issue #${LINKED_ISSUE_NUM} found; body length=${#ISSUE_BODY}"
+fi
+
+# Extract ## Acceptance Criteria checkboxes using an inline python3 snippet.
+AC_LIST=$(ISSUE_BODY="$ISSUE_BODY" python3 -c "
+import os, re
+body = os.environ.get('ISSUE_BODY', '').strip()
+match = re.search(r'(?m)^\#{1,3}\s+Acceptance Criteria\s*$', body)
+if not match:
+    print('__NO_AC_SECTION__')
+else:
+    rest = body[match.end():]
+    section = re.split(r'(?m)^\#{1,3}\s+', rest)[0]
+    checkboxes = re.findall(r'- \[[ xX]\] .+', section)
+    if not checkboxes:
+        print('__NO_AC_SECTION__')
+    else:
+        for i, cb in enumerate(checkboxes, 1):
+            text = re.sub(r'^- \[[ xX]\] ', '', cb).strip()
+            print(f'{i}. {text}')
+" 2>/dev/null || echo "__NO_AC_SECTION__")
+
+if [ "$AC_LIST" = "__NO_AC_SECTION__" ]; then
+    log "no ## Acceptance Criteria section found in linked issue — falling back to validation_cmd only"
+    AC_SECTION="(No acceptance criteria found — falling back to validation_cmd only)"
+    AC_INSTRUCTION=""
+else
+    log "extracted AC list from issue #${LINKED_ISSUE_NUM}"
+    AC_SECTION="## Acceptance Criteria (from issue #${LINKED_ISSUE_NUM})
+
+${AC_LIST}"
+    AC_INSTRUCTION="For each numbered criterion above, output exactly one of:
+- VERIFIED — the diff satisfies this criterion; provide a one-line rationale and, where mechanical, a proof command with expected output.
+- NOT_FOUND — the diff does not address this criterion; quote what is missing.
+- PARTIAL — partially addressed; explain what is done and what is still missing.
+
+If ANY criterion is NOT_FOUND or PARTIAL the final verdict must be qa-fail."
+fi
+
+# ── Validation command section ───────────────────────────────────────────────
+
 QA_TIMEOUT="${QA_TIMEOUT_SECONDS:-600}"
-log "running qa validation: $QA_VALIDATION_CMD (cwd=$ROOT, timeout=${QA_TIMEOUT}s)"
-if (cd "$ROOT" && timeout "$QA_TIMEOUT" bash -c "$QA_VALIDATION_CMD") 2>&1 | tee -a "$LOG_FILE"; then
-    log "qa passed for PR #$PR_NUM"
+if [ -n "${QA_VALIDATION_CMD:-}" ]; then
+    VALIDATION_SECTION="## Phase 4: validation_cmd
+
+Run the project validation command (timeout ${QA_TIMEOUT}s):
+  cd ${ROOT} && timeout ${QA_TIMEOUT} bash -c \"${QA_VALIDATION_CMD}\"
+
+If this exits non-zero, the verdict must be qa-fail even if all ACs are VERIFIED."
+else
+    VALIDATION_SECTION="## Phase 4: validation_cmd
+
+No validation_cmd is configured for this project. Skip this phase."
+fi
+
+# ── Agent prompt ─────────────────────────────────────────────────────────────
+
+_BACKEND_CLI_NOTE=$(backend_cli_note)
+_PROMPT_FILE=$(mktemp /tmp/qa-prompt-XXXXXX.txt)
+cat > "$_PROMPT_FILE" <<EOF
+You are the QA agent for ${NAME} (slug: ${SLUG}).
+Project root: ${ROOT}
+Repo: ${REPO}
+
+READ ${ROOT}/CLAUDE.md first for project conventions.
+If CLAUDE.md is missing, proceed with general best-practice conventions.
+
+You are reviewing pull request #${PR_NUM} for QA.
+
+Your job — do all of these in sequence:
+
+0. Check PR state before proceeding:
+   gh pr view ${PR_NUM} --repo ${REPO} --json state,merged
+   If state=MERGED or state=CLOSED: remove labels needs-qa and ready-for-qa, leave a brief comment, and stop.
+
+1. Fetch the PR diff:
+   gh pr diff ${PR_NUM} --repo ${REPO}
+
+2. Evaluate acceptance criteria:
+
+${AC_SECTION}
+
+${AC_INSTRUCTION}
+
+3. ${VALIDATION_SECTION}
+
+4. Post a structured comment on the PR using this template:
+
+\`\`\`
+### QA verification — issue #${LINKED_ISSUE_NUM:-N/A}
+
+**Phase 1: Acceptance criteria**
+<numbered AC results with VERIFIED/NOT_FOUND/PARTIAL and rationale>
+
+**Phase 4: validation_cmd**
+<result of running validation_cmd, or "skipped — not configured">
+
+**Verdict:** <qa-pass or qa-fail — one-line reason>
+\`\`\`
+
+   Post the comment:
+   gh pr comment ${PR_NUM} --repo ${REPO} --body '<the structured comment>'
+
+5. Apply labels based on the verdict:
+
+   If qa-pass (all ACs VERIFIED and validation_cmd passed or not configured):
+     gh pr edit ${PR_NUM} --repo ${REPO} --remove-label needs-qa --remove-label ready-for-qa --remove-label qa-failed --remove-label qa-fail --remove-label qa-pass --add-label qa-pass
+
+   If qa-fail (any AC NOT_FOUND/PARTIAL or validation_cmd failed):
+     gh pr edit ${PR_NUM} --repo ${REPO} --remove-label needs-qa --remove-label ready-for-qa --remove-label approved --remove-label qa-pass --remove-label qa-failed --add-label qa-fail
+
+IMPORTANT: You MUST finish by applying either 'qa-pass' or 'qa-fail'. The pipeline stalls if neither is applied. Verify with:
+   gh pr view ${PR_NUM} --repo ${REPO} --json labels
+
+Report the verdict and why in 2 sentences.
+${_BACKEND_CLI_NOTE}
+$(loop_cli_hint)
+EOF
+TASK_PROMPT=$(cat "$_PROMPT_FILE")
+rm -f "$_PROMPT_FILE"
+
+# ── Run agent ────────────────────────────────────────────────────────────────
+
+if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    log "qa agent succeeded for PR #$PR_NUM"
     bounty_report "qa_pass" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
     loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
-    backend_remove_label "$REPO" "$PR_NUM" needs-qa
-    backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
-    backend_remove_label "$REPO" "$PR_NUM" qa-failed
-    backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_add_label "$REPO" "$PR_NUM" qa-pass
+    # Belt-and-braces: if agent forgot to apply a decision label, default to qa-fail
+    # so the PR doesn't silently disappear from the pipeline.
+    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" qa-pass qa-fail blocked 'done'; then
+        log "WARN: PR #$PR_NUM has no qa decision label after agent — defaulting to qa-fail"
+        backend_remove_label "$REPO" "$PR_NUM" needs-qa
+        backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
+        backend_add_label "$REPO" "$PR_NUM" qa-fail
+    fi
 else
-    log "qa failed for PR #$PR_NUM"
+    log "qa agent failed for PR #$PR_NUM"
     bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
-    loop_notify "❌ [$SLUG] PR#$PR_NUM qa failed: validation command failed"
+    loop_notify "❌ [$SLUG] PR#$PR_NUM qa failed: agent error"
     backend_remove_label "$REPO" "$PR_NUM" needs-qa
     backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
     backend_remove_label "$REPO" "$PR_NUM" approved
@@ -108,6 +235,6 @@ else
     backend_remove_label "$REPO" "$PR_NUM" qa-failed
     backend_add_label "$REPO" "$PR_NUM" qa-fail
     backend_comment_pr "$REPO" "$PR_NUM" \
-        "QA validation failed. See loop-qa-handler.log for details."
+        "QA agent failed. See loop-qa-handler.log for details."
     exit 1
 fi
