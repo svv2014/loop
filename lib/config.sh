@@ -77,6 +77,22 @@ for p in data.get("projects", []) or []:
         project_authors = p.get("allowed_authors") or global_authors
         authors_str = ",".join(str(a) for a in project_authors)
         print(f"ALLOWED_AUTHORS='{sh(authors_str)}'")
+        # per-project agent/model overrides (empty string means "use global")
+        project_agent = p.get("agent") or ""
+        print(f"_PROJECT_AGENT='{sh(project_agent)}'")
+        # _PROJECT_MODEL: explicit project-level 'model' key (distinct from the
+        # global default_model path used above for LOOP_AGENT_MODEL).
+        raw_project_model = p.get("model") or ""
+        print(f"_PROJECT_MODEL='{sh(raw_project_model)}'")
+        # fallback chain: serialise as newline-delimited "agent|model|cmd" records
+        fallback_entries = p.get("fallback") or []
+        fallback_lines = []
+        for entry in fallback_entries:
+            fa = entry.get("agent") or ""
+            fm = entry.get("model") or ""
+            fc = entry.get("cmd") or ""
+            fallback_lines.append(f"{fa}|{fm}|{fc}")
+        print(f"_PROJECT_FALLBACK='{sh(chr(10).join(fallback_lines))}'")
         # v1 fields
         print(f"WORKFLOW='{sh(workflow)}'")
         print(f"LOOP_LABEL_OVERRIDES='{sh(label_overrides)}'")
@@ -90,7 +106,7 @@ PY
         return 1
     fi
     eval "$out"
-    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES
+    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES _PROJECT_AGENT _PROJECT_MODEL _PROJECT_FALLBACK
 }
 
 # loop_list_slugs — print each project slug on its own line
