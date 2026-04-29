@@ -294,5 +294,7 @@ EOF
 
     # Default workflow: canonical names must appear in the prompt
     [[ "$prompt" == *"needs-review"* ]]
+    [[ "$prompt" == *"needs-rework"* ]]
+    [[ "$prompt" == *"needs-qa"* ]]
     [[ "$prompt" != *"review-pending"* ]]
 }
