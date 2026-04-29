@@ -4,9 +4,9 @@
 #
 # Event payload: {"slug","repo","pr_number","pr_title","pr_url"}
 #
-# Flow: run qa.validation_cmd if configured — on zero exit, label 'qa-pass';
-# on non-zero, label 'qa-failed'. If no validation_cmd is configured for the
-# project, auto-pass (trust the review handler's decision).
+# Flow: invoke smart four-phase QA agent that verifies acceptance criteria,
+# creates targeted tests, runs regression on touched modules, then runs
+# validation_cmd. Agent posts structured comment and applies qa-pass/qa-failed.
 
 set -euo pipefail
 
@@ -15,12 +15,16 @@ LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/config.sh
 # shellcheck source=../lib/env.sh
 source "$LOOP_ROOT/lib/env.sh"
+# shellcheck source=../lib/runner.sh
+source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/cli-hint.sh
+source "$LOOP_ROOT/lib/cli-hint.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-qa-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [qa-handler] $*" | tee -a "$LOG_FILE"; }
@@ -73,34 +77,174 @@ if [ "$_is_draft" = "true" ]; then
     backend_remove_label "$REPO" "$PR_NUM" draft 2>/dev/null || true
 fi
 
-if [ -z "${QA_VALIDATION_CMD:-}" ]; then
-    log "no qa.validation_cmd configured for $SLUG — auto-passing"
-    backend_remove_label "$REPO" "$PR_NUM" needs-qa
-    backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
-    backend_remove_label "$REPO" "$PR_NUM" qa-failed
-    backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_remove_label "$REPO" "$PR_NUM" qa-pass
-    backend_add_label "$REPO" "$PR_NUM" qa-pass
-    exit 0
-fi
-
 loop_notify "▶️ [$SLUG] PR#$PR_NUM qa starting"
 
-QA_TIMEOUT="${QA_TIMEOUT_SECONDS:-600}"
-log "running qa validation: $QA_VALIDATION_CMD (cwd=$ROOT, timeout=${QA_TIMEOUT}s)"
-if (cd "$ROOT" && timeout "$QA_TIMEOUT" bash -c "$QA_VALIDATION_CMD") 2>&1 | tee -a "$LOG_FILE"; then
-    log "qa passed for PR #$PR_NUM"
-    bounty_report "qa_pass" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
+_BACKEND_CLI_NOTE=$(backend_cli_note)
+_VALIDATION_CMD="${QA_VALIDATION_CMD:-}"
+
+_PROMPT_FILE=$(mktemp /tmp/qa-prompt-XXXXXX.txt)
+cat > "$_PROMPT_FILE" <<EOF
+You are the Senior QA Verifier for ${NAME} (slug: ${SLUG}).
+Project root: ${ROOT}
+Repo: ${REPO}
+
+READ ${ROOT}/CLAUDE.md first for project conventions.
+If CLAUDE.md is missing, note its absence and proceed with best-practice conventions.
+
+You are performing four-phase smart QA on pull request #${PR_NUM}.
+
+## Setup
+
+1. Check PR state:
+   gh pr view ${PR_NUM} --repo ${REPO} --json state,merged
+   If state=MERGED or state=CLOSED: remove labels 'ready-for-qa' and 'needs-qa',
+   leave a comment "PR already closed/merged — QA skipped.", and stop.
+
+2. Fetch PR details and diff:
+   gh pr view ${PR_NUM} --repo ${REPO} --json title,body,headRefName,files,closingIssuesReferences
+   gh pr diff ${PR_NUM} --repo ${REPO}
+
+3. Identify the linked issue (from closingIssuesReferences). Fetch its body:
+   gh issue view <N> --repo ${REPO} --json body
+
+4. Check if the issue body contains a "## Acceptance Criteria" section with "- [ ]" checkboxes.
+   If it does NOT contain "## Acceptance Criteria": skip Phases 1 and 2, run Phases 3 and 4 only,
+   and note the gap in your PR comment (the issue lacked acceptance criteria).
+
+---
+
+## Phase 1 — Verify each acceptance criterion
+
+Parse the "## Acceptance Criteria" checkboxes from the linked issue body.
+For each criterion output one of:
+- VERIFIED — explain how the diff satisfies it; where possible, prove with a one-line command and quote actual output.
+- NOT_FOUND — the diff does not address this criterion; quote what is missing.
+- PARTIAL — partially addressed; explain what is done and what is missing.
+
+If any criterion is NOT_FOUND or PARTIAL → verdict is qa-fail (list each unmet AC).
+
+---
+
+## Phase 2 — Create tests where they earn their keep
+
+Per-criterion decision: only create a test when the behavior is mechanical (input → output) or
+non-obvious AND the project already has a testing framework (bats / pytest / vitest).
+Write tests in the existing framework, place next to existing tests, run them, and if they pass,
+commit and push to the PR branch:
+
+   cd ${ROOT}
+   git fetch origin
+   git checkout <headRefName>
+   # write test file
+   git add <test-file>
+   git commit -m 'test: add QA-driven tests for PR #${PR_NUM}'
+   git push --force-with-lease origin <headRefName>
+
+Skip test creation for: UI-only changes, doc updates, cases with existing integration coverage,
+or trivially obvious diff hunks. Note the rationale for each skip.
+
+If newly added tests fail → verdict is qa-fail (cite the contradiction).
+
+---
+
+## Phase 3 — Targeted regression on touched modules
+
+List the files this PR touched (from the "files" field of gh pr view).
+For each touched file, find covering test files by convention:
+- tests/<module>.bats (strip path prefix and .sh extension)
+- test_*.py near the file
+- *.test.js / *.spec.js near the file
+
+Run only those covering tests (e.g. bats tests/foo.bats).
+A test failure = regression caused by this PR → verdict is qa-fail (cite the specific failing test).
+If no test coverage exists for a touched file, note it and skip.
+
+---
+
+## Phase 4 — Final regression guard
+
+Run the validation command:
+$([ -n "$_VALIDATION_CMD" ] && printf '   cd %s && %s' "${ROOT}" "$_VALIDATION_CMD" || printf '   (no validation_cmd configured for this project — Phase 4 skipped)')
+
+If validation_cmd fails → verdict is qa-fail (cite the validation failure output).
+
+---
+
+## Decision and labeling
+
+After all phases, post a structured comment on the PR using this template:
+
+\`\`\`
+### QA verification — issue #<N>
+
+**Phase 1: Acceptance criteria**
+1. [✓ VERIFIED] <AC text>
+   _Proof:_ \`<command>\` → \`<output snippet>\`
+2. [✗ NOT_FOUND] <AC text>
+   Diff does not address this. Need: <what>.
+
+**Phase 2: Tests added**
+- \`tests/foo.bats::handles_empty_input\` (covers AC2)
+- (skipped AC1: doc-only change)
+
+**Phase 3: Regression on touched modules**
+- \`lib/foo.sh\` → ran \`tests/foo.bats\` (12 tests, ✓ pass)
+- \`lib/bar.sh\` → no existing test coverage, skipped
+
+**Phase 4: validation_cmd**
+- \`<cmd>\` → ✓ pass
+
+**Verdict:** <qa-pass or qa-fail — reason>
+\`\`\`
+
+Post the comment:
+   gh pr comment ${PR_NUM} --repo ${REPO} --body '<comment text>'
+
+Then apply the label:
+
+If qa-pass:
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label needs-qa --remove-label ready-for-qa --remove-label qa-failed --remove-label qa-fail --add-label qa-pass
+
+If qa-fail:
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label needs-qa --remove-label ready-for-qa --remove-label approved --remove-label qa-pass --remove-label qa-fail --add-label qa-failed
+
+IMPORTANT: You MUST finish by applying either 'qa-pass' or 'qa-failed'. The pipeline stalls if
+neither is applied. Verify with:
+   gh pr view ${PR_NUM} --repo ${REPO} --json labels
+
+${_BACKEND_CLI_NOTE}
+$(loop_cli_hint)
+EOF
+TASK_PROMPT=$(cat "$_PROMPT_FILE")
+rm -f "$_PROMPT_FILE"
+
+if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    log "qa agent finished for PR #$PR_NUM"
     loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
     backend_remove_label "$REPO" "$PR_NUM" needs-qa
     backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
-    backend_remove_label "$REPO" "$PR_NUM" qa-failed
-    backend_remove_label "$REPO" "$PR_NUM" qa-fail
-    backend_add_label "$REPO" "$PR_NUM" qa-pass
+
+    # Report the actual outcome to bounty based on which label the agent applied.
+    if backend_pr_has_any_label "$REPO" "$PR_NUM" qa-pass; then
+        bounty_report "qa_pass" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
+    else
+        bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
+    fi
+
+    # Belt-and-braces: if agent forgot to apply a decision label, default to qa-failed.
+    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" qa-pass qa-failed qa-fail; then
+        log "WARN: PR #$PR_NUM has no QA decision label after agent — defaulting to qa-failed"
+        backend_remove_label "$REPO" "$PR_NUM" qa-pass
+        backend_add_label "$REPO" "$PR_NUM" qa-failed
+        backend_comment_pr "$REPO" "$PR_NUM" \
+            "QA agent ran but did not apply a decision label. Defaulting to qa-failed. Operator: see ${LOG_FILE} for the agent transcript." \
+            2>/dev/null || true
+        bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
+    fi
 else
-    log "qa failed for PR #$PR_NUM"
+    log "qa agent failed for PR #$PR_NUM"
     bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
-    loop_notify "❌ [$SLUG] PR#$PR_NUM qa failed: validation command failed"
+    loop_notify "❌ [$SLUG] PR#$PR_NUM qa failed: agent error"
     backend_remove_label "$REPO" "$PR_NUM" needs-qa
     backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
     backend_remove_label "$REPO" "$PR_NUM" approved
@@ -108,6 +252,7 @@ else
     backend_remove_label "$REPO" "$PR_NUM" qa-fail
     backend_add_label "$REPO" "$PR_NUM" qa-failed
     backend_comment_pr "$REPO" "$PR_NUM" \
-        "QA validation failed. See loop-qa-handler.log for details."
+        "QA agent failed. Operator: see ${LOG_FILE} for the agent transcript." \
+        2>/dev/null || true
     exit 1
 fi
