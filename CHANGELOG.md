@@ -44,6 +44,8 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-124] rewrite quick-start.md: Claude+GitHub MVP in 5 steps (#130)
 - [LOOP-132] fix docs: replace plan with po-review/dev as pipeline entry points (#134)
 - [LOOP-137] fix qa-handler: qa-failed → qa-fail label name (#138)
+- [LOOP-131] resolve workflow labels in all handler prompts via loop_label_for (#135)
+- [LOOP-133] 3-command onboarding: agent auto-detect + smoke test + loop status (#145)
 ### Added
 - `tests/po-body-preserve.bats`: 5 tests for the original-brief extraction logic
 - `scripts/auto-release-pr.sh`: new script that maintains one open `chore: release vX.Y.Z` PR; idempotent, computes next version from `semver:*` labels, promotes CHANGELOG, supports `--dry-run`
