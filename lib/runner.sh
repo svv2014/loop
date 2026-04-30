@@ -39,12 +39,11 @@ _loop_invoke_agent() {
 
     case "$agent" in
         claude)
-            claude -p \
+            (cd "$cwd" && claude -p \
                 --model "${model:-sonnet}" \
                 --output-format text \
                 --dangerously-skip-permissions \
-                --cwd "$cwd" \
-                "$prompt"
+                "$prompt")
             ;;
         codex)
             (cd "$cwd" && codex \
