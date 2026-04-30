@@ -104,9 +104,10 @@ see [docs/quick-start.md](docs/quick-start.md).
 4. **Review handler** sends the diff back to an AI agent for an
    approve/reject decision. On approve → `needs-qa`. On reject →
    `needs-rework` and back to step 3.
-5. **QA handler** runs the project's `validation_cmd` (your `npm test`,
-   `make`, whatever). On pass → `qa-pass`. On fail → `qa-fail` →
-   dev-rework.
+5. **QA handler** runs four-phase smart QA: verifies acceptance criteria,
+   creates targeted tests, runs regression on touched modules, then runs
+   the project's `validation_cmd`. Posts a structured `### QA verification`
+   comment. On pass → `qa-pass`. On fail → `qa-fail` → dev-rework.
 6. **Merge handler** squash-merges, closes the linked issue, records a
    bounty event, triggers the judge for a PR scorecard.
 7. **Reconciler** runs every 15 minutes to clean up stuck states,
@@ -219,10 +220,12 @@ versioned (currently `1.0`).
 
 ## Status
 
-`v0.1.0` — initial public release. The pipeline is production-tested
-internally and has driven hundreds of merges across multiple repos. The
-public release introduces workflow-as-config and a versioned bounty API
-contract; both are first-class commitments going forward.
+`v0.2.0` — production-tested across multiple repos. Introduces four-phase
+smart QA (AC verification, targeted test creation, module regression,
+`validation_cmd`), 3-command onboarding with agent auto-detect, and
+automated release PRs with tag + publish on merge. The pipeline,
+workflow-as-config, and the versioned bounty API are first-class
+commitments going forward.
 
 [Roadmap](ROADMAP.md) tracks what's next: spec-blind validator stage,
 domain specialist agents (frontend / backend / data / devops), expanded
