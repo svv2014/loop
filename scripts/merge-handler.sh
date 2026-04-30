@@ -19,6 +19,8 @@ source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/recovery.sh
+source "$LOOP_ROOT/lib/recovery.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-merge-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [merge-handler] $*" | tee -a "$LOG_FILE"; }
@@ -149,6 +151,15 @@ if [ -n "$LINKED_ISSUES" ]; then
 else
     log "PR #${PR_NUM} had no 'Closes #N' in body — nothing to close"
 fi
+
+# ── Dependency fanout — wake any blocked tickets whose dep just resolved ────
+# When a PR merges (and its linked issues close), open issues/PRs that listed
+# the merged PR or any closed issue as a blocker may now be unblocked. Run
+# the existing recovery sweep against this slug to re-evaluate every blocked
+# ticket immediately, instead of waiting for the next 15-min reconciler tick.
+log "dep-fanout: re-evaluating blocked tickets in $REPO after merge of PR #${PR_NUM}"
+DRY_RUN=false recovery_check_dependencies "$SLUG" \
+    || log "dep-fanout: recovery_check_dependencies returned non-zero (continuing)"
 
 # ── Changelog update ─────────────────────────────────────────────────────────
 # Non-fatal: run in a subshell so any error never aborts a successful merge.

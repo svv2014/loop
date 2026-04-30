@@ -19,6 +19,8 @@ source "$LOOP_ROOT/lib/config.sh"
 source "$LOOP_ROOT/lib/backends/backend.sh"
 # shellcheck source=../lib/labels.sh
 source "$LOOP_ROOT/lib/labels.sh"
+# shellcheck source=../lib/handler_guard.sh
+source "$LOOP_ROOT/lib/handler_guard.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
@@ -75,6 +77,15 @@ if [ "$retries" -ge "$MAX_RETRIES" ]; then
 fi
 
 log "dev handler: slug=$SLUG repo=$REPO issue=#$ISSUE_NUM attempt=$((retries + 1))/$MAX_RETRIES"
+
+# Tick-time re-validation: bail cleanly if the trigger label is gone or the
+# issue closed since the scanner emitted this event.
+_DEV_TRIGGER=$(loop_label_for "$SLUG" "dev" 2>/dev/null) || _DEV_TRIGGER="dev"
+if ! loop_handler_guard "$REPO" issue "$ISSUE_NUM" "$_DEV_TRIGGER"; then
+    log "guard: issue #$ISSUE_NUM no longer eligible — skipping dev cycle"
+    exit 0
+fi
+
 bounty_report "dev_start" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" || true
 loop_notify "▶️ [$SLUG] #$ISSUE_NUM dev starting"
 

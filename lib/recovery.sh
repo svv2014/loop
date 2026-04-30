@@ -37,26 +37,12 @@ recovery_check_dependencies() {
 
     local candidates
     candidates=$(ITEMS="$blocked_json" python3 - <<'PY'
-import json, os, re
+import json, os, re, sys
+sys.path.insert(0, os.environ.get('LOOP_ROOT', '.') + '/lib')
+import dep_parser  # noqa: E402
 items = json.loads(os.environ['ITEMS'])
-NUM = re.compile(r'#(\d+)')
 for item in items:
-    body = item.get('body') or ''
-    lines = body.splitlines()
-    in_dep = False
-    dep_lines = []
-    for line in lines:
-        if re.match(r'^##\s+Dependencies\s*$', line, re.I):
-            in_dep = True
-            continue
-        if in_dep and re.match(r'^##', line):
-            break
-        if in_dep:
-            dep_lines.append(line)
-    if not in_dep:
-        continue
-    deps = sorted(set(int(n) for n in NUM.findall('\n'.join(dep_lines))))
-    deps = [n for n in deps if n != item['number']]
+    deps = dep_parser.extract(item.get('body') or '', self_num=item.get('number'))
     if not deps:
         continue
     print(f"{item['number']}\t{','.join(str(n) for n in deps)}\t{item['title'][:60]}")
@@ -109,29 +95,15 @@ import os; nums=os.environ['DEP_NUMS'].split(','); print(', '.join('#'+n for n i
 
     local pr_candidates
     pr_candidates=$(PJSON="$all_prs_json" python3 - <<'PY'
-import json, os, re
+import json, os, sys
+sys.path.insert(0, os.environ.get('LOOP_ROOT', '.') + '/lib')
+import dep_parser  # noqa: E402
 prs = json.loads(os.environ['PJSON'])
-NUM = re.compile(r'#(\d+)')
 for pr in prs:
     lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
     if 'blocked' not in lbls:
         continue
-    body = pr.get('body') or ''
-    lines = body.splitlines()
-    in_dep = False
-    dep_lines = []
-    for line in lines:
-        if re.match(r'^##\s+Dependencies\s*$', line, re.I):
-            in_dep = True
-            continue
-        if in_dep and re.match(r'^##', line):
-            break
-        if in_dep:
-            dep_lines.append(line)
-    if not in_dep:
-        continue
-    deps = sorted(set(int(n) for n in NUM.findall('\n'.join(dep_lines))))
-    deps = [n for n in deps if n != pr['number']]
+    deps = dep_parser.extract(pr.get('body') or '', self_num=pr.get('number'))
     if not deps:
         continue
     print(f"{pr['number']}\t{','.join(str(n) for n in deps)}\t{pr['title'][:60]}")

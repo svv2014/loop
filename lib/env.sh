@@ -4,6 +4,7 @@
 
 LOOP_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 LOOP_ROOT="$(cd "$LOOP_LIB_DIR/.." && pwd)"
+export LOOP_ROOT
 
 # Loop version (single source: VERSION file at repo root)
 # shellcheck source=./version.sh
