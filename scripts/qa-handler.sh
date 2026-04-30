@@ -20,6 +20,8 @@ source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
@@ -66,9 +68,9 @@ bounty_report "qa_start" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$S
 PR_STATE=$(backend_pr_view "$REPO" "$PR_NUM" --json state --jq .state 2>/dev/null || echo "")
 case "$PR_STATE" in
     MERGED|CLOSED)
-        log "PR #$PR_NUM is already $PR_STATE — skipping QA, removing needs-qa"
-        backend_remove_label "$REPO" "$PR_NUM" needs-qa
-        backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
+        log "PR #$PR_NUM is already $PR_STATE — skipping QA, removing $LOOP_LABEL_NEEDS_QA"
+        backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
+        backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"
         exit 0
         ;;
 esac
@@ -101,7 +103,7 @@ You are performing four-phase smart QA on pull request #${PR_NUM}.
 
 1. Check PR state:
    gh pr view ${PR_NUM} --repo ${REPO} --json state,merged
-   If state=MERGED or state=CLOSED: remove labels 'ready-for-qa' and 'needs-qa',
+   If state=MERGED or state=CLOSED: remove labels '${LOOP_LABEL_DEPRECATED_READY_FOR_QA}' and '${LOOP_LABEL_NEEDS_QA}',
    leave a comment "PR already closed/merged — QA skipped.", and stop.
 
 2. Fetch PR details and diff:
@@ -207,10 +209,10 @@ Post the comment:
 Then apply the label:
 
 If qa-pass:
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label needs-qa --remove-label ready-for-qa --remove-label qa-failed --remove-label qa-fail --add-label ${_QA_PASS_LABEL}
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label ${LOOP_LABEL_NEEDS_QA} --remove-label ${LOOP_LABEL_DEPRECATED_READY_FOR_QA} --remove-label qa-failed --remove-label qa-fail --add-label ${_QA_PASS_LABEL}
 
 If qa-fail:
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label needs-qa --remove-label ready-for-qa --remove-label approved --remove-label qa-pass --remove-label qa-fail --add-label ${_QA_FAIL_LABEL}
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label ${LOOP_LABEL_NEEDS_QA} --remove-label ${LOOP_LABEL_DEPRECATED_READY_FOR_QA} --remove-label approved --remove-label qa-pass --remove-label qa-fail --add-label ${_QA_FAIL_LABEL}
 
 IMPORTANT: You MUST finish by applying either '${_QA_PASS_LABEL}' or '${_QA_FAIL_LABEL}'. The pipeline
 stalls if neither is applied. Verify with:
@@ -225,8 +227,8 @@ rm -f "$_PROMPT_FILE"
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     log "qa agent finished for PR #$PR_NUM"
     loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
-    backend_remove_label "$REPO" "$PR_NUM" needs-qa
-    backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"
 
     # Report the actual outcome based on which label the agent applied.
     if backend_pr_has_any_label "$REPO" "$PR_NUM" qa-pass "$_QA_PASS_LABEL"; then
@@ -249,8 +251,8 @@ else
     log "qa agent failed for PR #$PR_NUM"
     bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
     loop_notify "❌ [$SLUG] PR#$PR_NUM qa failed: agent error"
-    backend_remove_label "$REPO" "$PR_NUM" needs-qa
-    backend_remove_label "$REPO" "$PR_NUM" ready-for-qa
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"
     backend_remove_label "$REPO" "$PR_NUM" approved
     backend_remove_label "$REPO" "$PR_NUM" qa-pass
     backend_remove_label "$REPO" "$PR_NUM" qa-fail

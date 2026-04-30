@@ -17,6 +17,8 @@ source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
@@ -112,7 +114,7 @@ log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
 
 # Resolve workflow-specific labels for this project so the agent prompt + the
 # belt-and-braces apply the right names per the project's active workflow
-# (e.g. needs-review on default, review-pending on current).
+# (e.g. canonical needs-review on default, deprecated alias on current).
 _REVIEW_LABEL=$(loop_label_for "$SLUG" "needs-review")
 _REWORK_LABEL=$(loop_label_for "$SLUG" "needs-rework")
 _QA_LABEL=$(loop_label_for "$SLUG" "needs-qa")
@@ -207,12 +209,14 @@ if matches:
     else
         log "belt-and-braces: found PR #$_dev_pr_num for issue #$ISSUE_NUM"
         if ! backend_pr_has_any_label "$REPO" "$_dev_pr_num" \
-                review-pending needs-review changes-requested needs-rework in-review needs-clarification blocked 'done'; then
+                "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" "$LOOP_LABEL_NEEDS_REVIEW" \
+                "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
+                "$LOOP_LABEL_IN_REVIEW" needs-clarification blocked 'done'; then
             log "WARN: PR #$_dev_pr_num has no progression label after dev agent — adding '${_REVIEW_LABEL}'"
             backend_add_label "$REPO" "$_dev_pr_num" "$_REVIEW_LABEL"
         fi
         # Strip both legacy and canonical issue-side names so the issue ends single-state
-        backend_remove_label "$REPO" "$ISSUE_NUM" needs-review review-pending plan dev in-progress
+        backend_remove_label "$REPO" "$ISSUE_NUM" "$LOOP_LABEL_NEEDS_REVIEW" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" plan dev in-progress
     fi
     cleanup_worktree
 else

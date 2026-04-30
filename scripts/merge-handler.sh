@@ -14,6 +14,8 @@ source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
@@ -67,8 +69,8 @@ case "$MERGE_STATE" in
     *CONFLICTING*|*DIRTY*)
         log "PR #${PR_NUM} is CONFLICTING — bouncing to dev-rework (no retry loop)"
         bounty_report "merge_conflict" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" || true
-        backend_remove_label "$REPO" "$PR_NUM" qa-pass ready-for-qa
-        backend_add_label "$REPO" "$PR_NUM" changes-requested
+        backend_remove_label "$REPO" "$PR_NUM" qa-pass "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"
+        backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED"
         backend_comment_pr "$REPO" "$PR_NUM" \
             "Merge blocked by conflicts with \`${DEFAULT_BRANCH}\`. Routing back to dev-rework to rebase and resolve."
         exit 0
@@ -262,6 +264,8 @@ BOUNTY_RECORD=$(REPO="$REPO" PR_NUM="$PR_NUM" SLUG="$SLUG" \
     LOOP_AGENT_MODEL="${LOOP_AGENT_MODEL:-unknown}" \
     LINKED_ISSUE="$FIRST_LINKED_ISSUE" \
     PR_TITLE="$PR_TITLE" \
+    LOOP_LBL_CR="$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
+    LOOP_LBL_NR="$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
     python3 <<'PY'
 import json, os, subprocess, datetime
 
@@ -282,9 +286,11 @@ raw = subprocess.run(
 ).stdout.strip()
 labels_added = json.loads(raw) if raw else []
 
+_LBL_CR = os.environ['LOOP_LBL_CR']
+_LBL_NR = os.environ['LOOP_LBL_NR']
 qa_fail    = bool({'qa-fail', 'qa-failed'} & set(labels_added))
-cr_labeled = bool({'changes-requested', 'needs-rework'} & set(labels_added))
-rework_count = (labels_added.count('changes-requested') + labels_added.count('needs-rework') +
+cr_labeled = bool({_LBL_CR, _LBL_NR} & set(labels_added))
+rework_count = (labels_added.count(_LBL_CR) + labels_added.count(_LBL_NR) +
                 labels_added.count('qa-fail') + labels_added.count('qa-failed'))
 
 if qa_fail:

@@ -18,6 +18,8 @@ source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 # workflow helpers (loop_polled_labels, loop_handler_for_label, loop_stage_trigger,
 # loop_workflow_for_project) are already loaded via lib/env.sh → lib/workflow.sh.
 # The line below is for shellcheck only.
@@ -201,14 +203,14 @@ author_is_allowed() {
 # count_inflight_prs <slug> <repo>
 # Count open PRs that carry at least one pipeline label.
 # Pipeline labels are derived from the project's workflow PR trigger labels
-# plus handler-set in-flight labels (in-progress, in-review, in-rework).
+# plus handler-set in-flight labels (in-progress, in-review, deprecated rework-alias).
 count_inflight_prs() {
     local slug="$1" repo="$2"
     local pr_labels
     pr_labels=$(loop_polled_labels "$slug" pr 2>/dev/null | tr '\n' ' ')
     local raw
     raw=$(backend_list_open_prs_raw "$repo")
-    PIPELINE_LABELS="in-progress in-review in-rework ${pr_labels}" \
+    PIPELINE_LABELS="in-progress in-review ${LOOP_LABEL_DEPRECATED_IN_REWORK} ${pr_labels}" \
     printf '%s\n' "$raw" | python3 -c "
 import json, sys, os
 pipeline_labels = set(os.environ.get('PIPELINE_LABELS', '').split())
@@ -377,7 +379,7 @@ PY
 # _scan_pr_stage <slug> <repo> <trigger_label> <handler> <event_type>
 # Polls for PRs carrying trigger_label and emits the appropriate event.
 # A PR is skipped if it has already moved downstream (has a later-stage trigger
-# label) or is actively being handled (in-review / in-rework operational labels).
+# label) or is actively being handled (in-review / deprecated rework-alias operational labels).
 _scan_pr_stage() {
     local slug="$1" repo="$2" trigger_label="$3" handler="$4" event_type="$5"
 
@@ -405,10 +407,10 @@ _scan_pr_stage() {
         url=$(printf '%s' "$row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
 
         # Skip if the PR has moved to a downstream stage or is actively being handled.
-        # in-review / in-rework are handler-set operational labels (not in workflow YAML).
+        # in-review / deprecated rework-alias are handler-set operational labels (not in workflow YAML).
         # shellcheck disable=SC2086
         if backend_pr_has_any_label "$repo" "$num" \
-               in-review in-rework 'done' blocked \
+               in-review "$LOOP_LABEL_DEPRECATED_IN_REWORK" 'done' blocked \
                ${downstream}; then
             continue
         fi
