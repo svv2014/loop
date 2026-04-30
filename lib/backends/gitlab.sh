@@ -110,7 +110,7 @@ backend_list_issues_with_label() {
 backend_list_prs_with_label() {
     local repo="$1" label="$2"
     _gl_parse_repo "$repo"
-    glab mr list --repo "$_GL_REPO" --label "$label" --state opened \
+    glab mr list --repo "$_GL_REPO" --label "$label" \
         --output json 2>/dev/null \
     | jq -c "$_GL_MR_SORT" 2>/dev/null || true
 }
@@ -281,7 +281,7 @@ backend_find_pr_for_issue() {
     local repo="$1" issue_num="$2"
     _gl_parse_repo "$repo"
     local result
-    result=$(glab mr list --repo "$_GL_REPO" --state opened --output json \
+    result=$(glab mr list --repo "$_GL_REPO" --output json \
         2>/dev/null \
         | python3 -c "
 import json, sys
@@ -304,7 +304,7 @@ for mr in mrs:
 backend_list_open_prs_raw() {
     local repo="$1"
     _gl_parse_repo "$repo"
-    glab mr list --repo "$_GL_REPO" --state opened --limit 100 \
+    glab mr list --repo "$_GL_REPO" --limit 100 \
         --output json 2>/dev/null \
     | jq '[.[] | {
         number: .iid,
@@ -333,7 +333,7 @@ backend_list_merged_prs_raw() {
 backend_list_open_issues_raw() {
     local repo="$1" label="$2"
     _gl_parse_repo "$repo"
-    glab issue list --repo "$_GL_REPO" --state opened --label "$label" \
+    glab issue list --repo "$_GL_REPO" --label "$label" \
         --limit 100 --output json 2>/dev/null \
     | jq '[.[] | {
         number: .iid,
