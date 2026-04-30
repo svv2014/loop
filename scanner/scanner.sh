@@ -176,10 +176,20 @@ _pr_downstream_labels() {
     echo "$result"
 }
 
-# author_is_allowed <author_login>
-# Returns 0 (true) if ALLOWED_AUTHORS is empty or contains the author.
+# author_is_allowed <author_login> [labels_space_separated]
+# Returns 0 (true) if any of the following holds:
+#   - ALLOWED_AUTHORS is empty (gate disabled)
+#   - the ticket carries the `operator-approved` label (per-ticket override)
+#   - the author appears in ALLOWED_AUTHORS
+# The label override is a documentation/operator contract — enforcement of who
+# may apply the label is done by GitHub repo permissions, not loop code.
+# See docs/security.md for the override semantics.
 author_is_allowed() {
     local author="$1"
+    local labels="${2:-}"
+    case " $labels " in
+        *" operator-approved "*) return 0 ;;
+    esac
     [ -z "${ALLOWED_AUTHORS:-}" ] && return 0
     local IFS=','
     for a in $ALLOWED_AUTHORS; do
@@ -268,7 +278,9 @@ _scan_issue_stage() {
         title=$(printf '%s' "$row"  | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
         url=$(printf '%s' "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
         author=$(printf '%s' "$row" | python3 -c "import json,sys; print(json.load(sys.stdin).get('author',''))")
-        if ! author_is_allowed "$author"; then
+        local labels
+        labels=$(printf '%s' "$row" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin).get('labels') or []))")
+        if ! author_is_allowed "$author" "$labels"; then
             log "skip $event_type #$num: author '$author' not in ALLOWED_AUTHORS"
             continue
         fi
@@ -336,12 +348,13 @@ PY
     while IFS= read -r _row; do
         [ "$_emitted" -ge "$_slots" ] && break
         [ -z "$_row" ] && continue
-        local _num _title _url _author _unmet _evt
+        local _num _title _url _author _labels _unmet _evt
         _num=$(printf '%s' "$_row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
         _title=$(printf '%s' "$_row"  | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
         _url=$(printf '%s' "$_row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
         _author=$(printf '%s' "$_row" | python3 -c "import json,sys; print(json.load(sys.stdin).get('author',''))")
-        if ! author_is_allowed "$_author"; then
+        _labels=$(printf '%s' "$_row" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin).get('labels') or []))")
+        if ! author_is_allowed "$_author" "$_labels"; then
             log "skip dev_issue #$_num: author '$_author' not in ALLOWED_AUTHORS"
             continue
         fi

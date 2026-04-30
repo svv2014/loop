@@ -137,6 +137,34 @@ teardown() {
 }
 
 # ---------------------------------------------------------------------------
+# author_is_allowed — author allow-list with operator-approved override
+# ---------------------------------------------------------------------------
+
+@test "author_is_allowed: allow-listed author passes" {
+    export ALLOWED_AUTHORS="alice,bob"
+    run author_is_allowed "alice" ""
+    [ "$status" -eq 0 ]
+}
+
+@test "author_is_allowed: outsider without override is rejected" {
+    export ALLOWED_AUTHORS="alice"
+    run author_is_allowed "mallory" "dev p2-medium"
+    [ "$status" -eq 1 ]
+}
+
+@test "author_is_allowed: operator-approved label bypasses gate for outsider" {
+    export ALLOWED_AUTHORS="alice"
+    run author_is_allowed "mallory" "dev operator-approved"
+    [ "$status" -eq 0 ]
+}
+
+@test "author_is_allowed: empty ALLOWED_AUTHORS lets everyone through" {
+    export ALLOWED_AUTHORS=""
+    run author_is_allowed "anyone" ""
+    [ "$status" -eq 0 ]
+}
+
+# ---------------------------------------------------------------------------
 # issue_is_claimed — uses workflow-derived PR stage labels
 # ---------------------------------------------------------------------------
 
