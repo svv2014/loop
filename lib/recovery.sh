@@ -9,6 +9,7 @@
 #   recovery_check_dependencies <slug>   — unblock when declared deps are merged
 #   recovery_check_stuck_labels <slug>   — strip timed-out operational labels
 #   recovery_prune_orphan_worktrees      — remove worktrees with no handler + no PR
+#   recovery_gc_stale_worktrees          — TTL-based GC of /tmp/loop-worktree-* dirs
 
 set -euo pipefail
 
@@ -381,4 +382,83 @@ recovery_prune_orphan_worktrees() {
             rm -rf "$wt_dir"
         fi
     done
+}
+
+# recovery_gc_stale_worktrees
+#
+# Last-resort garbage collector for /tmp/loop-worktree-* directories left
+# behind by crashed or SIGKILLed handlers. Independent of GitHub state — only
+# considers age and live process ownership.
+#
+# Skips a directory when:
+#   - Its mtime is younger than $LOOP_WORKTREE_TTL seconds (default 21600 = 6h)
+#   - lsof or fuser reports a live process holding any file under it
+#
+# Removes via `git worktree remove --force` (against $ROOT if set) and falls
+# back to `rm -rf`. Honors $DRY_RUN.
+#
+# The scan glob is overridable via $LOOP_WORKTREE_GC_GLOB (default
+# `/tmp/loop-worktree-*`) — this exists so tests can target an isolated
+# directory and never touch real worktrees.
+#
+# Prints the count of GC'd directories on stdout (for the reconcile summary
+# line). All progress messages go through log() to stderr.
+recovery_gc_stale_worktrees() {
+    local ttl="${LOOP_WORKTREE_TTL:-21600}"
+    local glob="${LOOP_WORKTREE_GC_GLOB:-/tmp/loop-worktree-*}"
+    local root="${ROOT:-}"
+    local now_sec gc_count=0
+    now_sec=$(date +%s)
+
+    log "[recovery] GC stale worktrees under ${glob} (ttl=${ttl}s)"
+
+    local wt_dir mtime age
+    for wt_dir in $glob/; do
+        [ -d "$wt_dir" ] || continue
+        wt_dir="${wt_dir%/}"
+
+        mtime=$(python3 -c "import os,sys; print(int(os.stat(sys.argv[1]).st_mtime))" "$wt_dir" 2>/dev/null || echo 0)
+        age=$(( now_sec - mtime ))
+        if [ "$age" -lt "$ttl" ]; then
+            log "[recovery] GC SKIP $wt_dir — within TTL (${age}s < ${ttl}s)"
+            continue
+        fi
+
+        if _recovery_worktree_has_live_owner "$wt_dir"; then
+            log "[recovery] GC SKIP $wt_dir — live process owns a file inside"
+            continue
+        fi
+
+        log "[recovery] GC REMOVE $wt_dir (age=${age}s, no live owner)"
+        if ${DRY_RUN:-false}; then
+            gc_count=$((gc_count + 1))
+            continue
+        fi
+
+        if [ -n "$root" ]; then
+            git -C "$root" worktree remove "$wt_dir" --force 2>/dev/null \
+                || rm -rf "$wt_dir"
+        else
+            rm -rf "$wt_dir"
+        fi
+        gc_count=$((gc_count + 1))
+    done
+
+    printf '%s\n' "$gc_count"
+}
+
+# Returns 0 if any live process holds an open handle inside $1, else 1.
+# Probes lsof first, then fuser; if neither is available, treats the dir as
+# unowned (the TTL alone gates removal in that case).
+_recovery_worktree_has_live_owner() {
+    local dir="$1"
+    if command -v lsof >/dev/null 2>&1; then
+        lsof +D "$dir" >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    if command -v fuser >/dev/null 2>&1; then
+        fuser "$dir" >/dev/null 2>&1 && return 0
+        return 1
+    fi
+    return 1
 }

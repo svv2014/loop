@@ -377,3 +377,61 @@ print(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
     [ -d "$wt_dir" ]
     rm -rf "$wt_dir"
 }
+
+# ---------------------------------------------------------------------------
+# recovery_gc_stale_worktrees — TTL-based GC of worktree dirs
+#
+# Tests scope the scan glob to $BATS_TMPDIR/loop-worktree-gc-* via
+# LOOP_WORKTREE_GC_GLOB so they never touch real /tmp/loop-worktree-*
+# directories owned by live handlers.
+# ---------------------------------------------------------------------------
+
+@test "recovery_gc_stale_worktrees: respects TTL — fresh dir is spared" {
+    local sandbox="$BATS_TMPDIR/gc-ttl-fresh"
+    rm -rf "$sandbox"; mkdir -p "$sandbox/loop-worktree-fresh"
+    export LOOP_WORKTREE_GC_GLOB="$sandbox/loop-worktree-*"
+    export LOOP_WORKTREE_TTL=21600
+
+    run recovery_gc_stale_worktrees
+    [ "$status" -eq 0 ]
+    local last_idx=$(( ${#lines[@]} - 1 ))
+    [ "${lines[$last_idx]}" = "0" ]
+    [ -d "$sandbox/loop-worktree-fresh" ]
+    rm -rf "$sandbox"
+    unset LOOP_WORKTREE_GC_GLOB LOOP_WORKTREE_TTL
+}
+
+@test "recovery_gc_stale_worktrees: removes stale dir past TTL" {
+    local sandbox="$BATS_TMPDIR/gc-ttl-stale"
+    rm -rf "$sandbox"; mkdir -p "$sandbox/loop-worktree-stale"
+    python3 -c "import os; os.utime('$sandbox/loop-worktree-stale', (0, 0))"
+    export LOOP_WORKTREE_GC_GLOB="$sandbox/loop-worktree-*"
+    export LOOP_WORKTREE_TTL=1
+
+    run recovery_gc_stale_worktrees
+    [ "$status" -eq 0 ]
+    local last_idx=$(( ${#lines[@]} - 1 ))
+    [ "${lines[$last_idx]}" = "1" ]
+    [ ! -d "$sandbox/loop-worktree-stale" ]
+    rm -rf "$sandbox"
+    unset LOOP_WORKTREE_GC_GLOB LOOP_WORKTREE_TTL
+}
+
+@test "recovery_gc_stale_worktrees: spares dir with live PID owner" {
+    local sandbox="$BATS_TMPDIR/gc-live-owner"
+    rm -rf "$sandbox"; mkdir -p "$sandbox/loop-worktree-live"
+    python3 -c "import os; os.utime('$sandbox/loop-worktree-live', (0, 0))"
+    export LOOP_WORKTREE_GC_GLOB="$sandbox/loop-worktree-*"
+    export LOOP_WORKTREE_TTL=1
+
+    # Stub the owner-probe to claim a live process holds the dir.
+    _recovery_worktree_has_live_owner() { return 0; }
+
+    run recovery_gc_stale_worktrees
+    [ "$status" -eq 0 ]
+    local last_idx=$(( ${#lines[@]} - 1 ))
+    [ "${lines[$last_idx]}" = "0" ]
+    [ -d "$sandbox/loop-worktree-live" ]
+    rm -rf "$sandbox"
+    unset LOOP_WORKTREE_GC_GLOB LOOP_WORKTREE_TTL
+}
