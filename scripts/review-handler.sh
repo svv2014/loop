@@ -66,6 +66,13 @@ _QA_LABEL=$(loop_label_for "$SLUG" "needs-qa")
 _QA_PASS_LABEL=$(loop_label_for "$SLUG" "qa-pass")
 _QA_FAIL_LABEL=$(loop_label_for "$SLUG" "qa-fail")
 
+# shellcheck source=../lib/handler_guard.sh
+source "$LOOP_ROOT/lib/handler_guard.sh"
+if ! loop_handler_guard "$REPO" pr "$PR_NUM" "$_REVIEW_LABEL"; then
+    log "guard: PR #$PR_NUM no longer eligible for review — skipping"
+    exit 0
+fi
+
 # Auto-promote drafts — PRs are no longer opened as drafts, but promote any legacy ones.
 _is_draft=$(gh pr view "$PR_NUM" --repo "$REPO" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
 if [ "$_is_draft" = "true" ]; then
