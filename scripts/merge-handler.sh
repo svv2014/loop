@@ -133,10 +133,16 @@ fi
 LINKED_ISSUES=$(backend_pr_view "$REPO" "$PR_NUM" --json body --jq .body 2>/dev/null \
     | python3 -c "import re,sys; print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))")
 
+# Strip all pipeline-stage labels from the merged PR (issue #166).
+# Orthogonal labels (priority, semver:*, release-pr, safe-to-test, bug,
+# feature, epic, tracker, blocked) are preserved.
+log "stripping pipeline-stage labels from merged PR #${PR_NUM}"
+loop_strip_pipeline_labels "$REPO" "$PR_NUM" >/dev/null || true
+
 if [ -n "$LINKED_ISSUES" ]; then
     for LINKED_ISSUE in $LINKED_ISSUES; do
-        log "closing linked issue #${LINKED_ISSUE} with label 'done'"
-        backend_remove_label "$REPO" "$LINKED_ISSUE" qa-pass
+        log "closing linked issue #${LINKED_ISSUE} with label 'done' (stripping stale stage labels)"
+        loop_strip_pipeline_labels "$REPO" "$LINKED_ISSUE" >/dev/null || true
         backend_add_label "$REPO" "$LINKED_ISSUE" 'done'
         backend_close_issue "$REPO" "$LINKED_ISSUE"
     done
