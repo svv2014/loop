@@ -13,6 +13,10 @@
 
 set -euo pipefail
 
+# Shared dep-parser source (heredoc-inlined Python via shell variable).
+# shellcheck source=./dep_parser.sh
+source "$(dirname "${BASH_SOURCE[0]}")/dep_parser.sh"
+
 # recovery_check_dependencies <slug>
 #
 # For each open issue and PR carrying the `blocked` label whose body contains
@@ -36,13 +40,12 @@ recovery_check_dependencies() {
     blocked_json=$(backend_list_open_issues_raw "$repo" "blocked")
 
     local candidates
-    candidates=$(ITEMS="$blocked_json" python3 - <<'PY'
-import json, os, re, sys
-sys.path.insert(0, os.environ.get('LOOP_ROOT', '.') + '/lib')
-import dep_parser  # noqa: E402
+    candidates=$(ITEMS="$blocked_json" DEP_PARSER_PY="$_DEP_PARSER_PY" python3 - <<'PY'
+import json, os
+exec(os.environ['DEP_PARSER_PY'])  # installs extract() into local scope
 items = json.loads(os.environ['ITEMS'])
 for item in items:
-    deps = dep_parser.extract(item.get('body') or '', self_num=item.get('number'))
+    deps = extract(item.get('body') or '', self_num=item.get('number'))
     if not deps:
         continue
     print(f"{item['number']}\t{','.join(str(n) for n in deps)}\t{item['title'][:60]}")
@@ -94,16 +97,15 @@ import os; nums=os.environ['DEP_NUMS'].split(','); print(', '.join('#'+n for n i
     all_prs_json=$(backend_list_open_prs_raw "$repo")
 
     local pr_candidates
-    pr_candidates=$(PJSON="$all_prs_json" python3 - <<'PY'
-import json, os, sys
-sys.path.insert(0, os.environ.get('LOOP_ROOT', '.') + '/lib')
-import dep_parser  # noqa: E402
+    pr_candidates=$(PJSON="$all_prs_json" DEP_PARSER_PY="$_DEP_PARSER_PY" python3 - <<'PY'
+import json, os
+exec(os.environ['DEP_PARSER_PY'])  # installs extract() into local scope
 prs = json.loads(os.environ['PJSON'])
 for pr in prs:
     lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
     if 'blocked' not in lbls:
         continue
-    deps = dep_parser.extract(pr.get('body') or '', self_num=pr.get('number'))
+    deps = extract(pr.get('body') or '', self_num=pr.get('number'))
     if not deps:
         continue
     print(f"{pr['number']}\t{','.join(str(n) for n in deps)}\t{pr['title'][:60]}")
