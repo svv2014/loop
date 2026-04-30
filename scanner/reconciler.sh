@@ -1212,6 +1212,54 @@ import re,sys; print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read(
     done
 }
 
+# --- Check 15: stale pipeline labels on closed issues (issue #166) ---------
+# When an issue is closed (manually or by a closing comment) without a merged
+# PR, its pipeline-stage labels are not stripped. Leaves the dashboard with
+# false positives like "closed issues that are still needs-clarification".
+# Walks recently-closed issues and strips every pipeline-stage label.
+# Orthogonal labels (priority, semver:*, epic, tracker, etc.) are preserved.
+# Idempotent: a second pass finds nothing to do.
+LOOP_CLOSED_LOOKBACK_DAYS="${LOOP_CLOSED_LOOKBACK_DAYS:-7}"
+
+reconcile_closed_issue_labels() {
+    local repo="$1"
+    log "[$repo] scanning closed issues (last ${LOOP_CLOSED_LOOKBACK_DAYS}d) for stale pipeline labels"
+
+    local since
+    since=$(python3 -c "import datetime as d; print((d.datetime.utcnow()-d.timedelta(days=int(${LOOP_CLOSED_LOOKBACK_DAYS}))).strftime('%Y-%m-%d'))")
+
+    local closed_json
+    closed_json=$(gh issue list --repo "$repo" --state closed \
+        --search "closed:>=${since}" \
+        --limit 200 --json number,title,labels 2>/dev/null || echo "[]")
+
+    local stale
+    stale=$(ISS="$closed_json" STAGE="$(loop_pipeline_stage_labels_csv)" python3 - <<'PY'
+import json, os
+issues = json.loads(os.environ['ISS'])
+stage = set(os.environ['STAGE'].split(','))
+for iss in issues:
+    labels = {l['name'] for l in iss.get('labels', [])}
+    bad = labels & stage
+    if bad:
+        print(f"{iss['number']}\t{','.join(sorted(bad))}\t{iss['title'][:60]}")
+PY
+)
+
+    if [ -z "$stale" ]; then
+        log "[$repo] no closed issues with stale pipeline labels"
+        return 0
+    fi
+
+    local num bad title
+    while IFS=$'\t' read -r num bad title; do
+        [ -z "$num" ] && continue
+        log "[$repo] STALE-LABELS closed issue #$num (strip: $bad): $title"
+        $DRY_RUN && continue
+        loop_strip_pipeline_labels "$repo" "$num" "$bad" >/dev/null || true
+    done <<< "$stale"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -1236,6 +1284,7 @@ run_project() {
     reconcile_stale_blocked_issues "$REPO"
     reconcile_qa_failures "$REPO"
     reconcile_author_gated "$slug" "$REPO"
+    reconcile_closed_issue_labels "$REPO"
     recovery_check_dependencies "$slug"
     reconcile_worktrees "$slug" "$REPO"
     recovery_check_stuck_labels "$slug"

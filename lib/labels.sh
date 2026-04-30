@@ -13,11 +13,19 @@
 #   LOOP_DEPRECATED_ALIAS_MAP     — newline-separated "<alias> <canonical>" pairs
 #   LOOP_LABEL_<NAME>             — convenience scalar per canonical name
 #   LOOP_LABEL_DEPRECATED_<NAME>  — convenience scalar per deprecated alias
+#   LOOP_PIPELINE_STAGE_LABELS    — array of every label considered a
+#                                   pipeline-stage marker (canonical
+#                                   non-terminal stages + every deprecated
+#                                   alias + needs-clarification)
 #   loop_canonical_label <name>   — resolve any name to its canonical form
 #   loop_is_canonical_label <n>   — exit 0 if <n> is in the canonical set
 #   loop_is_deprecated_label <n>  — exit 0 if <n> is in the alias map
 #   loop_deprecated_aliases       — list every deprecated alias name
 #   loop_deprecated_aliases_for <canonical>  — list aliases that map to it
+#   loop_strip_pipeline_labels <repo> <number> [<existing_labels_csv>]
+#                                 — strip every pipeline-stage label set on
+#                                   the ticket (used on terminal state)
+#   loop_pipeline_stage_labels_csv — emit the stage label set as a CSV string
 #
 # Bash 3.x compatible (no associative arrays).
 
@@ -142,4 +150,71 @@ loop_deprecated_aliases_for() {
     done <<EOF
 $LOOP_DEPRECATED_ALIAS_MAP
 EOF
+}
+
+# Pipeline-stage labels — every label that marks a ticket as in flight in
+# the Loop state machine. Stripped when a ticket reaches a terminal state
+# (PR merged or issue closed) so closed tickets don't carry stale state.
+# Orthogonal labels (priority, semver, epic, etc.) are not in this list and
+# must be preserved verbatim.
+#
+# Composition: every canonical stage except the terminal `blocked` / `done`,
+# plus every deprecated alias, plus `needs-clarification` (an out-of-band
+# blocker label that handlers set but never clears on close).
+#
+# Consumed by:
+#   scripts/merge-handler.sh         — strip on PR merge
+#   scanner/reconciler.sh            — strip on issue close
+#   scripts/backfill-stale-labels.sh — one-shot historical cleanup
+LOOP_PIPELINE_STAGE_LABELS=(
+    needs-po
+    in-po
+    needs-dev
+    in-dev
+    needs-review
+    in-review
+    needs-qa
+    qa-pass
+    qa-fail
+    needs-clarification
+    po-review
+    dev
+    plan
+    in-progress
+    review-pending
+    ready-for-qa
+    needs-rework
+    changes-requested
+    in-rework
+)
+
+# loop_strip_pipeline_labels <repo> <number> [<existing_labels_csv>]
+#
+# Removes every pipeline-stage label currently set on the ticket. If
+# <existing_labels_csv> is provided (comma-separated label names), only the
+# labels in the intersection are removed — saves N round-trips per ticket.
+# If omitted, every stage label is attempted (backend_remove_label is a no-op
+# for absent labels).
+#
+# Requires backend_remove_label (lib/backends/backend.sh) to be sourced.
+# Echoes one removed label name per line (for logging / dry-run reporting).
+loop_strip_pipeline_labels() {
+    local repo="$1" number="$2" existing="${3-}"
+    local label
+    for label in "${LOOP_PIPELINE_STAGE_LABELS[@]}"; do
+        if [ -n "$existing" ]; then
+            case ",${existing}," in
+                *",${label},"*) ;;
+                *) continue ;;
+            esac
+        fi
+        backend_remove_label "$repo" "$number" "$label" >/dev/null 2>&1 || true
+        echo "$label"
+    done
+}
+
+# loop_pipeline_stage_labels_csv — emit the stage label set as a CSV string.
+loop_pipeline_stage_labels_csv() {
+    local IFS=','
+    echo "${LOOP_PIPELINE_STAGE_LABELS[*]}"
 }
