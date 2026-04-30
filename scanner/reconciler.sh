@@ -1259,4 +1259,6 @@ else
     done < <(loop_list_slugs)
 fi
 
-log "=== reconciler done ==="
+orphans_gc=$(recovery_gc_stale_worktrees)
+
+log "=== reconciler done orphans_gc=${orphans_gc} ==="
