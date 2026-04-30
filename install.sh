@@ -922,6 +922,7 @@ labels_spec=(
     "changes-requested|FFA07A|[deprecated: use needs-rework] Reviewer requested changes"
     "needs-rework|FFA07A|Reviewer requested changes, needs rework"
     "blocked|8B0000|Failed 3x, needs human"
+    "operator-approved|2EA043|Override the author allow-list for this single ticket (see docs/security.md)"
     "needs-clarification|FF69B4|Dev hit ambiguity"
     "done|006400|Merged and closed"
     "semver:major|b60205|Bump major version on next release"
