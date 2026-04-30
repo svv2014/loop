@@ -13,6 +13,9 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+
+### Changed
+- [LOOP-160] feat: add reconcile-on-startup entrypoint (#171)
 ## [0.2.0] - 2026-04-29
 
 ### Fixed
