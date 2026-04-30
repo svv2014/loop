@@ -658,6 +658,81 @@ reconcile_labels() {
     log "[$repo] labels ok (created=$created)"
 }
 
+# --- Check 9b: rename synonym labels to live-workflow trigger names ----------
+# Some review/QA/handler agents apply synonym labels that are not the live
+# workflow trigger (e.g. `changes-requested` instead of `needs-rework`,
+# `review-pending` instead of `needs-review`). The scanner only polls workflow
+# triggers, so synonym-labelled tickets get stuck. Rename on sight.
+#
+# Map is intentionally narrow: only synonyms that can be safely promoted to
+# the live default-workflow trigger names. The broader vocab unification
+# (LOOP-167 / #165) is the canonical fix; this is the immediate stuck-ticket
+# remedy.
+LOOP_SYNONYM_MAP=(
+    "review-pending:needs-review"
+    "ready-for-qa:needs-qa"
+    "changes-requested:needs-rework"
+    "plan:dev"
+)
+
+_rename_label_on_target() {
+    # _rename_label_on_target <repo> <number> <kind> <from> <to>
+    # kind: issue | pr
+    local repo="$1" num="$2" kind="$3" from="$4" to="$5"
+    if $DRY_RUN; then
+        log "[$repo] DRY: would rename $kind #$num: $from → $to"
+        return 0
+    fi
+    if [ "$kind" = "pr" ]; then
+        backend_remove_label "$repo" "$num" "$from"
+        backend_add_label    "$repo" "$num" "$to"
+    else
+        backend_remove_label "$repo" "$num" "$from"
+        backend_add_label    "$repo" "$num" "$to"
+    fi
+    log "[$repo] renamed $kind #$num: $from → $to"
+}
+
+reconcile_synonym_labels() {
+    local repo="$1"
+    log "[$repo] scanning open issues + PRs for synonym labels"
+    local renamed=0 entry from to
+
+    for entry in "${LOOP_SYNONYM_MAP[@]}"; do
+        from="${entry%%:*}"; to="${entry##*:}"
+
+        # Issues carrying the synonym
+        local issues_json
+        issues_json=$(backend_list_issues_with_label "$repo" "$from" 2>/dev/null || echo "")
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local num; num=$(printf '%s' "$line" | jq -r '.number // empty' 2>/dev/null)
+            [ -z "$num" ] && continue
+            _rename_label_on_target "$repo" "$num" issue "$from" "$to"
+            renamed=$((renamed+1))
+        done <<EOF
+$issues_json
+EOF
+
+        # PRs carrying the synonym
+        local prs_json
+        prs_json=$(backend_list_prs_with_label "$repo" "$from" 2>/dev/null || echo "")
+        while IFS= read -r line; do
+            [ -z "$line" ] && continue
+            local num; num=$(printf '%s' "$line" | jq -r '.number // empty' 2>/dev/null)
+            [ -z "$num" ] && continue
+            _rename_label_on_target "$repo" "$num" pr "$from" "$to"
+            renamed=$((renamed+1))
+        done <<EOF
+$prs_json
+EOF
+    done
+
+    if [ "$renamed" -gt 0 ]; then
+        log "[$repo] synonyms renamed: $renamed"
+    fi
+}
+
 # --- Check 10: orphaned in-progress issues (no live handler lock) --------------
 # An issue stuck with `in-progress` but no live dev-handler or po-handler process
 # will never self-recover — the EXIT trap added in the handlers handles normal
@@ -1270,6 +1345,7 @@ run_project() {
     fi
     log "=== $slug ($REPO) ==="
     reconcile_labels "$REPO"
+    reconcile_synonym_labels "$REPO"
     reconcile_lost_issues "$REPO"
     reconcile_duplicate_prs "$REPO"
     reconcile_obsolete_open_prs "$REPO"
