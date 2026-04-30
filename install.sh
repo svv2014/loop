@@ -253,6 +253,25 @@ bootstrap_register_launchd() {
 
     local scanner_plist="$agents_dir/com.user.loop-scanner.plist"
     local reconciler_plist="$agents_dir/com.user.loop-reconciler.plist"
+    local reconcile_plist="$agents_dir/com.user.loop-reconcile.plist"
+
+    # One-shot startup audit (RunAtLoad). Installed before scanner so it
+    # fires once on agent load before the first scan tick.
+    if [ -f "$reconcile_plist" ]; then
+        echo "[launchd] com.user.loop-reconcile already registered — skipping"
+    else
+        sed \
+            -e "s|__LOOP_ROOT__|$LOOP_ROOT|g" \
+            -e "s|__LOG_DIR__|$log_dir|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__EXTRA_PATH__|$extra_path|g" \
+            "$template_dir/com.user.loop-reconcile.plist.template" > "$reconcile_plist"
+        if launchctl load "$reconcile_plist" 2>/dev/null; then
+            echo "[launchd] com.user.loop-reconcile loaded (one-shot at load)"
+        else
+            echo "[launchd] WARNING: could not load com.user.loop-reconcile (check Console.app)" >&2
+        fi
+    fi
 
     if [ -f "$scanner_plist" ]; then
         echo "[launchd] com.user.loop-scanner already registered — skipping"
