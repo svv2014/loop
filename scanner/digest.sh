@@ -3,7 +3,7 @@
 #
 # Queries every project in config/projects.yaml for:
 #   - Issues with labels: needs-clarification, blocked
-#   - Issues with operational labels (in-progress, in-review, in-rework)
+#   - Issues with operational labels (in-progress, in-review, deprecated rework alias)
 #     stuck longer than 2× HANDLER_TIMEOUT (genuine stuck, not mid-flight)
 #
 # Posts a single Markdown digest via loop_notify.
@@ -21,6 +21,8 @@ LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$LOOP_ROOT/lib/env.sh"
 # shellcheck source=../lib/config.sh
 source "$LOOP_ROOT/lib/config.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 
@@ -82,7 +84,7 @@ collect_project_items() {
     local ip_json ir_json irw_json
     ip_json=$(fetch_issues_with_label "$repo"  "in-progress")
     ir_json=$(fetch_issues_with_label "$repo"  "in-review")
-    irw_json=$(fetch_issues_with_label "$repo" "in-rework")
+    irw_json=$(fetch_issues_with_label "$repo" "$LOOP_LABEL_DEPRECATED_IN_REWORK")
 
     # Merge, deduplicate, classify, and filter by age threshold for operational.
     merged_json=$(

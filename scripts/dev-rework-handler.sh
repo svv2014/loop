@@ -2,10 +2,10 @@
 # dev-rework-handler.sh — handles one loop.dev_rework event.
 # Deprecated name: prefer scripts/reviser.sh
 #
-# Fires when a PR is labeled 'changes-requested' by the review-handler.
+# Fires when a PR is labeled with the rework trigger by the review-handler.
 # Checks out the existing PR branch, reads the reviewer feedback, and
 # asks the orchestrator to address it. On success, swaps the PR label
-# back to 'review-pending' so review-handler re-evaluates.
+# back to the workflow's review-trigger so review-handler re-evaluates.
 #
 # Event payload: {"slug","repo","pr_number","pr_title","pr_url"}
 
@@ -21,6 +21,8 @@ source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
@@ -54,9 +56,9 @@ fi
 
 # SOURCE_LABEL is the label that triggered this rework (to remove on start, restore on retry).
 if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
-    SOURCE_LABEL="qa-fail"
+    SOURCE_LABEL="$LOOP_LABEL_QA_FAIL"
 else
-    SOURCE_LABEL="changes-requested"
+    SOURCE_LABEL="$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED"
 fi
 
 [ -n "$SLUG" ] && [ -n "$PR_NUM" ] \
@@ -129,7 +131,7 @@ _block_linked_issue_senior_failed() {
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
     log "PR #$PR_NUM rework failed ${retries}x — checking escalation path"
     backend_remove_label "$REPO" "$PR_NUM" "$SOURCE_LABEL" 2>/dev/null || true
-    backend_remove_label "$REPO" "$PR_NUM" in-rework 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK" 2>/dev/null || true
     if [ -n "$LINKED_ISSUE" ] && ! _is_senior_escalated; then
         log "escalating issue #$LINKED_ISSUE to senior-dev"
         _escalate_to_senior
@@ -155,7 +157,7 @@ loop_notify "▶️ [$SLUG] PR#$PR_NUM dev-rework starting"
 _update_issue_rework_count "$((retries + 1))"
 
 backend_remove_label "$REPO" "$PR_NUM" "$SOURCE_LABEL"
-backend_add_label "$REPO" "$PR_NUM" in-rework
+backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK"
 
 PR_BRANCH=$(backend_pr_view "$REPO" "$PR_NUM" --json headRefName --jq .headRefName 2>/dev/null || echo "")
 [ -n "$PR_BRANCH" ] || { log "ERROR: couldn't fetch PR branch"; exit 1; }
@@ -167,7 +169,7 @@ fi
 git -C "$ROOT" fetch origin "$PR_BRANCH" "$DEFAULT_BRANCH" --quiet 2>&1 | tee -a "$LOG_FILE" || true
 if ! git -C "$ROOT" worktree add "$WORKTREE_ROOT" "origin/$PR_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
     log "ERROR: failed to create worktree at $WORKTREE_ROOT for branch $PR_BRANCH"
-    backend_remove_label "$REPO" "$PR_NUM" in-rework
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK"
     backend_add_label "$REPO" "$PR_NUM" "$SOURCE_LABEL"
     exit 1
 fi
@@ -255,7 +257,7 @@ Your job -- in sequence:
 
 0. Check PR state before doing anything:
    gh pr view ${PR_NUM} --repo ${REPO} --json state,merged
-   - If state=MERGED: the PR already merged. Remove label 'in-rework', add comment explaining PR is already merged, and stop.
+   - If state=MERGED: the PR already merged. Remove label '${LOOP_LABEL_DEPRECATED_IN_REWORK}', add comment explaining PR is already merged, and stop.
    - If state=CLOSED and merged=false: label the PR 'blocked', comment explaining it was closed without merging, and stop.
    - If state=OPEN: continue to step 1.
 
@@ -270,7 +272,7 @@ ${_VALIDATION_STEP}
 7. Post a PR comment summarizing what you changed in response:
 ${_STEP7}
 8. Swap labels -- this is MANDATORY to signal success to the pipeline:
-   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-rework --remove-label ${_REWORK_LABEL} --remove-label ${_QA_FAIL_LABEL} --add-label ${_REVIEW_LABEL}
+   gh pr edit ${PR_NUM} --repo ${REPO} --remove-label ${LOOP_LABEL_DEPRECATED_IN_REWORK} --remove-label ${_REWORK_LABEL} --remove-label ${_QA_FAIL_LABEL} --add-label ${_REVIEW_LABEL}
 
 IMPORTANT: The PR MUST end this run with label '${_REVIEW_LABEL}' (or 'needs-clarification'/'blocked' if appropriate). Verify with:
    gh pr view ${PR_NUM} --repo ${REPO} --json labels
@@ -296,9 +298,13 @@ if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; the
     # Strip every label from the prior stage (rework entry triggers + qa-fail
     # entry trigger) so the PR doesn't sit multi-labeled and bounce back into
     # rework on the next scanner tick. Closes loop#15.
-    backend_remove_label "$REPO" "$PR_NUM" in-rework needs-rework changes-requested qa-fail qa-failed
+    backend_remove_label "$REPO" "$PR_NUM" \
+        "$LOOP_LABEL_DEPRECATED_IN_REWORK" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
+        "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" "$LOOP_LABEL_QA_FAIL" qa-failed
     # Belt-and-braces: if agent forgot step 8, ensure PR has a progression label.
-    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" review-pending needs-review needs-clarification blocked 'done'; then
+    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
+            "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" "$LOOP_LABEL_NEEDS_REVIEW" \
+            needs-clarification blocked 'done'; then
         log "WARN: PR #$PR_NUM has no progression label after rework agent — adding '${_REVIEW_LABEL}'"
         backend_add_label "$REPO" "$PR_NUM" "$_REVIEW_LABEL"
     fi
@@ -308,7 +314,7 @@ else
     log "rework agent failed for PR #$PR_NUM (attempt $n/$MAX_RETRIES)"
     bounty_report "rework_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" pr_num="$PR_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
-        backend_remove_label "$REPO" "$PR_NUM" in-rework
+        backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK"
         if [ -n "$LINKED_ISSUE" ] && ! _is_senior_escalated; then
             log "escalating issue #$LINKED_ISSUE to senior-dev after $MAX_RETRIES failed rework attempts"
             _escalate_to_senior
@@ -327,7 +333,7 @@ else
             loop_notify "❌ [$SLUG] PR#$PR_NUM dev-rework blocked after senior-dev escalation also failed"
         fi
     else
-        backend_remove_label "$REPO" "$PR_NUM" in-rework
+        backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK"
         backend_add_label "$REPO" "$PR_NUM" "$SOURCE_LABEL"
     fi
     cleanup_worktree

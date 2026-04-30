@@ -18,6 +18,8 @@ source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
@@ -103,7 +105,7 @@ if ! git -C "$ROOT" worktree add "$WORKTREE_ROOT" "origin/$DEFAULT_BRANCH" 2>&1 
 fi
 log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
 
-REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo review-pending)
+REVIEW_LABEL=$(loop_stage_trigger "$SLUG" review pr 2>/dev/null || echo "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING")
 
 TASK_PROMPT=$(cat <<EOF
 You are the Senior Developer for ${NAME} (slug: ${SLUG}).
@@ -151,7 +153,7 @@ $( [ -n "$DEV_VALIDATION_CMD" ] && echo "4. Run validation: ${DEV_VALIDATION_CMD
 <what QA should verify>' \\
      --label ${REVIEW_LABEL}
 8. On your own issue — this step is MANDATORY to signal success to the pipeline:
-   gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --remove-label senior-dev --remove-label plan --remove-label needs-review --remove-label review-pending --add-label ${REVIEW_LABEL}
+   gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --remove-label senior-dev --remove-label plan --remove-label needs-review --remove-label ${LOOP_LABEL_DEPRECATED_REVIEW_PENDING} --add-label ${REVIEW_LABEL}
 
 IMPORTANT: The issue MUST end this run with label '${REVIEW_LABEL}' (or 'needs-clarification' if blocked). Verify with:
    gh issue view ${ISSUE_NUM} --repo ${REPO} --json labels
@@ -194,11 +196,13 @@ if matches:
     else
         log "belt-and-braces: found PR #$_senior_pr_num for issue #$ISSUE_NUM"
         if ! backend_pr_has_any_label "$REPO" "$_senior_pr_num" \
-                review-pending needs-review changes-requested needs-rework in-review needs-clarification blocked 'done'; then
+                "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" "$LOOP_LABEL_NEEDS_REVIEW" \
+                "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
+                "$LOOP_LABEL_IN_REVIEW" needs-clarification blocked 'done'; then
             log "WARN: PR #$_senior_pr_num has no progression label after senior-dev agent — adding '${REVIEW_LABEL}'"
             backend_add_label "$REPO" "$_senior_pr_num" "$REVIEW_LABEL"
         fi
-        backend_remove_label "$REPO" "$ISSUE_NUM" needs-review review-pending plan senior-dev in-progress
+        backend_remove_label "$REPO" "$ISSUE_NUM" "$LOOP_LABEL_NEEDS_REVIEW" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" plan senior-dev in-progress
     fi
     cleanup_worktree
 else

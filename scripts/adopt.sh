@@ -16,6 +16,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/env.sh
 source "$LOOP_ROOT/lib/env.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 
 # ── CLI parsing ───────────────────────────────────────────────────────────────
 
@@ -85,16 +87,27 @@ echo ""
 #
 # Output: space-separated lines of:  canonical repo_label confidence
 
-MAPPING_JSON=$(ADOPT_LABELS_JSON="$LABELS_JSON" python3 <<'PY'
+MAPPING_JSON=$(ADOPT_LABELS_JSON="$LABELS_JSON" \
+    LBL_CR="$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
+    LBL_RFQ="$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
+    python3 <<'PY'
 import json, sys, os, re
+
+# Heuristic match tokens for adopting external repos. We deliberately list the
+# raw token strings (e.g. "rework") rather than canonical Loop names, because
+# we are searching *foreign* label vocabularies. Tokens that happen to match
+# Loop's deprecated aliases come from env so this file stays free of
+# hardcoded loop-label literals (see lib/labels.sh).
+_LBL_CR  = os.environ['LBL_CR']        # deprecated rework-trigger alias
+_LBL_RFQ = os.environ['LBL_RFQ']       # deprecated qa-trigger alias
 
 CANONICALS = {
     # canonical: (match_tokens, color_hints)
     # color_hints are partial hex strings (lowercase, without #)
     "plan":         (["plan","triage","todo","backlog","ready-to-work","ready to work"], []),
     "needs-review": (["review","ready-for-review","rfr","needs-review","ready for review"], ["0075ca","fbca04","e4e669","bfd4f2"]),
-    "needs-rework": (["rework","changes-requested","needs-changes","needs-fix","request-changes","changes requested"], ["e4813b","d93f0b","e99695"]),
-    "needs-qa":     (["qa","ready-for-qa","test","ready-to-test","ready for qa","ready to test"], ["fbca04","e4e669","f9d0c4"]),
+    "needs-rework": (["rework",_LBL_CR,"needs-changes","needs-fix","request-changes","changes requested"], ["e4813b","d93f0b","e99695"]),
+    "needs-qa":     (["qa",_LBL_RFQ,"test","ready-to-test","ready for qa","ready to test"], ["fbca04","e4e669","f9d0c4"]),
     "qa-pass":      (["merge","approved","ready-to-merge","ship-it","ready to merge","ship it"], ["0e8a16","2cbe4e","006b75"]),
     "qa-fail":      (["qa-fail","ci-fail","broken","failed","qa fail","ci fail"], ["b60205","ee0701","d93f0b"]),
     "blocked":      (["blocked","stuck","halted"], ["b60205","ee0701","e11d48"]),

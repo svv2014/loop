@@ -15,6 +15,8 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 PROJECTS_YAML="$LOOP_ROOT/config/projects.yaml"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 
 TARGET_SLUG=""
 FIX_MODE=false
@@ -31,31 +33,32 @@ for arg in "$@"; do
     esac
 done
 
-# Canonical pipeline labels (name|color|description)
+# Canonical pipeline labels (name|color|description). Names sourced from
+# lib/labels.sh so this stays in sync with the canonical/deprecated split.
 CANONICAL_LABELS=(
-    "po-review|1D76DB|PO agent expands rough idea into full spec"
-    "dev|0075CA|Issue ready for automated dev cycle"
-    "in-progress|FFA500|Currently being worked on by dev agent"
-    "in-review|6A5ACD|Reviewer is looking at it"
-    "review-pending|9370DB|PR open, waiting for automated review"
-    "ready-for-qa|FFD700|Approved, needs QA validation"
-    "qa-pass|32CD32|QA passed, ready to merge"
-    "qa-fail|DC143C|QA failed, back to dev for rework"
-    "changes-requested|FFA07A|Reviewer requested changes"
-    "blocked|8B0000|Failed 3x, needs human"
+    "${LOOP_LABEL_DEPRECATED_PO_REVIEW}|1D76DB|PO agent expands rough idea into full spec"
+    "${LOOP_LABEL_DEPRECATED_DEV}|0075CA|Issue ready for automated dev cycle"
+    "${LOOP_LABEL_DEPRECATED_IN_PROGRESS}|FFA500|Currently being worked on by dev agent"
+    "${LOOP_LABEL_IN_REVIEW}|6A5ACD|Reviewer is looking at it"
+    "${LOOP_LABEL_DEPRECATED_REVIEW_PENDING}|9370DB|PR open, waiting for automated review"
+    "${LOOP_LABEL_DEPRECATED_READY_FOR_QA}|FFD700|Approved, needs QA validation"
+    "${LOOP_LABEL_QA_PASS}|32CD32|QA passed, ready to merge"
+    "${LOOP_LABEL_QA_FAIL}|DC143C|QA failed, back to dev for rework"
+    "${LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED}|FFA07A|Reviewer requested changes"
+    "${LOOP_LABEL_BLOCKED}|8B0000|Failed 3x, needs human"
     "needs-clarification|FF69B4|Dev hit ambiguity"
-    "done|006400|Merged and closed"
+    "${LOOP_LABEL_DONE}|006400|Merged and closed"
 )
 
-# Build lookup set of canonical names (and known aliases added by additive label rename)
-KNOWN_LABELS=(
-    po-review dev plan in-progress build
-    review-pending needs-review in-review
-    ready-for-qa needs-qa
-    qa-pass approved
-    qa-fail qa-failed
-    changes-requested needs-rework
-    blocked needs-clarification "done"
+# Build lookup set of canonical names + every deprecated alias the project
+# may still carry (handlers strip these as part of the migration).
+KNOWN_LABELS=("${LOOP_CANONICAL_LABELS[@]}")
+while IFS= read -r _alias; do
+    [ -n "$_alias" ] && KNOWN_LABELS+=("$_alias")
+done < <(loop_deprecated_aliases)
+KNOWN_LABELS+=(
+    build approved qa-failed
+    needs-clarification
     bug enhancement question documentation duplicate wontfix invalid
 )
 

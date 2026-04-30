@@ -6,7 +6,7 @@
 #
 # Flow: label PR 'in-review' → invoke orchestrator with reviewer prompt →
 # agent reviews diff + PR body against the issue being closed →
-# applies 'needs-qa' on approve or 'needs-rework' on reject.
+# applies 'needs-qa' on approve or the workflow's rework label on reject.
 
 set -euo pipefail
 
@@ -20,6 +20,8 @@ source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
@@ -86,9 +88,9 @@ retry_clear() { rm -f "$RETRY_FILE"; }
 retries=$(retry_count)
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
     log "PR #$PR_NUM already failed review ${retries}x — labeling ${_REWORK_LABEL}"
-    backend_remove_label "$REPO" "$PR_NUM" needs-review
-    backend_remove_label "$REPO" "$PR_NUM" review-pending
-    backend_remove_label "$REPO" "$PR_NUM" in-review
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_REVIEW"
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING"
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_IN_REVIEW"
     backend_remove_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
     backend_add_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
     exit 0
@@ -98,9 +100,9 @@ log "review: slug=$SLUG repo=$REPO pr=#$PR_NUM attempt=$((retries + 1))/$MAX_RET
 bounty_report "review_start" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" || true
 loop_notify "▶️ [$SLUG] PR#$PR_NUM review starting"
 
-backend_remove_label "$REPO" "$PR_NUM" needs-review
-backend_remove_label "$REPO" "$PR_NUM" review-pending
-backend_add_label "$REPO" "$PR_NUM" in-review
+backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_REVIEW"
+backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING"
+backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_IN_REVIEW"
 
 _BACKEND_CLI_NOTE=$(backend_cli_note)
 
@@ -163,9 +165,12 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     backend_remove_label "$REPO" "$PR_NUM" in-review
     # Belt-and-braces: if agent forgot to apply a decision label, default to rework
     # (workflow-resolved) so the PR doesn't silently disappear from the pipeline.
-    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" needs-qa ready-for-qa needs-rework changes-requested blocked 'done'; then
+    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
+            "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
+            "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
+            blocked 'done'; then
         log "WARN: PR #$PR_NUM has no decision label after review agent — defaulting to '${_REWORK_LABEL}'"
-        backend_remove_label "$REPO" "$PR_NUM" needs-rework changes-requested
+        backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED"
         backend_add_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
     fi
 else

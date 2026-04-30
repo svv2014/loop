@@ -7,11 +7,11 @@
 # Checks (per project):
 #   1. DUPLICATE_PRS — multiple OPEN PRs close the same issue (body contains
 #      "Closes #N"). Keep the newest PR number, close the rest with a comment.
-#   2. ORPHANED_CLAIMS — issue carries a "claimed" label (review-pending)
-#      but no OPEN PR closes it. Strip the stale label so the scanner/dev
-#      handler picks the issue up again.
-#   3. STALE_PRS — PRs sitting >24h in review-pending/changes-requested
-#      without an update. Logged + announced to Signal ops (no auto-fix).
+#   2. ORPHANED_CLAIMS — issue carries a "claimed" label (the deprecated
+#      review-trigger alias) but no OPEN PR closes it. Strip the stale label
+#      so the scanner/dev handler picks the issue up again.
+#   3. STALE_PRS — PRs sitting >24h waiting on review/rework without an
+#      update. Logged + announced to Signal ops (no auto-fix).
 #
 # Modes:
 #   reconciler.sh                 # single sweep across all projects
@@ -28,6 +28,8 @@ source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/recovery.sh
 source "$LOOP_ROOT/lib/recovery.sh"
 # shellcheck source=../lib/author_gate.sh
@@ -135,17 +137,17 @@ PY
 }
 
 # --- Check 2: orphaned claimed issues --------------------------------------
-# "Claimed" markers on issues = review-pending (dev-handler set it when
-# opening a PR). If the matching PR got closed without merging, the issue
-# stays stuck under review-pending with no active PR. Reset so the pipeline
-# can retry.
+# "Claimed" markers on issues = the deprecated review trigger alias
+# (dev-handler set it when opening a PR). If the matching PR got closed
+# without merging, the issue stays stuck under that alias with no active
+# PR. Reset so the pipeline can retry.
 reconcile_orphaned_claims() {
     local repo="$1"
-    log "[$repo] scanning for orphaned review-pending issues"
+    log "[$repo] scanning for orphaned ${LOOP_LABEL_DEPRECATED_REVIEW_PENDING} issues"
 
     local issues_json issues_new_json
-    issues_json=$(backend_list_open_issues_raw "$repo" "review-pending")
-    issues_new_json=$(backend_list_open_issues_raw "$repo" "needs-review")
+    issues_json=$(backend_list_open_issues_raw "$repo" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING")
+    issues_new_json=$(backend_list_open_issues_raw "$repo" "$LOOP_LABEL_NEEDS_REVIEW")
     # Merge both result sets, deduplicating by issue number.
     issues_json=$(ISS_A="$issues_json" ISS_B="$issues_new_json" python3 -c '
 import json, os
@@ -164,7 +166,7 @@ print(json.dumps(list(seen.values())))
 
     # Classify orphans into two buckets:
     #   "reset"    — no PR closes this issue (reset label to dev, pipeline retries)
-    #   "merged"   — a PR already merged closing it (strip review-pending, close issue)
+    #   "merged"   — a PR already merged closing it (strip the alias, close issue)
     # Grace window: skip issues touched in last 10 min (handler mid-flight).
     local orphans
     orphans=$(ISS="$issues_json" OPEN="$open_prs_json" MERGED="$merged_prs_json" python3 - <<'PY'
@@ -201,20 +203,20 @@ PY
     while IFS=$'\t' read -r kind num title; do
         [ -z "$num" ] && continue
         if [ "$kind" = "merged" ]; then
-            log "[$repo] STALE-LABEL issue #$num (review-pending, PR already merged): $title"
-            loop_notify "Loop reconciler: $repo — issue #$num PR merged but review-pending label stuck; stripping + closing issue"
+            log "[$repo] STALE-LABEL issue #$num (${LOOP_LABEL_DEPRECATED_REVIEW_PENDING}, PR already merged): $title"
+            loop_notify "Loop reconciler: $repo — issue #$num PR merged but ${LOOP_LABEL_DEPRECATED_REVIEW_PENDING} label stuck; stripping + closing issue"
             $DRY_RUN && continue
-            backend_remove_label "$repo" "$num" review-pending \
+            backend_remove_label "$repo" "$num" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" \
                 || log "[$repo] failed to strip label from issue #$num"
             backend_comment_issue "$repo" "$num" \
                 "Closed by Loop reconciler — merged PR closing this issue didn't auto-close it."
             backend_close_issue "$repo" "$num" \
                 || log "[$repo] failed to close issue #$num"
         else
-            log "[$repo] ORPHAN issue #$num (review-pending, no PR): $title"
-            loop_notify "Loop reconciler: $repo — issue #$num has review-pending label but no PR; resetting to dev"
+            log "[$repo] ORPHAN issue #$num (${LOOP_LABEL_DEPRECATED_REVIEW_PENDING}, no PR): $title"
+            loop_notify "Loop reconciler: $repo — issue #$num has ${LOOP_LABEL_DEPRECATED_REVIEW_PENDING} label but no PR; resetting to dev"
             $DRY_RUN && continue
-            backend_remove_label "$repo" "$num" review-pending \
+            backend_remove_label "$repo" "$num" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" \
                 || log "[$repo] failed to relabel issue #$num"
             backend_add_label "$repo" "$num" dev \
                 || log "[$repo] failed to add dev label to issue #$num"
@@ -278,11 +280,12 @@ reconcile_stale_prs() {
     local prs_json
     prs_json=$(backend_list_open_prs_raw "$repo")
     local stale
-    stale=$(PRS="$prs_json" CUTOFF_H="$STALE_PR_HOURS" python3 - <<'PY'
+    local _watched_lbls="$LOOP_LABEL_DEPRECATED_REVIEW_PENDING $LOOP_LABEL_NEEDS_REVIEW $LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED $LOOP_LABEL_DEPRECATED_NEEDS_REWORK $LOOP_LABEL_IN_REVIEW $LOOP_LABEL_DEPRECATED_READY_FOR_QA $LOOP_LABEL_NEEDS_QA $LOOP_LABEL_QA_FAIL qa-failed"
+    stale=$(PRS="$prs_json" CUTOFF_H="$STALE_PR_HOURS" WATCHED_LBLS="$_watched_lbls" python3 - <<'PY'
 import json, os, datetime as dt
 data = json.loads(os.environ['PRS'])
 now = dt.datetime.now(dt.timezone.utc)
-watched = {"review-pending","needs-review","changes-requested","needs-rework","in-review","ready-for-qa","needs-qa","qa-fail","qa-failed"}
+watched = set(os.environ['WATCHED_LBLS'].split())
 cutoff_h = float(os.environ['CUTOFF_H'])
 for pr in data:
     labels = {l['name'] for l in pr.get('labels',[])}
@@ -303,17 +306,17 @@ PY
         [ -z "$num" ] && continue
         log "[$repo] STALE PR#$num ${age}h in {$labels}: $title"
 
-        # Auto-recover: needs-review stuck >24h → relabel to review-pending so scanner picks it up
-        if echo "$labels" | grep -q "needs-review" && ! echo "$labels" | grep -q "in-review"; then
-            log "[$repo] AUTO-RECOVER PR#$num: needs-review → review-pending"
-            backend_remove_label "$repo" "$num" needs-review || true
-            backend_add_label    "$repo" "$num" review-pending || true
-            loop_notify "Loop reconciler: $repo — PR#$num auto-recovered needs-review→review-pending after ${age}h"
-        # Auto-recover: has both ready-for-qa + needs-rework (belt-and-braces bug) → strip needs-rework
-        elif echo "$labels" | grep -q "needs-rework" && echo "$labels" | grep -q "ready-for-qa"; then
-            log "[$repo] AUTO-RECOVER PR#$num: stripping spurious needs-rework (ready-for-qa already set)"
-            backend_remove_label "$repo" "$num" needs-rework || true
-            loop_notify "Loop reconciler: $repo — PR#$num stripped spurious needs-rework after ${age}h (ready-for-qa was set)"
+        # Auto-recover: needs-review stuck >24h → relabel to deprecated review trigger so scanner picks it up
+        if echo "$labels" | grep -q "$LOOP_LABEL_NEEDS_REVIEW" && ! echo "$labels" | grep -q "$LOOP_LABEL_IN_REVIEW"; then
+            log "[$repo] AUTO-RECOVER PR#$num: ${LOOP_LABEL_NEEDS_REVIEW} → ${LOOP_LABEL_DEPRECATED_REVIEW_PENDING}"
+            backend_remove_label "$repo" "$num" "$LOOP_LABEL_NEEDS_REVIEW" || true
+            backend_add_label    "$repo" "$num" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" || true
+            loop_notify "Loop reconciler: $repo — PR#$num auto-recovered ${LOOP_LABEL_NEEDS_REVIEW}→${LOOP_LABEL_DEPRECATED_REVIEW_PENDING} after ${age}h"
+        # Auto-recover: has both deprecated qa-ready + needs-rework (belt-and-braces bug) → strip needs-rework
+        elif echo "$labels" | grep -q "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" && echo "$labels" | grep -q "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"; then
+            log "[$repo] AUTO-RECOVER PR#$num: stripping spurious ${LOOP_LABEL_DEPRECATED_NEEDS_REWORK} (${LOOP_LABEL_DEPRECATED_READY_FOR_QA} already set)"
+            backend_remove_label "$repo" "$num" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" || true
+            loop_notify "Loop reconciler: $repo — PR#$num stripped spurious ${LOOP_LABEL_DEPRECATED_NEEDS_REWORK} after ${age}h (${LOOP_LABEL_DEPRECATED_READY_FOR_QA} was set)"
         else
             loop_notify "Loop reconciler: $repo — PR#$num stale ${age}h in [$labels]: $title"
         fi
@@ -568,11 +571,11 @@ reconcile_worktrees() {
     git -C "$ROOT" worktree prune 2>/dev/null || true
 }
 
-# --- Check 8: lost issues (no pipeline label → route back to po-review) -----
+# --- Check 8: lost issues (no pipeline label → route back to PO triage) -----
 # Open issues that have no Loop pipeline label at all are invisible to the
-# scanner and all handlers. Detect them and send back to po-review so the PO
-# agent can triage (re-spec, close, cancel, or upgrade to epic).
-LOOP_PIPELINE_LABELS="po-review plan dev in-progress review-pending needs-review in-review needs-qa ready-for-qa in-rework needs-rework changes-requested needs-clarification blocked qa-fail qa-pass done tracker"
+# scanner and all handlers. Detect them and send back to the PO trigger so
+# the PO agent can triage (re-spec, close, cancel, or upgrade to epic).
+LOOP_PIPELINE_LABELS="${LOOP_LABEL_DEPRECATED_PO_REVIEW} ${LOOP_LABEL_DEPRECATED_PLAN} ${LOOP_LABEL_DEPRECATED_DEV} ${LOOP_LABEL_DEPRECATED_IN_PROGRESS} ${LOOP_LABEL_DEPRECATED_REVIEW_PENDING} ${LOOP_LABEL_NEEDS_REVIEW} ${LOOP_LABEL_IN_REVIEW} ${LOOP_LABEL_NEEDS_QA} ${LOOP_LABEL_DEPRECATED_READY_FOR_QA} ${LOOP_LABEL_DEPRECATED_IN_REWORK} ${LOOP_LABEL_DEPRECATED_NEEDS_REWORK} ${LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED} needs-clarification ${LOOP_LABEL_BLOCKED} ${LOOP_LABEL_QA_FAIL} ${LOOP_LABEL_QA_PASS} ${LOOP_LABEL_DONE} tracker"
 
 reconcile_lost_issues() {
     local repo="$1"
@@ -600,14 +603,14 @@ PY
 
     while IFS=$'\t' read -r num title; do
         [ -z "$num" ] && continue
-        log "[$repo] LOST issue #$num (no pipeline label): $title — routing to po-review"
+        log "[$repo] LOST issue #$num (no pipeline label): $title — routing to ${LOOP_LABEL_DEPRECATED_PO_REVIEW}"
         $DRY_RUN && continue
-        backend_add_label "$repo" "$num" po-review \
-            || log "[$repo] WARN: failed to add po-review to issue #$num"
+        backend_add_label "$repo" "$num" "$LOOP_LABEL_DEPRECATED_PO_REVIEW" \
+            || log "[$repo] WARN: failed to add ${LOOP_LABEL_DEPRECATED_PO_REVIEW} to issue #$num"
         backend_comment_issue "$repo" "$num" \
-            "Reconciler: issue had no pipeline label — routed back to \`po-review\` for triage." \
+            "Reconciler: issue had no pipeline label — routed back to \`${LOOP_LABEL_DEPRECATED_PO_REVIEW}\` for triage." \
             || true
-        loop_notify "Loop reconciler: $repo — issue #$num had no pipeline label; sent to po-review: $title"
+        loop_notify "Loop reconciler: $repo — issue #$num had no pipeline label; sent to ${LOOP_LABEL_DEPRECATED_PO_REVIEW}: $title"
     done <<< "$lost"
 }
 
@@ -617,22 +620,22 @@ PY
 # apply labels and leaving PRs/issues with no labels (a known stuck-pipeline
 # failure mode when a repo is first onboarded without bootstrapping).
 LOOP_REQUIRED_LABELS=(
-    "po-review:PO agent review queue:#1D76DB"
-    "dev:Automated dev cycle:#0075CA"
-    "in-progress:Currently being worked on:#FFA500"
-    "review-pending:PR open, waiting for review:#9370DB"
-    "needs-review:Ready for human review:#0075ca"
-    "in-review:Review in progress:#6A5ACD"
-    "needs-qa:Review approved, pending QA:#FFD700"
-    "ready-for-qa:Approved, needs QA:#FFD700"
-    "in-rework:Dev agent addressing reviewer feedback:#FFD700"
-    "needs-rework:Review rejected, dev must rework:#DC143C"
-    "changes-requested:Reviewer requested changes:#FFA07A"
+    "${LOOP_LABEL_DEPRECATED_PO_REVIEW}:PO agent review queue:#1D76DB"
+    "${LOOP_LABEL_DEPRECATED_DEV}:Automated dev cycle:#0075CA"
+    "${LOOP_LABEL_DEPRECATED_IN_PROGRESS}:Currently being worked on:#FFA500"
+    "${LOOP_LABEL_DEPRECATED_REVIEW_PENDING}:PR open, waiting for review:#9370DB"
+    "${LOOP_LABEL_NEEDS_REVIEW}:Ready for human review:#0075ca"
+    "${LOOP_LABEL_IN_REVIEW}:Review in progress:#6A5ACD"
+    "${LOOP_LABEL_NEEDS_QA}:Review approved, pending QA:#FFD700"
+    "${LOOP_LABEL_DEPRECATED_READY_FOR_QA}:Approved, needs QA:#FFD700"
+    "${LOOP_LABEL_DEPRECATED_IN_REWORK}:Dev agent addressing reviewer feedback:#FFD700"
+    "${LOOP_LABEL_DEPRECATED_NEEDS_REWORK}:Review rejected, dev must rework:#DC143C"
+    "${LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED}:Reviewer requested changes:#FFA07A"
     "needs-clarification:Dev hit ambiguity:#FF69B4"
-    "blocked:Failed 3x, needs human:#8B0000"
-    "qa-fail:QA failed, back to dev:#DC143C"
-    "qa-pass:QA passed, ready to merge:#32CD32"
-    "done:Merged and closed:#006400"
+    "${LOOP_LABEL_BLOCKED}:Failed 3x, needs human:#8B0000"
+    "${LOOP_LABEL_QA_FAIL}:QA failed, back to dev:#DC143C"
+    "${LOOP_LABEL_QA_PASS}:QA passed, ready to merge:#32CD32"
+    "${LOOP_LABEL_DONE}:Merged and closed:#006400"
 )
 
 reconcile_labels() {
@@ -929,7 +932,7 @@ print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/
         backend_close_pr "$repo" "$pr_num" 2>/dev/null || true
 
         for issue_num in $issue_nums; do
-            backend_remove_label "$repo" "$issue_num" blocked qa-pass changes-requested in-rework 2>/dev/null || true
+            backend_remove_label "$repo" "$issue_num" blocked qa-pass "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" "$LOOP_LABEL_DEPRECATED_IN_REWORK" 2>/dev/null || true
             backend_add_label "$repo" "$issue_num" dev 2>/dev/null || true
             log "[$repo] re-queued issue #$issue_num → dev (Opus dispatch)"
             # Dispatch directly with Opus — re-labeling to dev would just let Sonnet fail again.
@@ -951,8 +954,8 @@ print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))" 2>/
     done
 }
 
-# --- Check 12: auto-rebase PRs with stale base (needs-rework / qa-fail) --------
-# For PRs labeled needs-rework or qa-fail, detect if the PR branch has diverged
+# --- Check 12: auto-rebase PRs with stale base (rework / qa-fail) --------------
+# For PRs labeled with the rework trigger or qa-fail, detect if the PR branch has diverged
 # from origin/<DEFAULT_BRANCH>. If so, attempt a clean git rebase. On success,
 # push with --force-with-lease and re-trigger the pipeline stage label. On
 # conflict, abort and log a warning — never auto-resolve non-trivial conflicts.
@@ -1135,24 +1138,30 @@ PY
 }
 
 # --- Check 14: DIRTY rework PRs — skip rework, recycle immediately with Opus --
-# A PR in `changes-requested` (rework queue) that is already CONFLICTING/DIRTY
-# will make the rework agent fail immediately — it can't fix conflicts. Instead of
-# waiting for 2 rework failures + a block, detect this proactively and recycle now.
+# A PR in the rework queue (deprecated rework-trigger aliases) that is already
+# CONFLICTING/DIRTY will make the rework agent fail immediately — it can't fix
+# conflicts. Instead of waiting for 2 rework failures + a block, detect this
+# proactively and recycle now.
 reconcile_dirty_rework_prs() {
     local repo="$1"
-    log "[$repo] scanning changes-requested PRs for DIRTY/CONFLICTING state"
+    log "[$repo] scanning rework PRs for DIRTY/CONFLICTING state"
 
     local prs_json
     prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
 
     local rework_prs
-    rework_prs=$(PJSON="$prs_json" python3 - <<'PY'
+    rework_prs=$(PJSON="$prs_json" \
+        LBL_CR="$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
+        LBL_NR="$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
+        python3 - <<'PY'
 import json, os, datetime as dt
 prs = json.loads(os.environ['PJSON'])
 now = dt.datetime.now(dt.timezone.utc)
+LBL_CR = os.environ['LBL_CR']
+LBL_NR = os.environ['LBL_NR']
 for pr in prs:
     lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
-    if 'changes-requested' not in lbls and 'needs-rework' not in lbls:
+    if LBL_CR not in lbls and LBL_NR not in lbls:
         continue
     if 'blocked' in lbls:
         continue  # already handled by Check 11/13
@@ -1187,7 +1196,7 @@ import re,sys; print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read(
         backend_close_pr "$repo" "$pr_num" 2>/dev/null || true
 
         for issue_num in $issue_nums; do
-            backend_remove_label "$repo" "$issue_num" blocked changes-requested in-rework needs-rework 2>/dev/null || true
+            backend_remove_label "$repo" "$issue_num" blocked "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" "$LOOP_LABEL_DEPRECATED_IN_REWORK" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" 2>/dev/null || true
             backend_add_label "$repo" "$issue_num" dev 2>/dev/null || true
             local iss_event
             iss_event=$(python3 -c "import json; print(json.dumps({'type':'loop.dev_issue','payload':{'slug':'${slug}','repo':'${repo}','issue_number':'${issue_num}','issue_title':''}}))" 2>/dev/null || true)

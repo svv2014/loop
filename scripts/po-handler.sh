@@ -4,10 +4,11 @@
 #
 # Event payload: {"slug","repo","issue_number","issue_title","issue_url"}
 #
-# Takes a rough "[IDEA]" issue labeled 'po-review', invokes a Product Owner
-# agent that expands the body into a full spec (goal, acceptance criteria,
-# file scope, dependencies), rewrites the issue body, and swaps the label
-# from 'po-review' to 'dev' so the scanner picks it up next tick.
+# Takes a rough "[IDEA]" issue labeled with the workflow's PO trigger,
+# invokes a Product Owner agent that expands the body into a full spec
+# (goal, acceptance criteria, file scope, dependencies), rewrites the issue
+# body, and swaps the label to the dev trigger so the scanner picks it up
+# next tick.
 
 set -euo pipefail
 
@@ -21,6 +22,8 @@ source "$LOOP_ROOT/lib/runner.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/labels.sh
+source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/bounty.sh
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
@@ -57,8 +60,8 @@ fi
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
-_po_trigger=$(loop_label_for "$SLUG" "po-review")
-_REWORK_LABEL=$(loop_label_for "$SLUG" "needs-rework")
+_po_trigger=$(loop_label_for "$SLUG" "$LOOP_LABEL_DEPRECATED_PO_REVIEW")
+_REWORK_LABEL=$(loop_label_for "$SLUG" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK")
 
 # Per-issue lock — PO writes only to one issue's body and labels, so two PO
 # workers on different issues in the same project are safe in parallel. The
@@ -83,14 +86,14 @@ fi
 
 log "po: slug=$SLUG repo=$REPO issue=#$ISSUE_NUM attempt=$((retries + 1))/$MAX_RETRIES"
 bounty_report "po_start" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
-loop_notify "▶️ [$SLUG] #$ISSUE_NUM po-review starting"
+loop_notify "▶️ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} starting"
 
 # Claim so scanner doesn't re-emit: strip workflow trigger label before adding in-progress
 # so the issue never carries both simultaneously.
 backend_remove_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
 backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 
-# Safety net: restore to po-review if killed or set -e fires before explicit cleanup.
+# Safety net: restore the workflow PO trigger if killed or set -e fires before explicit cleanup.
 _IN_PROGRESS_CLAIMED=1
 _po_label_cleanup() {
     [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
@@ -331,7 +334,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "po agent succeeded for #$ISSUE_NUM"
     bounty_report "po_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
-    loop_notify "✅ [$SLUG] #$ISSUE_NUM po-review done"
+    loop_notify "✅ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} done"
     retry_clear
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
     # Belt-and-braces: if agent forgot to apply progression label, add 'dev' as safe default.
@@ -348,7 +351,7 @@ else
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
         _post_failure_comment issue "$ISSUE_NUM" "PO agent" "$n" "$MAX_RETRIES"
-        loop_notify "❌ [$SLUG] #$ISSUE_NUM po-review failed: agent failed after $MAX_RETRIES attempts"
+        loop_notify "❌ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} failed: agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger"

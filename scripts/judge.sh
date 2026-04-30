@@ -43,7 +43,7 @@ ${TIMELINE_JSON}
 
 Classify the outcome as exactly one of:
 - clean         : PR was reviewed, passed QA, merged without rework requests
-- rework        : PR received "changes-requested" review and needed rework
+- rework        : PR received a "changes requested" review and needed rework
 - qa-fail-rework: PR was labeled qa-fail and sent back for rework
 - blocked       : PR is blocked / stuck with no progression
 
