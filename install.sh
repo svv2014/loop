@@ -585,6 +585,19 @@ for p in (data.get('projects') or []):
         echo "  [--]  config/projects.yaml not found — no projects registered"
     fi
 
+    # 8. Author-gate digest — counter populated by reconciler each tick
+    local agated_dir="$log_dir/author-gated"
+    if [ -d "$agated_dir" ]; then
+        local total_gated=0 _f _n
+        for _f in "$agated_dir"/*.count; do
+            [ -f "$_f" ] || continue
+            _n=$(tr -d '[:space:]' < "$_f" 2>/dev/null || echo 0)
+            [ -n "$_n" ] || _n=0
+            total_gated=$(( total_gated + _n ))
+        done
+        echo "  [--]  author_gated_pending=$total_gated"
+    fi
+
     echo "─────────────────────────────────────────────────"
     if $all_ok; then
         echo "  All checks passed."
