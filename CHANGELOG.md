@@ -16,6 +16,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ### Changed
 - [LOOP-160] feat: add reconcile-on-startup entrypoint (#171)
+- [LOOP-161] reconcile-on-startup: GC orphaned /tmp/loop-worktree-* dirs (#172)
 ## [0.2.0] - 2026-04-29
 
 ### Fixed
