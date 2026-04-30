@@ -18,6 +18,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-160] feat: add reconcile-on-startup entrypoint (#171)
 - [LOOP-161] reconcile-on-startup: GC orphaned /tmp/loop-worktree-* dirs (#172)
 - [LOOP-164] reconciler: surface author-gated tickets via digest + status counter (#173)
+- [LOOP-163] author-gate: honour operator-approved label as per-ticket override (#177)
 ## [0.2.0] - 2026-04-29
 
 ### Fixed
