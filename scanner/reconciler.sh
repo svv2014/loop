@@ -819,43 +819,40 @@ reconcile_alias_renames() {
         [ "$canonical" = "$alias" ] && continue
 
         # Issues carrying $alias.
-        if [ -n "$slug" ]; then
-            if _alias_is_trigger_for_kind "$alias" issue; then
-                log "[$repo] alias-rename skip (issue, $slug): '$alias' is a workflow trigger here"
-            elif ! _alias_is_trigger_for_kind "$canonical" issue; then
-                log "[$repo] alias-rename skip (issue, $slug): '$canonical' is not a workflow trigger here"
-            else
-                local issues_json issue_nums
-                issues_json=$(backend_list_open_issues_raw "$repo" "$alias") || issues_json="[]"
-                issue_nums=$(ISS="$issues_json" python3 -c '
+        if [ -n "$slug" ] && _alias_is_trigger_for_kind "$alias" issue; then
+            log "[$repo] alias-rename skip (issue, $slug): '$alias' is a workflow trigger here"
+        elif [ -n "$slug" ] && ! _alias_is_trigger_for_kind "$canonical" issue; then
+            log "[$repo] alias-rename skip (issue, $slug): '$canonical' is not a workflow trigger here"
+        else
+            local issues_json issue_nums
+            issues_json=$(backend_list_open_issues_raw "$repo" "$alias") || issues_json="[]"
+            issue_nums=$(ISS="$issues_json" python3 -c '
 import json, os
 for i in json.loads(os.environ["ISS"]):
     print(i["number"])
 ' 2>/dev/null || echo "")
 
-                local num
-                for num in $issue_nums; do
-                    log "[$repo] alias-rename issue #$num: $alias → $canonical"
-                    $DRY_RUN || {
-                        backend_add_label    "$repo" "$num" "$canonical" \
-                            || log "[$repo] WARN: failed to add $canonical to issue #$num"
-                        backend_remove_label "$repo" "$num" "$alias" \
-                            || log "[$repo] WARN: failed to remove $alias from issue #$num"
-                    }
-                    renamed=$((renamed + 1))
-                done
-            fi
+            local num
+            for num in $issue_nums; do
+                log "[$repo] alias-rename issue #$num: $alias → $canonical"
+                $DRY_RUN || {
+                    backend_add_label    "$repo" "$num" "$canonical" \
+                        || log "[$repo] WARN: failed to add $canonical to issue #$num"
+                    backend_remove_label "$repo" "$num" "$alias" \
+                        || log "[$repo] WARN: failed to remove $alias from issue #$num"
+                }
+                renamed=$((renamed + 1))
+            done
         fi
 
         # PRs carrying $alias (from the cached open-PRs list).
-        if [ -n "$slug" ]; then
-            if _alias_is_trigger_for_kind "$alias" pr; then
-                log "[$repo] alias-rename skip (pr, $slug): '$alias' is a workflow trigger here"
-            elif ! _alias_is_trigger_for_kind "$canonical" pr; then
-                log "[$repo] alias-rename skip (pr, $slug): '$canonical' is not a workflow trigger here"
-            else
-                local pr_nums num
-                pr_nums=$(PJSON="$prs_json" ALIAS="$alias" python3 -c '
+        if [ -n "$slug" ] && _alias_is_trigger_for_kind "$alias" pr; then
+            log "[$repo] alias-rename skip (pr, $slug): '$alias' is a workflow trigger here"
+        elif [ -n "$slug" ] && ! _alias_is_trigger_for_kind "$canonical" pr; then
+            log "[$repo] alias-rename skip (pr, $slug): '$canonical' is not a workflow trigger here"
+        else
+            local pr_nums num
+            pr_nums=$(PJSON="$prs_json" ALIAS="$alias" python3 -c '
 import json, os
 alias = os.environ["ALIAS"]
 for p in json.loads(os.environ["PJSON"]):
@@ -864,17 +861,16 @@ for p in json.loads(os.environ["PJSON"]):
         print(p["number"])
 ' 2>/dev/null || echo "")
 
-                for num in $pr_nums; do
-                    log "[$repo] alias-rename PR #$num: $alias → $canonical"
-                    $DRY_RUN || {
-                        backend_add_label    "$repo" "$num" "$canonical" \
-                            || log "[$repo] WARN: failed to add $canonical to PR #$num"
-                        backend_remove_label "$repo" "$num" "$alias" \
-                            || log "[$repo] WARN: failed to remove $alias from PR #$num"
-                    }
-                    renamed=$((renamed + 1))
-                done
-            fi
+            for num in $pr_nums; do
+                log "[$repo] alias-rename PR #$num: $alias → $canonical"
+                $DRY_RUN || {
+                    backend_add_label    "$repo" "$num" "$canonical" \
+                        || log "[$repo] WARN: failed to add $canonical to PR #$num"
+                    backend_remove_label "$repo" "$num" "$alias" \
+                        || log "[$repo] WARN: failed to remove $alias from PR #$num"
+                }
+                renamed=$((renamed + 1))
+            done
         fi
     done < <(loop_deprecated_aliases)
 
