@@ -45,15 +45,20 @@ STALE_PR_HOURS="${LOOP_STALE_PR_HOURS:-24}"
 DRY_RUN=false
 ONLY_SLUG=""
 
-while [ $# -gt 0 ]; do
-    case "$1" in
-        --dry-run) DRY_RUN=true; shift ;;
-        --slug)    ONLY_SLUG="$2"; shift 2 ;;
-        -h|--help)
-            sed -n '1,20p' "$0"; exit 0 ;;
-        *) echo "unknown arg: $1" >&2; exit 2 ;;
-    esac
-done
+# Test hook: when LOOP_RECONCILER_LIB_ONLY=1 is set, skip the arg-parser
+# (which would reject the bats-injected $0/$@) and skip the main run at
+# the bottom — we only want function definitions for unit tests.
+if [ "${LOOP_RECONCILER_LIB_ONLY:-0}" != "1" ]; then
+    while [ $# -gt 0 ]; do
+        case "$1" in
+            --dry-run) DRY_RUN=true; shift ;;
+            --slug)    ONLY_SLUG="$2"; shift 2 ;;
+            -h|--help)
+                sed -n '1,20p' "$0"; exit 0 ;;
+            *) echo "unknown arg: $1" >&2; exit 2 ;;
+        esac
+    done
+fi
 
 mkdir -p "$(dirname "$LOG_FILE")"
 
