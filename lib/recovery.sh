@@ -60,10 +60,14 @@ PY
         unresolved=""
         IFS=',' read -ra dep_arr <<< "$deps"
         for dep in "${dep_arr[@]}"; do
-            st=$(gh issue view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
-            if [ "$st" != "CLOSED" ]; then
-                st=$(gh pr view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+            # Try issue-view first; if the dep isn't an issue (returns empty
+            # JSON / non-zero), fall through to pr-view. Capture the actual
+            # state when present rather than the misleading 'UNKNOWN' (#197).
+            st=$(gh issue view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null)
+            if [ -z "$st" ]; then
+                st=$(gh pr view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null)
             fi
+            [ -z "$st" ] && st="MISSING"
             if [ "$st" = "CLOSED" ] || [ "$st" = "MERGED" ]; then
                 : # dep satisfied
             else
@@ -139,10 +143,14 @@ PY
         unresolved=""
         IFS=',' read -ra dep_arr <<< "$deps"
         for dep in "${dep_arr[@]}"; do
-            st=$(gh issue view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
-            if [ "$st" != "CLOSED" ]; then
-                st=$(gh pr view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
+            # Try issue-view first; if the dep isn't an issue (returns empty
+            # JSON / non-zero), fall through to pr-view. Capture the actual
+            # state when present rather than the misleading 'UNKNOWN' (#197).
+            st=$(gh issue view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null)
+            if [ -z "$st" ]; then
+                st=$(gh pr view "$dep" --repo "$repo" --json state --jq '.state' 2>/dev/null)
             fi
+            [ -z "$st" ] && st="MISSING"
             if [ "$st" = "CLOSED" ] || [ "$st" = "MERGED" ]; then
                 : # dep satisfied
             else
