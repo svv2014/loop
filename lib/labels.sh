@@ -218,3 +218,26 @@ loop_pipeline_stage_labels_csv() {
     local IFS=','
     echo "${LOOP_PIPELINE_STAGE_LABELS[*]}"
 }
+
+# Issue-only labels — should never appear on a PR. Some are pipeline triggers
+# whose handlers expect to run against an issue (and would misfire on a PR);
+# others are taxonomy markers (`tracker`, `epic`) that classify issues only.
+# Reconciler strips any of these found on an open PR. Includes deprecated
+# aliases of the trigger labels so a stale `dev`/`po-review`/`plan` on a PR
+# also gets cleaned up.
+LOOP_ISSUE_ONLY_LABELS=(
+    needs-po
+    needs-dev
+    tracker
+    epic
+    needs-clarification
+    po-review
+    dev
+    plan
+)
+
+# loop_issue_only_labels_csv — emit the issue-only label set as a CSV string.
+loop_issue_only_labels_csv() {
+    local IFS=','
+    echo "${LOOP_ISSUE_ONLY_LABELS[*]}"
+}
