@@ -586,8 +586,23 @@ reconcile_worktrees() {
 LOOP_PIPELINE_LABELS=$(loop_pipeline_tracked_labels_string)
 
 reconcile_lost_issues() {
+    # Observational, NOT mutating. Previously this function applied po-review
+    # to any issue it considered "lost" — but that fought every other writer
+    # within the same tick (alias-rename, synonym-rename, recovery_check_*,
+    # etc.) and could be wrong on stale data (GitHub's read-after-write
+    # consistency window for gh issue edit → gh issue list is non-zero).
+    #
+    # Concrete failure: today on suprun.ca#10 the cycle was alias-rename
+    # writes po-review → needs-po, lost-issues' next gh-fetch in the same
+    # tick missed the update OR labels.sh's pipeline-label set was stale,
+    # lost-issues re-applied po-review, alias-rename re-renamed, ...
+    # 41+ comments, infinite ping-pong.
+    #
+    # Now: log + notify only. The operator (Signal) decides whether the
+    # issue is genuinely abandoned vs. mid-transition. No mutation = no
+    # tick-level coordination needed = no fights with other checks.
     local repo="$1"
-    log "[$repo] scanning for lost issues (no pipeline label)"
+    log "[$repo] scanning for lost issues (no pipeline label) — observational"
 
     local all_open_json
     all_open_json=$(gh issue list --repo "$repo" --state open --limit 200 --json number,title,labels 2>/dev/null || echo "[]")
@@ -609,16 +624,36 @@ PY
         return 0
     fi
 
+    # Per-(repo,issue) cool-down so we don't spam Signal on every tick for
+    # the same lost ticket. State file is touched once we've notified; the
+    # next notification fires only after LOOP_LOST_NOTIFY_HOURS (default 24)
+    # have elapsed.
+    local cool_down_dir="${LOOP_LOST_STATE_DIR:-/tmp/loop-lost-notified}"
+    local cool_down_hours="${LOOP_LOST_NOTIFY_HOURS:-24}"
+    mkdir -p "$cool_down_dir"
+    local cool_down_seconds=$(( cool_down_hours * 3600 ))
+    local now_epoch
+    now_epoch=$(date +%s)
+
     while IFS=$'\t' read -r num title; do
         [ -z "$num" ] && continue
-        log "[$repo] LOST issue #$num (no pipeline label): $title — routing to ${LOOP_LABEL_DEPRECATED_PO_REVIEW}"
+        log "[$repo] LOST issue #$num (no pipeline label): $title — observational, no mutation"
+
+        # Skip Signal if we already notified within the cool-down window.
+        local repo_slug="${repo//\//-}"
+        local sentinel="$cool_down_dir/${repo_slug}-${num}"
+        if [ -f "$sentinel" ]; then
+            local mtime; mtime=$(stat -f %m "$sentinel" 2>/dev/null || stat -c %Y "$sentinel" 2>/dev/null || echo 0)
+            local age=$(( now_epoch - mtime ))
+            if [ "$age" -lt "$cool_down_seconds" ]; then
+                log "[$repo] LOST issue #$num — Signal cooled-down (last notified ${age}s ago)"
+                continue
+            fi
+        fi
+
         $DRY_RUN && continue
-        backend_add_label "$repo" "$num" "$LOOP_LABEL_DEPRECATED_PO_REVIEW" \
-            || log "[$repo] WARN: failed to add ${LOOP_LABEL_DEPRECATED_PO_REVIEW} to issue #$num"
-        backend_comment_issue "$repo" "$num" \
-            "Reconciler: issue had no pipeline label — routed back to \`${LOOP_LABEL_DEPRECATED_PO_REVIEW}\` for triage." \
-            || true
-        loop_notify "Loop reconciler: $repo — issue #$num had no pipeline label; sent to ${LOOP_LABEL_DEPRECATED_PO_REVIEW}: $title"
+        loop_notify "Loop reconciler: $repo — issue #$num has no pipeline label. Operator: pick a trigger label (e.g. \`po-review\` or \`dev\`) or close as out-of-scope. Title: ${title}"
+        : > "$sentinel"
     done <<< "$lost"
 }
 
