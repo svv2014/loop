@@ -207,7 +207,7 @@ teardown() {
     unset LOOP_CONFIG
     run _pr_downstream_labels "test-slug" "needs-review"
     [ "$status" -eq 0 ]
-    [[ "$output" == *"needs-rework"* ]]
+    [[ "$output" == *"needs-dev"* ]]
     [[ "$output" == *"needs-qa"* ]]
     [[ "$output" == *"qa-pass"* ]]
 }
@@ -217,7 +217,7 @@ teardown() {
     run _pr_downstream_labels "test-slug" "qa-pass"
     [ "$status" -eq 0 ]
     [[ "$output" != *"needs-review"* ]]
-    [[ "$output" != *"needs-rework"* ]]
+    [[ "$output" != *"needs-dev"* ]]
     [[ "$output" != *"needs-qa"* ]]
 }
 
@@ -254,22 +254,22 @@ projects:
 YAML
 }
 
-@test "workflow fixture: proj-default issue labels include po-review and dev" {
+@test "workflow fixture: proj-default issue labels include needs-po and needs-dev" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-default" issue
     [ "$status" -eq 0 ]
-    [[ "$output" == *"po-review"* ]]
-    [[ "$output" == *"dev"* ]]
+    [[ "$output" == *"needs-po"* ]]
+    [[ "$output" == *"needs-dev"* ]]
 }
 
-@test "workflow fixture: proj-minimal issue labels include dev but NOT po-review" {
+@test "workflow fixture: proj-minimal issue labels include needs-dev but NOT needs-po" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-minimal" issue
     [ "$status" -eq 0 ]
-    [[ "$output" == *"dev"* ]]
-    [[ "$output" != *"po-review"* ]]
+    [[ "$output" == *"needs-dev"* ]]
+    [[ "$output" != *"needs-po"* ]]
 }
 
 @test "workflow fixture: proj-default PR labels include needs-review, needs-qa, qa-pass" {
@@ -296,11 +296,11 @@ YAML
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
 
     local PLAN_ISSUE
-    PLAN_ISSUE='{"number":1,"title":"Fix thing","url":"http://gh/1","labels":["dev"],"author":"bot"}'
+    PLAN_ISSUE='{"number":1,"title":"Fix thing","url":"http://gh/1","labels":["needs-dev"],"author":"bot"}'
 
     backend_list_issues_with_label() {
         local _label="$2"
-        [ "$_label" = "dev" ] && printf '%s\n' "$PLAN_ISSUE"
+        [ "$_label" = "needs-dev" ] && printf '%s\n' "$PLAN_ISSUE"
         return 0
     }
     backend_list_prs_with_label()  { return 0; }
