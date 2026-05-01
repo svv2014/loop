@@ -36,6 +36,27 @@ MAX_RETRIES=2
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [po-handler] $*" | tee -a "$LOG_FILE"; }
 
+# _po_has_complete_ac <body>
+# Returns 0 iff the body has a non-empty `## Acceptance` or
+# `## Acceptance Criteria` section with at least one `- [ ]`/`- [x]` checkbox
+# item between the heading and the next `## ` heading (or EOF). Returns 1
+# otherwise. Callers must check the exit code, not stdout.
+_po_has_complete_ac() {
+    BODY="${1:-}" python3 <<'PY'
+import os, re, sys
+body = os.environ.get('BODY', '')
+m = re.search(r'(?im)^##\s+Acceptance(?:\s+Criteria)?\s*$', body)
+if not m:
+    sys.exit(1)
+rest = body[m.end():]
+nxt = re.search(r'(?m)^##\s+\S', rest)
+section = rest[:nxt.start()] if nxt else rest
+if re.search(r'(?m)^\s*-\s*\[[ xX]\]', section):
+    sys.exit(0)
+sys.exit(1)
+PY
+}
+
 SLUG="${LOOP_SLUG:-}"
 ISSUE_NUM="${LOOP_ISSUE_NUMBER:-}"
 ISSUE_TITLE="${LOOP_ISSUE_TITLE:-}"
@@ -104,6 +125,26 @@ _po_label_cleanup() {
 trap '_po_label_cleanup' EXIT TERM INT
 
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
+
+# Auto-decompose gate: if the issue carries the literal `epic` label AND its
+# body has a populated Acceptance / Acceptance Criteria section (≥1 checkbox),
+# instruct the PO agent to take Path D directly. This skips the
+# needs-clarification round-trip on already-well-specified epics.
+_PO_AUTO_DECOMPOSE_DIRECTIVE=""
+if backend_issue_has_any_label "$REPO" "$ISSUE_NUM" epic 2>/dev/null \
+    && _po_has_complete_ac "$ISSUE_BODY"; then
+    log "auto-decompose gate: issue #$ISSUE_NUM is epic+AC — directing agent to Path D"
+    _PO_AUTO_DECOMPOSE_DIRECTIVE="
+--- AUTO-DECOMPOSE DIRECTIVE ---
+This issue carries the 'epic' label and has a populated Acceptance Criteria
+section with at least one checkbox item. Treat it as operator-approved.
+You MUST take Path D (UPGRADE TO EPIC / decompose into child issues).
+Do NOT apply 'needs-clarification'. Only escalate to needs-clarification or
+blocked if scope is architecturally ambiguous or requires an external
+decision (budget, third-party API, etc.) that the AC do not resolve.
+--- END DIRECTIVE ---
+"
+fi
 
 # Extract the true original body — strips any existing ## Original brief section
 # so re-triaging an already-expanded issue doesn't nest markers.
@@ -235,7 +276,7 @@ If CLAUDE.md is missing or empty, proceed with the issue text alone and note the
 You have been given GitHub issue #${ISSUE_NUM}: ${ISSUE_TITLE}
 URL: ${ISSUE_URL}
 
-${_MR_PREAMBLE}Current body:
+${_MR_PREAMBLE}${_PO_AUTO_DECOMPOSE_DIRECTIVE}Current body:
 ${ISSUE_BODY}
 
 Recent comments (most recent last) — may include human steering, blocker context from prior dev attempts, or supplementary scope:
