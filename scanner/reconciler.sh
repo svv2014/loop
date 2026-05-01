@@ -20,7 +20,7 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/env.sh
 source "$LOOP_ROOT/lib/env.sh"
@@ -733,6 +733,75 @@ EOF
     fi
 }
 
+# --- Check: deprecated label aliases — rename to canonical ------------------
+# Iterates every alias declared in LOOP_DEPRECATED_ALIAS_MAP (lib/labels.sh).
+# For each open issue or PR carrying an alias, adds the canonical replacement
+# first and then removes the alias (additive-then-subtractive, never lossy).
+# Idempotent: a re-run on a clean repo issues zero label calls. Surfaces a
+# per-project `alias_renamed=N` line in the reconciler log.
+reconcile_alias_renames() {
+    local repo="$1"
+    log "[$repo] scanning open issues + PRs for deprecated label aliases"
+
+    local renamed=0 alias canonical
+
+    # Pull all open PRs once — we filter the cached list per alias.
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    while IFS= read -r alias; do
+        [ -z "$alias" ] && continue
+        canonical=$(loop_canonical_label "$alias")
+        # Skip self-mappings (defensive; map shouldn't contain them).
+        [ "$canonical" = "$alias" ] && continue
+
+        # Issues carrying $alias.
+        local issues_json issue_nums
+        issues_json=$(backend_list_open_issues_raw "$repo" "$alias") || issues_json="[]"
+        issue_nums=$(ISS="$issues_json" python3 -c '
+import json, os
+for i in json.loads(os.environ["ISS"]):
+    print(i["number"])
+' 2>/dev/null || echo "")
+
+        local num
+        for num in $issue_nums; do
+            log "[$repo] alias-rename issue #$num: $alias → $canonical"
+            $DRY_RUN || {
+                backend_add_label    "$repo" "$num" "$canonical" \
+                    || log "[$repo] WARN: failed to add $canonical to issue #$num"
+                backend_remove_label "$repo" "$num" "$alias" \
+                    || log "[$repo] WARN: failed to remove $alias from issue #$num"
+            }
+            renamed=$((renamed + 1))
+        done
+
+        # PRs carrying $alias (from the cached open-PRs list).
+        local pr_nums
+        pr_nums=$(PJSON="$prs_json" ALIAS="$alias" python3 -c '
+import json, os
+alias = os.environ["ALIAS"]
+for p in json.loads(os.environ["PJSON"]):
+    names = [l["name"] if isinstance(l, dict) else l for l in p.get("labels", [])]
+    if alias in names:
+        print(p["number"])
+' 2>/dev/null || echo "")
+
+        for num in $pr_nums; do
+            log "[$repo] alias-rename PR #$num: $alias → $canonical"
+            $DRY_RUN || {
+                backend_add_label    "$repo" "$num" "$canonical" \
+                    || log "[$repo] WARN: failed to add $canonical to PR #$num"
+                backend_remove_label "$repo" "$num" "$alias" \
+                    || log "[$repo] WARN: failed to remove $alias from PR #$num"
+            }
+            renamed=$((renamed + 1))
+        done
+    done < <(loop_deprecated_aliases)
+
+    log "[$repo] alias_renamed=$renamed"
+}
+
 # --- Check 10: orphaned in-progress issues (no live handler lock) --------------
 # An issue stuck with `in-progress` but no live dev-handler or po-handler process
 # will never self-recover — the EXIT trap added in the handlers handles normal
@@ -1346,6 +1415,7 @@ run_project() {
     log "=== $slug ($REPO) ==="
     reconcile_labels "$REPO"
     reconcile_synonym_labels "$REPO"
+    reconcile_alias_renames "$REPO"
     reconcile_lost_issues "$REPO"
     reconcile_duplicate_prs "$REPO"
     reconcile_obsolete_open_prs "$REPO"
@@ -1366,6 +1436,12 @@ run_project() {
     recovery_check_stuck_labels "$slug"
     recovery_prune_orphan_worktrees
 }
+
+# Test hook: when LOOP_RECONCILER_LIB_ONLY=1, return after defining functions
+# so bats files can source this script without triggering the main run.
+if [ "${LOOP_RECONCILER_LIB_ONLY:-0}" = "1" ]; then
+    return 0 2>/dev/null || exit 0
+fi
 
 acquire_lock
 
