@@ -698,37 +698,69 @@ _rename_label_on_target() {
 
 reconcile_synonym_labels() {
     local repo="$1"
+    local slug="${2:-}"
     log "[$repo] scanning open issues + PRs for synonym labels"
     local renamed=0 entry from to
+
+    # Workflow-aware gating: build the set of trigger labels actually used by
+    # this project's workflow. We must NOT rename a label that IS a trigger
+    # for this project (would strip a live label), and we must NOT rename TO
+    # a label that is NOT a trigger for this project (would apply a dead
+    # label). Without this, projects on workflow=current end up with their
+    # canonical triggers rewritten to default-workflow names — observed on
+    # pa-scanner: review-pending → needs-review starved 5 PRs for 24h.
+    local issue_triggers="" pr_triggers=""
+    if [ -n "$slug" ]; then
+        issue_triggers=$(loop_polled_labels "$slug" issue 2>/dev/null || echo "")
+        pr_triggers=$(loop_polled_labels "$slug" pr 2>/dev/null || echo "")
+    fi
+    _is_trigger_for_kind() {
+        # _is_trigger_for_kind <label> <issue|pr>
+        local _label="$1" _kind="$2" _set
+        case "$_kind" in
+            issue) _set="$issue_triggers" ;;
+            pr)    _set="$pr_triggers" ;;
+            *)     return 1 ;;
+        esac
+        [ -z "$_set" ] && return 1
+        printf '%s\n' "$_set" | grep -qxF "$_label"
+    }
 
     for entry in "${LOOP_SYNONYM_MAP[@]}"; do
         from="${entry%%:*}"; to="${entry##*:}"
 
-        # Issues carrying the synonym
-        local issues_json
-        issues_json=$(backend_list_issues_with_label "$repo" "$from" 2>/dev/null || echo "")
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            local num; num=$(printf '%s' "$line" | jq -r '.number // empty' 2>/dev/null)
-            [ -z "$num" ] && continue
-            _rename_label_on_target "$repo" "$num" issue "$from" "$to"
-            renamed=$((renamed+1))
-        done <<EOF
-$issues_json
-EOF
+        for kind in issue pr; do
+            # Skip rename for this kind if `from` is a live trigger for the
+            # project's workflow (don't strip canonical labels) or if `to`
+            # is not a trigger (don't apply dead labels).
+            if [ -n "$slug" ]; then
+                if _is_trigger_for_kind "$from" "$kind"; then
+                    log "[$repo] synonym skip ($kind, $slug): '$from' is a workflow trigger here"
+                    continue
+                fi
+                if ! _is_trigger_for_kind "$to" "$kind"; then
+                    log "[$repo] synonym skip ($kind, $slug): '$to' is not a workflow trigger here"
+                    continue
+                fi
+            fi
 
-        # PRs carrying the synonym
-        local prs_json
-        prs_json=$(backend_list_prs_with_label "$repo" "$from" 2>/dev/null || echo "")
-        while IFS= read -r line; do
-            [ -z "$line" ] && continue
-            local num; num=$(printf '%s' "$line" | jq -r '.number // empty' 2>/dev/null)
-            [ -z "$num" ] && continue
-            _rename_label_on_target "$repo" "$num" pr "$from" "$to"
-            renamed=$((renamed+1))
-        done <<EOF
-$prs_json
+            local items_json
+            if [ "$kind" = "issue" ]; then
+                items_json=$(backend_list_issues_with_label "$repo" "$from" 2>/dev/null || echo "")
+            else
+                items_json=$(backend_list_prs_with_label "$repo" "$from" 2>/dev/null || echo "")
+            fi
+
+            while IFS= read -r line; do
+                [ -z "$line" ] && continue
+                local num; num=$(printf '%s' "$line" | jq -r '.number // empty' 2>/dev/null)
+                [ -z "$num" ] && continue
+                _rename_label_on_target "$repo" "$num" "$kind" "$from" "$to"
+                renamed=$((renamed+1))
+            done <<EOF
+$items_json
 EOF
+        done
     done
 
     if [ "$renamed" -gt 0 ]; then
@@ -1469,7 +1501,7 @@ run_project() {
     fi
     log "=== $slug ($REPO) ==="
     reconcile_labels "$REPO"
-    reconcile_synonym_labels "$REPO"
+    reconcile_synonym_labels "$REPO" "$slug"
     reconcile_alias_renames "$REPO"
     reconcile_lost_issues "$REPO"
     reconcile_duplicate_prs "$REPO"
