@@ -1,22 +1,29 @@
 # Loop docs-only workflow — documentation and content change pipeline.
 #
 # Stages:
-#   plan (issue) → needs-review (PR) → done
+#   needs-dev (issue) → needs-review (PR) → qa-pass → done
 #
 # Skips QA. Use for documentation PRs, README updates, and other changes
 # where automated testing adds no value and human review is sufficient.
+# `qa-pass` is reused as the "approved, ready to merge" signal so the
+# canonical label vocabulary stays consistent across workflows (see
+# docs/labels.md and lib/labels.sh).
+#
+# Deprecated synonyms (dev, plan, needs-rework, merge-ready) are rewritten
+# by `reconcile_alias_renames` on the next reconciler tick.
 #
 # To use: in config/projects.yaml, set `workflow: docs-only`.
 
 version: 1
 name: docs-only
 description: |
-  Three-stage pipeline: plan → review → merge. No QA gate. For documentation
-  and content-only changes where human review is sufficient before merge.
+  Three-stage pipeline: needs-dev → review → merge. No QA gate. For
+  documentation and content-only changes where human review is sufficient
+  before merge.
 
 issue_stages:
-  - id: plan
-    trigger_label: dev
+  - id: dev
+    trigger_label: needs-dev
     handler: dev-handler
     on_done: needs-review
     on_failed_after_max: blocked
@@ -26,16 +33,16 @@ pr_stages:
     trigger_label: needs-review
     handler: review-handler
     decisions:
-      approve: merge-ready
-      reject: needs-rework
+      approve: qa-pass
+      reject: needs-dev
 
   - id: rework
-    trigger_label: needs-rework
+    trigger_label: needs-dev
     handler: dev-rework-handler
     on_done: needs-review
     on_failed_after_max: blocked
 
   - id: merge
-    trigger_label: merge-ready
+    trigger_label: qa-pass
     handler: merge-handler
     on_done: done

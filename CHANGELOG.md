@@ -19,6 +19,22 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-161] reconcile-on-startup: GC orphaned /tmp/loop-worktree-* dirs (#172)
 - [LOOP-164] reconciler: surface author-gated tickets via digest + status counter (#173)
 - [LOOP-163] author-gate: honour operator-approved label as per-ticket override (#177)
+- [LOOP-169] workflow YAMLs (`default`, `minimal`, `docs-only`) now reference
+  only the canonical label vocabulary defined in `lib/labels.sh`
+  (`needs-po`, `in-po`, `needs-dev`, `in-dev`, `needs-review`, `in-review`,
+  `needs-qa`, `qa-pass`, `qa-fail`, `blocked`, `done`). Deprecated synonyms
+  (`po-review`, `dev`, `plan`, `needs-rework`, `changes-requested`,
+  `merge-ready`, `ready-for-qa`, `review-pending`, `in-rework`,
+  `in-progress`) are no longer valid trigger names in the shipped workflows.
+- [LOOP-169] new `docs/labels.md` documents the canonical taxonomy, the
+  operator-set-vs-agent-set split, and the deprecated-alias mapping.
+
+### Migration
+- Existing tickets carrying deprecated labels are auto-renamed by
+  `reconcile_alias_renames` (shipped in #168) on the next reconciler tick;
+  per-project GitHub-side cleanup of the deprecated labels themselves is
+  handled by `scripts/migrate-labels.sh` (#170). No operator action is
+  required for projects on the shipped workflows.
 ## [0.2.0] - 2026-04-29
 
 ### Fixed

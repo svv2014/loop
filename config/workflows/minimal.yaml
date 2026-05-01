@@ -1,8 +1,11 @@
 # Loop minimal workflow — solo-prototype pipeline.
 #
-# Skips review and QA. Issues labeled `plan` get implemented by the dev
+# Skips review and QA. Issues labeled `needs-dev` get implemented by the dev
 # handler, the resulting PR is merged automatically. Use for personal
 # projects or rapid prototypes where review/QA gates aren't useful.
+#
+# Canonical labels only (deprecated alias `dev` is auto-rewritten by the
+# reconciler — see lib/labels.sh and docs/labels.md).
 #
 # To use: in config/projects.yaml, set `workflow: minimal`.
 #
@@ -12,11 +15,11 @@
 version: 1
 name: minimal
 description: |
-  Two-stage pipeline: plan → merge. No review, no QA. For solo prototypes.
+  Two-stage pipeline: needs-dev → merge. No review, no QA. For solo prototypes.
 
 issue_stages:
-  - id: plan
-    trigger_label: dev
+  - id: dev
+    trigger_label: needs-dev
     handler: dev-handler
     on_done: needs-qa
     on_failed_after_max: blocked

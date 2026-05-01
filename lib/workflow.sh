@@ -226,7 +226,11 @@ seen_labels = set()
 all_handlers = []
 all_transitions = []  # (field_name, value)
 
+# Duplicate trigger_label check is per-section: issues and PRs are distinct
+# objects, so a label like `needs-dev` may legitimately trigger an issue
+# stage and a PR-rework stage in the same workflow.
 for section in ('issue_stages', 'pr_stages'):
+    section_labels = set()
     for s in wf.get(section, []) or []:
         stages_total += 1
         if 'id' not in s:
@@ -237,9 +241,10 @@ for section in ('issue_stages', 'pr_stages'):
             errors.append(f"{section}/{s.get('id','?')} missing 'handler'")
 
         lbl = s.get('trigger_label')
-        if lbl and lbl in seen_labels:
-            errors.append(f"duplicate trigger_label '{lbl}' in workflow")
+        if lbl and lbl in section_labels:
+            errors.append(f"duplicate trigger_label '{lbl}' within {section}")
         elif lbl:
+            section_labels.add(lbl)
             seen_labels.add(lbl)
 
         handler = s.get('handler')
