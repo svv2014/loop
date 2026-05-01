@@ -24,6 +24,8 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
 LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 # shellcheck source=../lib/env.sh
 source "$LOOP_ROOT/lib/env.sh"
+# shellcheck source=../lib/notify.sh
+source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/config.sh
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
@@ -479,6 +481,7 @@ PY
             $DRY_RUN && continue
             backend_remove_label "$repo" "$num" "$state" \
                 || log "[$repo] failed to relabel issue #$num"
+            loop_notify_human_required_clear "${SLUG:-${repo##*/}}" "$num" "$state"
             backend_add_label "$repo" "$num" dev \
                 || log "[$repo] failed to add dev label to issue #$num"
             backend_comment_issue "$repo" "$num" \
@@ -1011,6 +1014,8 @@ ${last_20}
         for issue_num in $linked_issues; do
             backend_add_label "$repo" "$issue_num" needs-clarification \
                 || log "[$repo] WARN: failed to add needs-clarification to issue#$issue_num"
+            loop_notify_human_required "${SLUG:-${repo##*/}}" "$issue_num" needs-clarification \
+                "QA failure on PR #${pr_num} escalated"
         done
 
         loop_notify "Loop reconciler: $repo — PR#$pr_num QA failure escalated to needs-clarification (run=$run_id)"

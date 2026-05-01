@@ -81,6 +81,7 @@ if [ "$retries" -ge "$MAX_RETRIES" ]; then
     backend_remove_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
     backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
+    loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "PO failed ${retries}x"
     exit 0
 fi
 
@@ -352,6 +353,7 @@ else
         backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
         _post_failure_comment issue "$ISSUE_NUM" "PO agent" "$n" "$MAX_RETRIES"
         loop_notify "❌ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} failed: agent failed after $MAX_RETRIES attempts"
+        loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "PO agent failed after $MAX_RETRIES attempts"
     else
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger"

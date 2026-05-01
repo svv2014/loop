@@ -99,6 +99,7 @@ _block_linked_issue() {
     backend_comment_issue "$REPO" "$LINKED_ISSUE" \
         "🚫 Blocked: automated rework failed ${MAX_RETRIES} times on PR #${PR_NUM}. Needs human review." \
         2>/dev/null || true
+    loop_notify_human_required "$SLUG" "$LINKED_ISSUE" blocked "Rework failed ${MAX_RETRIES}x on PR #${PR_NUM}"
 }
 
 SENIOR_ESCALATION_MARKER="Escalating to senior-dev for one final attempt"
@@ -126,6 +127,7 @@ _block_linked_issue_senior_failed() {
     backend_comment_issue "$REPO" "$LINKED_ISSUE" \
         "Senior-dev attempt also failed. Marking blocked for human review." \
         2>/dev/null || true
+    loop_notify_human_required "$SLUG" "$LINKED_ISSUE" blocked "Senior-dev escalation also failed on PR #${PR_NUM}"
 }
 
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
