@@ -578,7 +578,12 @@ reconcile_worktrees() {
 # Open issues that have no Loop pipeline label at all are invisible to the
 # scanner and all handlers. Detect them and send back to the PO trigger so
 # the PO agent can triage (re-spec, close, cancel, or upgrade to epic).
-LOOP_PIPELINE_LABELS="${LOOP_LABEL_DEPRECATED_PO_REVIEW} ${LOOP_LABEL_DEPRECATED_PLAN} ${LOOP_LABEL_DEPRECATED_DEV} ${LOOP_LABEL_DEPRECATED_IN_PROGRESS} ${LOOP_LABEL_DEPRECATED_REVIEW_PENDING} ${LOOP_LABEL_NEEDS_PO} ${LOOP_LABEL_IN_PO} ${LOOP_LABEL_NEEDS_DEV} ${LOOP_LABEL_IN_DEV} ${LOOP_LABEL_NEEDS_REVIEW} ${LOOP_LABEL_IN_REVIEW} ${LOOP_LABEL_NEEDS_QA} ${LOOP_LABEL_DEPRECATED_READY_FOR_QA} ${LOOP_LABEL_DEPRECATED_IN_REWORK} ${LOOP_LABEL_DEPRECATED_NEEDS_REWORK} ${LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED} needs-clarification ${LOOP_LABEL_BLOCKED} ${LOOP_LABEL_QA_FAIL} ${LOOP_LABEL_QA_PASS} ${LOOP_LABEL_DONE} tracker"
+# Single source of truth: lib/labels.sh exports LOOP_PIPELINE_TRACKED_LABELS
+# and the loop_pipeline_tracked_labels_string helper. Previously this was a
+# hardcoded string here that drifted twice: missed needs-po/in-po/needs-dev/
+# in-dev when the vocab migration landed in #167/#188, fixed in #207, now
+# consolidated so any future label addition propagates from one place.
+LOOP_PIPELINE_LABELS=$(loop_pipeline_tracked_labels_string)
 
 reconcile_lost_issues() {
     local repo="$1"

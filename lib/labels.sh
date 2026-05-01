@@ -219,6 +219,31 @@ loop_pipeline_stage_labels_csv() {
     echo "${LOOP_PIPELINE_STAGE_LABELS[*]}"
 }
 
+# Tracked labels — every label that means "this ticket is part of the Loop
+# pipeline at all," including terminal states. Superset of LOOP_PIPELINE_STAGE_LABELS
+# plus blocked/done (terminal) and tracker (epic taxonomy). Used by
+# reconcile_lost_issues to detect issues with NO pipeline label at all (so
+# they can be routed back to po-review for triage).
+#
+# DO NOT use this for strip-on-close — use LOOP_PIPELINE_STAGE_LABELS for
+# that, since blocked/done/tracker must be preserved.
+LOOP_PIPELINE_TRACKED_LABELS=(
+    "${LOOP_PIPELINE_STAGE_LABELS[@]}"
+    blocked
+    "done"
+    tracker
+)
+
+# loop_pipeline_tracked_labels_string — space-separated string of every tracked
+# label. Single source of truth for reconcile_lost_issues' detection set.
+# Replaces the hardcoded LOOP_PIPELINE_LABELS string in scanner/reconciler.sh
+# (which drifted twice: missed needs-po/in-po/needs-dev/in-dev when the vocab
+# migration landed in #167/#188 → fixed in #207; now consolidated here so any
+# future label addition propagates automatically).
+loop_pipeline_tracked_labels_string() {
+    echo "${LOOP_PIPELINE_TRACKED_LABELS[*]}"
+}
+
 # Issue-only labels — should never appear on a PR. Some are pipeline triggers
 # whose handlers expect to run against an issue (and would misfire on a PR);
 # others are taxonomy markers (`tracker`, `epic`) that classify issues only.
