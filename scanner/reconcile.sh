@@ -26,8 +26,11 @@ source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/config.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
+# shellcheck source=../lib/reconcile_drift.sh
+source "$LOOP_ROOT/lib/reconcile_drift.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-reconcile.log"
+DRY_RUN="${DRY_RUN:-false}"
 ONLY_SLUG=""
 
 while [ $# -gt 0 ]; do
@@ -69,6 +72,10 @@ audit_project() {
         | python3 -c 'import json,sys; print(len(json.load(sys.stdin)))' 2>/dev/null || echo 0)
 
     log "[$slug] $REPO: open_issues=$issue_count open_prs=$pr_count"
+
+    # Issue↔PR label-drift repair (subsumes #127). Updates DRIFT_REPAIRED
+    # / BLOCKED_REPORTED in place; honours $DRY_RUN.
+    reconcile_drift_run || log "[$slug] drift run failed (continuing)"
 }
 
 log "=== reconcile start (only_slug=${ONLY_SLUG:-<all>}) ==="
