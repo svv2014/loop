@@ -73,6 +73,26 @@ PY
         done
 
         if $all_closed; then
+            # Skip the unblock when an open PR already closes this issue. Work
+            # is in flight on the PR side (review/QA/merge); restoring the
+            # issue's `dev` trigger here causes the dev-handler to re-run and
+            # re-apply `blocked` on the next tick, producing a 20-min ping-pong
+            # observed on ppl-study #421 (7+ cycles, 80+ comments). Strip the
+            # stale `blocked` so the PR-side pipeline is unobstructed, but do
+            # not requeue dev.
+            local _existing_pr=""
+            _existing_pr=$(backend_find_pr_for_issue "$repo" "$num" 2>/dev/null || echo "")
+            if [ -n "$_existing_pr" ]; then
+                log "[$repo] UNBLOCK issue #$num (deps ${deps} satisfied) — open PR #${_existing_pr} found; stripping blocked only, NOT requeuing dev"
+                $DRY_RUN && continue
+                backend_remove_label "$repo" "$num" blocked \
+                    || log "[$repo] WARN: failed to remove blocked from issue #$num"
+                backend_comment_issue "$repo" "$num" \
+                    "Dependency ${deps//,/, #} is now closed/merged. PR #${_existing_pr} already in flight — stripping \`blocked\` so the PR pipeline can proceed; not re-running dev." \
+                    || log "[$repo] WARN: failed to comment on issue #$num"
+                continue
+            fi
+
             trigger_label=$(loop_label_for "$slug" "dev" 2>/dev/null) || trigger_label="dev"
             [ -z "$trigger_label" ] && trigger_label="dev"
             dep_list=$(DEP_NUMS="$deps" python3 -c "
