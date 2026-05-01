@@ -757,43 +757,21 @@ reconcile_synonym_labels() {
     log "[$repo] scanning open issues + PRs for synonym labels"
     local renamed=0 entry from to
 
-    # Workflow-aware gating: build the set of trigger labels actually used by
-    # this project's workflow. We must NOT rename a label that IS a trigger
-    # for this project (would strip a live label), and we must NOT rename TO
-    # a label that is NOT a trigger for this project (would apply a dead
-    # label). Without this, projects on workflow=current end up with their
-    # canonical triggers rewritten to default-workflow names — observed on
-    # pa-scanner: review-pending → needs-review starved 5 PRs for 24h.
-    local issue_triggers="" pr_triggers=""
-    if [ -n "$slug" ]; then
-        issue_triggers=$(loop_polled_labels "$slug" issue 2>/dev/null || echo "")
-        pr_triggers=$(loop_polled_labels "$slug" pr 2>/dev/null || echo "")
-    fi
-    _is_trigger_for_kind() {
-        # _is_trigger_for_kind <label> <issue|pr>
-        local _label="$1" _kind="$2" _set
-        case "$_kind" in
-            issue) _set="$issue_triggers" ;;
-            pr)    _set="$pr_triggers" ;;
-            *)     return 1 ;;
-        esac
-        [ -z "$_set" ] && return 1
-        printf '%s\n' "$_set" | grep -qxF "$_label"
-    }
+    # Workflow-aware gating: don't rewrite a label that IS a workflow
+    # trigger for this project (would strip a live label), and don't
+    # rewrite TO a label that is NOT a trigger here (would apply a dead
+    # label). Shared helper in lib/workflow.sh — see #209.
 
     for entry in "${LOOP_SYNONYM_MAP[@]}"; do
         from="${entry%%:*}"; to="${entry##*:}"
 
         for kind in issue pr; do
-            # Skip rename for this kind if `from` is a live trigger for the
-            # project's workflow (don't strip canonical labels) or if `to`
-            # is not a trigger (don't apply dead labels).
             if [ -n "$slug" ]; then
-                if _is_trigger_for_kind "$from" "$kind"; then
+                if loop_label_is_trigger "$slug" "$kind" "$from"; then
                     log "[$repo] synonym skip ($kind, $slug): '$from' is a workflow trigger here"
                     continue
                 fi
-                if ! _is_trigger_for_kind "$to" "$kind"; then
+                if ! loop_label_is_trigger "$slug" "$kind" "$to"; then
                     log "[$repo] synonym skip ($kind, $slug): '$to' is not a workflow trigger here"
                     continue
                 fi
@@ -844,24 +822,7 @@ reconcile_alias_renames() {
     # projects (ppl-study, NTC, vrefm-classifier, pa-scanner) — same class of
     # bug as #192/#193 caught in the synonym renamer.
     #
-    # Build the set of live trigger labels from this project's workflow YAML.
-    # For each candidate rename: skip if `alias` IS a live trigger here, OR
-    # if `canonical` is NOT a trigger here.
-    local issue_triggers="" pr_triggers=""
-    if [ -n "$slug" ]; then
-        issue_triggers=$(loop_polled_labels "$slug" issue 2>/dev/null || echo "")
-        pr_triggers=$(loop_polled_labels "$slug" pr 2>/dev/null || echo "")
-    fi
-    _alias_is_trigger_for_kind() {
-        local _label="$1" _kind="$2" _set
-        case "$_kind" in
-            issue) _set="$issue_triggers" ;;
-            pr)    _set="$pr_triggers" ;;
-            *)     return 1 ;;
-        esac
-        [ -z "$_set" ] && return 1
-        printf '%s\n' "$_set" | grep -qxF "$_label"
-    }
+    # Workflow-aware gating via the shared helper in lib/workflow.sh (#209).
 
     # Pull all open PRs once — we filter the cached list per alias.
     local prs_json
@@ -874,9 +835,9 @@ reconcile_alias_renames() {
         [ "$canonical" = "$alias" ] && continue
 
         # Issues carrying $alias.
-        if [ -n "$slug" ] && _alias_is_trigger_for_kind "$alias" issue; then
+        if [ -n "$slug" ] && loop_label_is_trigger "$slug" issue "$alias"; then
             log "[$repo] alias-rename skip (issue, $slug): '$alias' is a workflow trigger here"
-        elif [ -n "$slug" ] && ! _alias_is_trigger_for_kind "$canonical" issue; then
+        elif [ -n "$slug" ] && ! loop_label_is_trigger "$slug" issue "$canonical"; then
             log "[$repo] alias-rename skip (issue, $slug): '$canonical' is not a workflow trigger here"
         else
             local issues_json issue_nums
@@ -901,9 +862,9 @@ for i in json.loads(os.environ["ISS"]):
         fi
 
         # PRs carrying $alias (from the cached open-PRs list).
-        if [ -n "$slug" ] && _alias_is_trigger_for_kind "$alias" pr; then
+        if [ -n "$slug" ] && loop_label_is_trigger "$slug" pr "$alias"; then
             log "[$repo] alias-rename skip (pr, $slug): '$alias' is a workflow trigger here"
-        elif [ -n "$slug" ] && ! _alias_is_trigger_for_kind "$canonical" pr; then
+        elif [ -n "$slug" ] && ! loop_label_is_trigger "$slug" pr "$canonical"; then
             log "[$repo] alias-rename skip (pr, $slug): '$canonical' is not a workflow trigger here"
         else
             local pr_nums num

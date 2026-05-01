@@ -66,6 +66,35 @@ print(canon)
 PY
 }
 
+# loop_label_is_trigger <slug> <kind> <label>
+# Returns 0 if <label> is one of the project's workflow trigger labels for
+# <kind> (issue|pr), 1 otherwise. Empty slug returns 1 (caller-side opt-out
+# gate). Used by reconciler check functions that rewrite labels and must
+# not strip a live trigger or apply a dead one.
+#
+# Caches the trigger sets per (slug, kind) within one process via
+# _LOOP_TRIGGER_CACHE_<slug>_<kind> environment vars to avoid re-querying
+# the workflow YAML for every label check (each loop_polled_labels call
+# spawns python3 + reads a YAML).
+loop_label_is_trigger() {
+    local slug="$1" kind="$2" label="$3"
+    [ -z "$slug" ] && return 1
+
+    local cache_var="_LOOP_TRIGGER_CACHE_${slug//[^A-Za-z0-9]/_}_${kind}"
+    local set
+    set="${!cache_var:-__UNSET__}"
+    if [ "$set" = "__UNSET__" ]; then
+        set=$(loop_polled_labels "$slug" "$kind" 2>/dev/null || echo "")
+        # Encode "empty result" distinctly so we don't re-query forever.
+        [ -z "$set" ] && set="__EMPTY__"
+        printf -v "$cache_var" '%s' "$set"
+        export "$cache_var"
+    fi
+
+    [ "$set" = "__EMPTY__" ] && return 1
+    printf '%s\n' "$set" | grep -qxF "$label"
+}
+
 # loop_polled_labels <slug> <target>
 # target = "issue" or "pr". Returns one label per line.
 loop_polled_labels() {
