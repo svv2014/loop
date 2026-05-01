@@ -73,6 +73,7 @@ if [ "$retries" -ge "$MAX_RETRIES" ]; then
     log "issue #$ISSUE_NUM already failed ${retries}x — labeling blocked"
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
     backend_add_label "$REPO" "$ISSUE_NUM" blocked
+    loop_notify_human_required "$SLUG" "$ISSUE_NUM" blocked "Dev failed ${retries}x"
     exit 0
 fi
 
@@ -217,6 +218,7 @@ if matches:
         log "WARN: no open PR found for issue #$ISSUE_NUM after dev agent — adding 'needs-clarification'"
         backend_remove_label "$REPO" "$ISSUE_NUM" dev plan in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
+        loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "Dev agent finished without opening a PR"
     else
         log "belt-and-braces: found PR #$_dev_pr_num for issue #$ISSUE_NUM"
         if ! backend_pr_has_any_label "$REPO" "$_dev_pr_num" \
@@ -238,6 +240,7 @@ else
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked
+        loop_notify_human_required "$SLUG" "$ISSUE_NUM" blocked "Dev agent failed after $MAX_RETRIES attempts"
         _fail_body_file=$(mktemp /tmp/loop-fail-XXXXXX.md)
         {
             echo "Automated dev cycle failed ${MAX_RETRIES} times. Needs human review."
