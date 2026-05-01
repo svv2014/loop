@@ -1545,7 +1545,10 @@ _autopull_loop() {
     before=$(git -C "$LOOP_ROOT" rev-parse HEAD 2>/dev/null || echo "")
     git -C "$LOOP_ROOT" pull --ff-only origin main --quiet 2>/dev/null || return 0
     after=$(git -C "$LOOP_ROOT" rev-parse HEAD 2>/dev/null || echo "")
-    [ "$before" != "$after" ] && log "auto-pull: updated $before → $after"
+    if [ "$before" != "$after" ]; then
+        log "auto-pull: updated $before → $after"
+    fi
+    return 0
 }
 $DRY_RUN || _autopull_loop
 
