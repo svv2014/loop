@@ -131,9 +131,12 @@ if backend_pr_has_any_label "$REPO" "$PR_NUM" "release-pr"; then
     fi
 fi
 
-# Find all linked issues via "Closes #N" in PR body (handles multiple closes).
+# Find all linked issues via GitHub's auto-close keywords in PR body (#200).
+# Recognises closes/close/closed, fixes/fix/fixed, resolves/resolve/resolved
+# — same set GitHub uses natively for auto-close. Previous regex matched
+# only [Cc]loses?, so PRs using Fixes/Resolves left their issues open.
 LINKED_ISSUES=$(backend_pr_view "$REPO" "$PR_NUM" --json body --jq .body 2>/dev/null \
-    | python3 -c "import re,sys; print(' '.join(re.findall(r'[Cc]loses?\s+#(\d+)', sys.stdin.read() or '')))")
+    | python3 -c "import re,sys; print(' '.join(re.findall(r'(?:[Cc]los(?:e|es|ed)|[Ff]ix(?:|es|ed)|[Rr]esolv(?:e|es|ed))\s+#(\d+)', sys.stdin.read() or '')))")
 
 # Strip all pipeline-stage labels from the merged PR (issue #166).
 # Orthogonal labels (priority, semver:*, release-pr, safe-to-test, bug,
