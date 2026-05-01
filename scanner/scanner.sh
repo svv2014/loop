@@ -31,6 +31,20 @@ POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
 
+# SIGHUP-reopen contract (#194): logrotate-style tools truncate or rename
+# the on-disk log file. The launchd plist redirects stdout/stderr to a
+# path, but the running process holds an open FD to the original inode —
+# after rotation the process keeps writing to a deleted inode and the
+# on-disk file appears 0 bytes (observed today, hid scanner activity for
+# hours). On SIGHUP, reopen FDs 1+2 against the path so writes resume to
+# the current inode.
+_scanner_reopen_log() {
+    if [ -n "${LOG_FILE:-}" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || true
+    fi
+}
+trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
+
 DRY_RUN=false
 ONCE=false
 
