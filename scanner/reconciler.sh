@@ -776,9 +776,37 @@ EOF
 # per-project `alias_renamed=N` line in the reconciler log.
 reconcile_alias_renames() {
     local repo="$1"
+    local slug="${2:-}"
     log "[$repo] scanning open issues + PRs for deprecated label aliases"
 
     local renamed=0 alias canonical
+
+    # Workflow-aware gating (LOOP-205): the deprecated→canonical map in
+    # lib/labels.sh assumes the canonical names are workflow triggers. That's
+    # true for default.yaml after PR #188, but current.yaml still uses the
+    # "deprecated" names as live triggers (po-review, dev, review-pending,
+    # etc.). Renaming globally strips live triggers from current-workflow
+    # projects (ppl-study, NTC, vrefm-classifier, pa-scanner) — same class of
+    # bug as #192/#193 caught in the synonym renamer.
+    #
+    # Build the set of live trigger labels from this project's workflow YAML.
+    # For each candidate rename: skip if `alias` IS a live trigger here, OR
+    # if `canonical` is NOT a trigger here.
+    local issue_triggers="" pr_triggers=""
+    if [ -n "$slug" ]; then
+        issue_triggers=$(loop_polled_labels "$slug" issue 2>/dev/null || echo "")
+        pr_triggers=$(loop_polled_labels "$slug" pr 2>/dev/null || echo "")
+    fi
+    _alias_is_trigger_for_kind() {
+        local _label="$1" _kind="$2" _set
+        case "$_kind" in
+            issue) _set="$issue_triggers" ;;
+            pr)    _set="$pr_triggers" ;;
+            *)     return 1 ;;
+        esac
+        [ -z "$_set" ] && return 1
+        printf '%s\n' "$_set" | grep -qxF "$_label"
+    }
 
     # Pull all open PRs once — we filter the cached list per alias.
     local prs_json
@@ -791,29 +819,43 @@ reconcile_alias_renames() {
         [ "$canonical" = "$alias" ] && continue
 
         # Issues carrying $alias.
-        local issues_json issue_nums
-        issues_json=$(backend_list_open_issues_raw "$repo" "$alias") || issues_json="[]"
-        issue_nums=$(ISS="$issues_json" python3 -c '
+        if [ -n "$slug" ]; then
+            if _alias_is_trigger_for_kind "$alias" issue; then
+                log "[$repo] alias-rename skip (issue, $slug): '$alias' is a workflow trigger here"
+            elif ! _alias_is_trigger_for_kind "$canonical" issue; then
+                log "[$repo] alias-rename skip (issue, $slug): '$canonical' is not a workflow trigger here"
+            else
+                local issues_json issue_nums
+                issues_json=$(backend_list_open_issues_raw "$repo" "$alias") || issues_json="[]"
+                issue_nums=$(ISS="$issues_json" python3 -c '
 import json, os
 for i in json.loads(os.environ["ISS"]):
     print(i["number"])
 ' 2>/dev/null || echo "")
 
-        local num
-        for num in $issue_nums; do
-            log "[$repo] alias-rename issue #$num: $alias → $canonical"
-            $DRY_RUN || {
-                backend_add_label    "$repo" "$num" "$canonical" \
-                    || log "[$repo] WARN: failed to add $canonical to issue #$num"
-                backend_remove_label "$repo" "$num" "$alias" \
-                    || log "[$repo] WARN: failed to remove $alias from issue #$num"
-            }
-            renamed=$((renamed + 1))
-        done
+                local num
+                for num in $issue_nums; do
+                    log "[$repo] alias-rename issue #$num: $alias → $canonical"
+                    $DRY_RUN || {
+                        backend_add_label    "$repo" "$num" "$canonical" \
+                            || log "[$repo] WARN: failed to add $canonical to issue #$num"
+                        backend_remove_label "$repo" "$num" "$alias" \
+                            || log "[$repo] WARN: failed to remove $alias from issue #$num"
+                    }
+                    renamed=$((renamed + 1))
+                done
+            fi
+        fi
 
         # PRs carrying $alias (from the cached open-PRs list).
-        local pr_nums
-        pr_nums=$(PJSON="$prs_json" ALIAS="$alias" python3 -c '
+        if [ -n "$slug" ]; then
+            if _alias_is_trigger_for_kind "$alias" pr; then
+                log "[$repo] alias-rename skip (pr, $slug): '$alias' is a workflow trigger here"
+            elif ! _alias_is_trigger_for_kind "$canonical" pr; then
+                log "[$repo] alias-rename skip (pr, $slug): '$canonical' is not a workflow trigger here"
+            else
+                local pr_nums num
+                pr_nums=$(PJSON="$prs_json" ALIAS="$alias" python3 -c '
 import json, os
 alias = os.environ["ALIAS"]
 for p in json.loads(os.environ["PJSON"]):
@@ -822,16 +864,18 @@ for p in json.loads(os.environ["PJSON"]):
         print(p["number"])
 ' 2>/dev/null || echo "")
 
-        for num in $pr_nums; do
-            log "[$repo] alias-rename PR #$num: $alias → $canonical"
-            $DRY_RUN || {
-                backend_add_label    "$repo" "$num" "$canonical" \
-                    || log "[$repo] WARN: failed to add $canonical to PR #$num"
-                backend_remove_label "$repo" "$num" "$alias" \
-                    || log "[$repo] WARN: failed to remove $alias from PR #$num"
-            }
-            renamed=$((renamed + 1))
-        done
+                for num in $pr_nums; do
+                    log "[$repo] alias-rename PR #$num: $alias → $canonical"
+                    $DRY_RUN || {
+                        backend_add_label    "$repo" "$num" "$canonical" \
+                            || log "[$repo] WARN: failed to add $canonical to PR #$num"
+                        backend_remove_label "$repo" "$num" "$alias" \
+                            || log "[$repo] WARN: failed to remove $alias from PR #$num"
+                    }
+                    renamed=$((renamed + 1))
+                done
+            fi
+        fi
     done < <(loop_deprecated_aliases)
 
     log "[$repo] alias_renamed=$renamed"
@@ -1502,7 +1546,7 @@ run_project() {
     log "=== $slug ($REPO) ==="
     reconcile_labels "$REPO"
     reconcile_synonym_labels "$REPO" "$slug"
-    reconcile_alias_renames "$REPO"
+    reconcile_alias_renames "$REPO" "$slug"
     reconcile_lost_issues "$REPO"
     reconcile_duplicate_prs "$REPO"
     reconcile_obsolete_open_prs "$REPO"
