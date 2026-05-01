@@ -642,7 +642,19 @@ PY
 
     while IFS=$'\t' read -r num title; do
         [ -z "$num" ] && continue
-        log "[$repo] LOST issue #$num (no pipeline label): $title — observational, no mutation"
+
+        # Skip if the issue has an open PR closing it — work is on PR side
+        # (#199 producer-side: dev-handler now strips the issue's trigger
+        # label after opening the PR). Without this consumer-side gate,
+        # operator gets a Signal for every healthy in-flight ticket.
+        local _existing_pr
+        _existing_pr=$(backend_find_pr_for_issue "$repo" "$num" 2>/dev/null || echo "")
+        if [ -n "$_existing_pr" ]; then
+            log "[$repo] LOST issue #$num — skipping Signal: open PR #${_existing_pr} closes it (work in flight, no operator action needed)"
+            continue
+        fi
+
+        log "[$repo] LOST issue #$num (no pipeline label, no closing PR): $title — observational, no mutation"
 
         # Skip Signal if we already notified within the cool-down window.
         local repo_slug="${repo//\//-}"
@@ -657,7 +669,7 @@ PY
         fi
 
         $DRY_RUN && continue
-        loop_notify "Loop reconciler: $repo — issue #$num has no pipeline label. Operator: pick a trigger label (e.g. \`po-review\` or \`dev\`) or close as out-of-scope. Title: ${title}"
+        loop_notify "Loop reconciler: $repo — issue #$num has no pipeline label and no open PR closing it. Operator: pick a trigger label (e.g. \`po-review\` or \`dev\`) or close as out-of-scope. Title: ${title}"
         : > "$sentinel"
     done <<< "$lost"
 }

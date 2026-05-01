@@ -216,7 +216,9 @@ if matches:
 " 2>/dev/null || true)
     if [ -z "$_dev_pr_num" ]; then
         log "WARN: no open PR found for issue #$ISSUE_NUM after dev agent — adding 'needs-clarification'"
-        backend_remove_label "$REPO" "$ISSUE_NUM" dev plan in-progress
+        # Strip every pipeline-stage label (canonical + deprecated) so the
+        # issue ends single-state with just needs-clarification (#199).
+        loop_strip_pipeline_labels "$REPO" "$ISSUE_NUM" >/dev/null || true
         backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
         loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "Dev agent finished without opening a PR"
     else
@@ -228,8 +230,13 @@ if matches:
             log "WARN: PR #$_dev_pr_num has no progression label after dev agent — adding '${_REVIEW_LABEL}'"
             backend_add_label "$REPO" "$_dev_pr_num" "$_REVIEW_LABEL"
         fi
-        # Strip both legacy and canonical issue-side names so the issue ends single-state
-        backend_remove_label "$REPO" "$ISSUE_NUM" "$LOOP_LABEL_NEEDS_REVIEW" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" plan dev in-progress
+        # Strip every pipeline-stage label from the issue (#199 root-cause
+        # fix). Work has moved to PR side; reconciler should treat 'open
+        # issue with open closing PR + no stage label' as healthy. Single
+        # source of truth: lib/labels.sh::LOOP_PIPELINE_STAGE_LABELS covers
+        # both canonical and deprecated names so a future vocab addition
+        # propagates here automatically.
+        loop_strip_pipeline_labels "$REPO" "$ISSUE_NUM" >/dev/null || true
     fi
     cleanup_worktree
 else
