@@ -730,18 +730,24 @@ LOOP_SYNONYM_MAP=(
 _rename_label_on_target() {
     # _rename_label_on_target <repo> <number> <kind> <from> <to>
     # kind: issue | pr
+    #
+    # Two-step rename, ordered add-THEN-remove (#198 fix). If the add fails
+    # (label not defined on repo, API rate limit, network flake), the
+    # original `from` label is preserved so the ticket retains SOMETHING
+    # the pipeline recognizes. The previous remove-then-add order could
+    # leave a ticket label-less when add failed mid-batch (observed on
+    # loop-monitor PRs #95/#88/#75, all empty-labelled simultaneously).
     local repo="$1" num="$2" kind="$3" from="$4" to="$5"
     if $DRY_RUN; then
         log "[$repo] DRY: would rename $kind #$num: $from → $to"
         return 0
     fi
-    if [ "$kind" = "pr" ]; then
-        backend_remove_label "$repo" "$num" "$from"
-        backend_add_label    "$repo" "$num" "$to"
-    else
-        backend_remove_label "$repo" "$num" "$from"
-        backend_add_label    "$repo" "$num" "$to"
+    if ! backend_add_label "$repo" "$num" "$to"; then
+        log "[$repo] WARN: rename $kind #$num: failed to add '$to' — keeping '$from'; will retry next tick"
+        return 1
     fi
+    backend_remove_label "$repo" "$num" "$from" \
+        || log "[$repo] WARN: rename $kind #$num: failed to remove '$from' (target now has both labels; reconciler will retry the cleanup)"
     log "[$repo] renamed $kind #$num: $from → $to"
 }
 
