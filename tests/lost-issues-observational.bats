@@ -40,11 +40,13 @@ setup() {
 
     # Override stubbed-out functions AFTER sourcing so they win over any
     # real implementation pulled in via lib/*.
-    backend_add_label()      { echo "backend_add_label $*"      >> "$OPS_LOG"; }
-    backend_remove_label()   { echo "backend_remove_label $*"   >> "$OPS_LOG"; }
-    backend_comment_issue()  { echo "backend_comment_issue $*"  >> "$OPS_LOG"; }
-    backend_comment_pr()     { echo "backend_comment_pr $*"     >> "$OPS_LOG"; }
-    loop_notify()            { echo "loop_notify $*"            >> "$OPS_LOG"; }
+    backend_add_label()         { echo "backend_add_label $*"         >> "$OPS_LOG"; }
+    backend_remove_label()      { echo "backend_remove_label $*"      >> "$OPS_LOG"; }
+    backend_comment_issue()     { echo "backend_comment_issue $*"     >> "$OPS_LOG"; }
+    backend_comment_pr()        { echo "backend_comment_pr $*"        >> "$OPS_LOG"; }
+    loop_notify()               { echo "loop_notify $*"               >> "$OPS_LOG"; }
+    # Default: no closing PR. Tests that need one set BACKEND_PR_FOR_ISSUE.
+    backend_find_pr_for_issue() { echo "${BACKEND_PR_FOR_ISSUE:-}"; }
 
     # Mock gh: only the `gh issue list` call inside reconcile_lost_issues
     # needs a return value. Read fixture from $GH_FIXTURE.
@@ -60,7 +62,7 @@ setup() {
 
 teardown() {
     rm -rf "$LOOP_LOST_STATE_DIR" "$OPS_LOG"
-    unset GH_FIXTURE
+    unset GH_FIXTURE BACKEND_PR_FOR_ISSUE
 }
 
 # Helper: fixture for an issue with no pipeline labels at all.
@@ -163,4 +165,20 @@ JSON
     [ ! -d "$LOOP_LOST_STATE_DIR" ] || [ -z "$(ls "$LOOP_LOST_STATE_DIR" 2>/dev/null)" ]
 
     DRY_RUN=false
+}
+
+@test "lost issue WITH open closing PR: skipped silently — no Signal (#199 producer/consumer pair)" {
+    write_fixture_unlabelled_issue
+    BACKEND_PR_FOR_ISSUE=99   # closing PR exists
+
+    run reconcile_lost_issues "$REPO"
+    [ "$status" -eq 0 ]
+
+    # No mutating ops AND no notification — operator already sees the PR.
+    ! grep -q "^backend_add_label"     "$OPS_LOG" 2>/dev/null
+    ! grep -q "^backend_comment_issue" "$OPS_LOG" 2>/dev/null
+    ! grep -q "^loop_notify"           "$OPS_LOG" 2>/dev/null
+
+    # No sentinel either — we'll re-evaluate freshly next tick.
+    [ ! -f "$LOOP_LOST_STATE_DIR/owner-test-repo-42" ]
 }
