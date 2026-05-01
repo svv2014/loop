@@ -1,8 +1,19 @@
-# Loop default workflow — clean canonical labels for new adopters.
+# Loop default workflow — canonical label vocabulary.
+#
+# Canonical labels (single source of truth: lib/labels.sh, docs/labels.md):
+#   needs-po, in-po, needs-dev, in-dev,
+#   needs-review, in-review,
+#   needs-qa, qa-pass, qa-fail,
+#   blocked, done
 #
 # Stages:
-#   po-review (issue) → dev (issue) → needs-review (PR) → needs-rework (PR) →
-#   needs-qa (PR) → qa-pass / qa-fail (PR) → merge → done
+#   needs-po (issue) → needs-dev (issue) → needs-review (PR) →
+#   {approve → needs-qa | reject → needs-dev (PR rework)} →
+#   qa-pass / qa-fail (PR) → merge → done
+#
+# Deprecated synonyms (po-review, dev, plan, in-progress, review-pending,
+# ready-for-qa, needs-rework, changes-requested, in-rework) are rewritten by
+# `reconcile_alias_renames` on the next reconciler tick — see lib/labels.sh.
 #
 # To use: in config/projects.yaml, set `workflow: default` for a project.
 # Per-project label overrides are supported via the `labels:` map.
@@ -13,18 +24,18 @@ version: 1
 name: default
 description: |
   Standard plan → review → QA → merge pipeline with PO expansion and
-  rework loop. Clean canonical label names; recommended for new repos.
+  rework loop. Canonical label names; recommended for new repos.
 
 issue_stages:
   - id: po
-    trigger_label: po-review
+    trigger_label: needs-po
     handler: po-handler
-    on_done: dev
+    on_done: needs-dev
     on_blocked: blocked
     on_clarification: needs-clarification
 
   - id: dev
-    trigger_label: dev
+    trigger_label: needs-dev
     handler: dev-handler
     on_done: needs-review
     on_failed_after_max: blocked
@@ -35,10 +46,10 @@ pr_stages:
     handler: review-handler
     decisions:
       approve: needs-qa
-      reject: needs-rework
+      reject: needs-dev
 
   - id: rework
-    trigger_label: needs-rework
+    trigger_label: needs-dev
     handler: dev-rework-handler
     on_done: needs-review
     on_failed_after_max: blocked

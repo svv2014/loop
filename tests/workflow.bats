@@ -120,7 +120,11 @@ YAML
     [[ "$output" == *"duplicate"* ]]
 }
 
-@test "validate: duplicate trigger_label across issue_stages and pr_stages fails" {
+@test "validate: same trigger_label across issue_stages and pr_stages is allowed" {
+    # Issues and PRs are distinct objects; one canonical label (e.g.
+    # `needs-dev`) may legitimately trigger both an issue stage and a
+    # PR-rework stage. The duplicate-trigger check is therefore scoped to
+    # a single section. See config/workflows/default.yaml and docs-only.yaml.
     cat > "$TEST_TMP/xdup.yaml" <<YAML
 version: 1
 name: xdup
@@ -136,8 +140,7 @@ pr_stages:
     on_done: done
 YAML
     run loop_workflow_validate "$TEST_TMP/xdup.yaml"
-    [ "$status" -ne 0 ]
-    [[ "$output" == *"duplicate"* ]]
+    [ "$status" -eq 0 ]
 }
 
 # ---------------------------------------------------------------------------
