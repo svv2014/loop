@@ -1404,6 +1404,56 @@ PY
     done <<< "$stale"
 }
 
+# --- Check: PR label audit — strip issue-only labels from open PRs ---------
+# Pipeline-trigger labels (`needs-po`, `needs-dev`, plus deprecated aliases)
+# and taxonomy labels (`tracker`, `epic`, `needs-clarification`) belong on
+# issues only. If applied to a PR by mistake, scanner/handler logic may
+# misfire. For each open PR carrying any issue-only label, strip the labels
+# and post one combined comment per PR per run.
+reconcile_pr_label_audit() {
+    local repo="$1"
+    log "[$repo] auditing open PRs for issue-only labels"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo")
+
+    local hits
+    hits=$(PRS="$prs_json" ISSUE_ONLY="$(loop_issue_only_labels_csv)" python3 - <<'PY'
+import json, os
+prs = json.loads(os.environ['PRS'])
+issue_only = set(os.environ['ISSUE_ONLY'].split(','))
+for pr in prs:
+    labels = {l['name'] for l in pr.get('labels', [])}
+    bad = labels & issue_only
+    if bad:
+        print(f"{pr['number']}\t{','.join(sorted(bad))}")
+PY
+)
+
+    if [ -z "$hits" ]; then
+        log "[$repo] no PRs carrying issue-only labels"
+        return 0
+    fi
+
+    local num bad
+    while IFS=$'\t' read -r num bad; do
+        [ -z "$num" ] && continue
+        log "[$repo] PR-LABEL-AUDIT PR#$num strip issue-only: $bad"
+        if $DRY_RUN; then
+            continue
+        fi
+        local label
+        local IFS_ORIG="$IFS"
+        IFS=','
+        for label in $bad; do
+            backend_remove_label "$repo" "$num" "$label" >/dev/null 2>&1 || true
+        done
+        IFS="$IFS_ORIG"
+        backend_comment_pr "$repo" "$num" \
+            "Reconciler: removed issue-only label(s): ${bad}. These trigger issue-side handlers and can misfire on PRs."
+    done <<< "$hits"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -1429,6 +1479,7 @@ run_project() {
     reconcile_stale_base "$REPO"
     reconcile_stale_blocked_issues "$REPO"
     reconcile_qa_failures "$REPO"
+    reconcile_pr_label_audit "$REPO"
     reconcile_author_gated "$slug" "$REPO"
     reconcile_closed_issue_labels "$REPO"
     recovery_check_dependencies "$slug"
