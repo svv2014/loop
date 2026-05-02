@@ -43,7 +43,16 @@ PY
 }
 
 # loop_label_for <slug> <canonical>
-# Returns the project-specific label name for a canonical workflow label.
+# Returns the actual label name this project uses for a canonical workflow
+# stage. Resolution order:
+#   1. Per-project override in projects.yaml labels: map.
+#   2. The active workflow YAML's trigger label for the stage that <canonical>
+#      belongs to. Closes #230 — post-#188 vocab migration, the canonical
+#      arg passed by handlers may differ from the workflow's actual trigger
+#      (e.g. handlers pass "dev"; default.yaml triggers on "needs-dev").
+#      Without this lookup, dev-handler's guard checked for "dev" and bailed
+#      after reconciler renamed the issue's label to "needs-dev".
+#   3. The <canonical> arg verbatim (legacy fallback).
 loop_label_for() {
     local slug="$1" canonical="$2"
     local config="${LOOP_CONFIG:-${LOOP_ROOT:-.}/config/projects.yaml}"
@@ -51,17 +60,68 @@ loop_label_for() {
         echo "$canonical"
         return 0
     fi
-    SLUG="$slug" CANON="$canonical" CFG="$config" python3 - <<'PY'
+    SLUG="$slug" CANON="$canonical" CFG="$config" \
+    WF_DIR="${_LOOP_WORKFLOW_DIR:-${LOOP_ROOT:-.}/config/workflows}" \
+    python3 - <<'PY'
 import os, sys, yaml
-slug = os.environ['SLUG']
-canon = os.environ['CANON']
-with open(os.environ['CFG']) as f:
+
+slug     = os.environ['SLUG']
+canon    = os.environ['CANON']
+cfg_path = os.environ['CFG']
+wf_dir   = os.environ['WF_DIR']
+
+# Map every canonical name handlers historically pass to the workflow
+# stage ID where it lives. Covers labels.sh canonicals + deprecated aliases.
+CANON_TO_STAGE = {
+    'po-review':         'po',
+    'needs-po':          'po',
+    'dev':               'dev',
+    'needs-dev':         'dev',
+    'plan':              'dev',
+    'in-progress':       'dev',
+    'needs-review':      'review',
+    'review-pending':    'review',
+    'needs-rework':      'rework',
+    'changes-requested': 'rework',
+    'needs-qa':          'qa',
+    'ready-for-qa':      'qa',
+    'qa-pass':           'merge',
+    # qa-fail is a stage-outcome label, not a stage trigger — falls
+    # through to identity below.
+}
+
+with open(cfg_path) as f:
     data = yaml.safe_load(f) or {}
+
+# (1) project override
+project = None
 for p in data.get('projects', []):
     if p.get('slug') == slug:
-        overrides = p.get('labels') or {}
-        print(overrides.get(canon, canon))
-        sys.exit(0)
+        project = p
+        break
+overrides = (project or {}).get('labels') or {}
+if canon in overrides:
+    print(overrides[canon])
+    sys.exit(0)
+
+# (2) workflow stage trigger lookup
+stage_id = CANON_TO_STAGE.get(canon)
+if stage_id and project:
+    wf_name = project.get('workflow', 'default')
+    wf_path = os.path.join(wf_dir, f'{wf_name}.yaml')
+    if os.path.isfile(wf_path):
+        with open(wf_path) as f:
+            wf = yaml.safe_load(f) or {}
+        for key in ('issue_stages', 'pr_stages'):
+            for stage in wf.get(key, []) or []:
+                if stage.get('id') == stage_id:
+                    trig = stage.get('trigger_label')
+                    if trig:
+                        # Per-project override may also remap the trigger.
+                        print(overrides.get(trig, trig))
+                        sys.exit(0)
+
+# (3) verbatim fallback
 print(canon)
 PY
 }
