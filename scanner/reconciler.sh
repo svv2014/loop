@@ -1615,6 +1615,114 @@ PY
     return 0
 }
 
+# --- Check: agent self-diagnosis — surface meta-bug language in comments -----
+# Closes #203. Agents (PO/dev/review/qa) sometimes write meta-bug language in
+# their own PR/issue comments — "reconciler keeps stripping", "human action
+# required", etc. The anomaly detector (#195) catches BEHAVIOR (label flip
+# rate); this check catches NARRATIVE.
+#
+# Mines comments authored by ALLOWED_AUTHORS (agents post as the operator),
+# bounded to tickets updated in the last LOOP_DISTRESS_WINDOW hours.
+#
+# Configurable env:
+#   LOOP_DISTRESS_WINDOW_HOURS   default 1
+#   LOOP_DISTRESS_NOTIFY_HOURS   default 24  (per-ticket cool-down)
+#   LOOP_DISTRESS_STATE_DIR      default /tmp/loop-distress-notified
+#   LOOP_DISTRESS_PHRASES_FILE   optional path to a custom phrase list
+#                                (one regex per line; defaults built-in)
+reconcile_agent_distress() {
+    local repo="$1"
+    log "[$repo] agent-distress detector: scanning recent comments"
+
+    local window_hours="${LOOP_DISTRESS_WINDOW_HOURS:-1}"
+    local notify_hours="${LOOP_DISTRESS_NOTIFY_HOURS:-24}"
+    local state_dir="${LOOP_DISTRESS_STATE_DIR:-/tmp/loop-distress-notified}"
+    local phrases_file="${LOOP_DISTRESS_PHRASES_FILE:-}"
+    mkdir -p "$state_dir"
+
+    local default_phrases='reconciler keeps
+reconciler is.*looping
+pipeline is.*looping
+human action required
+no progress (after|since)
+[0-9]+\+? cycles
+ping[ -]?pong
+pathology
+stuck cycle
+operator: investigate
+manually fix the reconciler'
+
+    local phrases
+    if [ -n "$phrases_file" ] && [ -f "$phrases_file" ]; then
+        phrases=$(cat "$phrases_file")
+    else
+        phrases="$default_phrases"
+    fi
+
+    local since
+    since=$(date -u -v "-${window_hours}H" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+            || date -u -d "${window_hours} hours ago" '+%Y-%m-%dT%H:%M:%SZ' 2>/dev/null \
+            || echo "")
+    [ -z "$since" ] && { log "[$repo] agent-distress: cannot compute window cutoff"; return 0; }
+
+    local recent_json
+    recent_json=$(gh search issues --repo "$repo" --updated ">=$since" --state open \
+                  --limit 50 --json number 2>/dev/null || echo "[]")
+    local recent_nums
+    recent_nums=$(printf '%s' "$recent_json" | jq -r '.[].number // empty' 2>/dev/null || echo "")
+    [ -z "$recent_nums" ] && { log "[$repo] agent-distress: no recently-updated tickets"; return 0; }
+
+    local now_epoch; now_epoch=$(date +%s)
+    local cool_down_seconds=$(( notify_hours * 3600 ))
+
+    local num
+    for num in $recent_nums; do
+        local comments_json
+        comments_json=$(gh issue view "$num" --repo "$repo" --json comments 2>/dev/null \
+                        || echo "{\"comments\":[]}")
+
+        local matched
+        matched=$(PHRASES="$phrases" AUTHORS="${ALLOWED_AUTHORS:-svv2014}" \
+                  python3 -c '
+import json, os, re, sys
+data = json.load(sys.stdin)
+authors = set(os.environ["AUTHORS"].split(","))
+patterns = [re.compile(p, re.IGNORECASE) for p in os.environ["PHRASES"].splitlines() if p.strip()]
+for c in data.get("comments", [])[-10:]:
+    author = (c.get("author") or {}).get("login", "")
+    if author not in authors:
+        continue
+    body = c.get("body") or ""
+    for p in patterns:
+        m = p.search(body)
+        if m:
+            print(m.group(0)[:80])
+            sys.exit(0)
+' <<< "$comments_json" 2>/dev/null || echo "")
+
+        [ -z "$matched" ] && continue
+
+        local repo_slug="${repo//\//-}"
+        local sentinel="$state_dir/${repo_slug}-${num}"
+        if [ -f "$sentinel" ]; then
+            local mtime; mtime=$(stat -f %m "$sentinel" 2>/dev/null || stat -c %Y "$sentinel" 2>/dev/null || echo 0)
+            local age=$(( now_epoch - mtime ))
+            if [ "$age" -lt "$cool_down_seconds" ]; then
+                log "[$repo] agent-distress: #$num matched '$matched' — Signal cooled-down (${age}s ago)"
+                continue
+            fi
+        fi
+
+        log "[$repo] AGENT-DISTRESS: #$num — agent comment matched '$matched'"
+        $DRY_RUN && continue
+        loop_notify "Loop reconciler: $repo — agent posted distress on #$num: '$matched'. Likely pipeline pathology the agent recognises but cannot fix. Operator: investigate. URL: https://github.com/${repo}/issues/${num}" \
+            || true
+        : > "$sentinel"
+    done
+
+    return 0
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -1642,6 +1750,7 @@ run_project() {
     reconcile_qa_failures "$REPO"
     reconcile_pr_label_audit "$REPO"
     reconcile_anomalies "$REPO"
+    reconcile_agent_distress "$REPO"
     reconcile_author_gated "$slug" "$REPO"
     reconcile_closed_issue_labels "$REPO"
     recovery_check_dependencies "$slug"
