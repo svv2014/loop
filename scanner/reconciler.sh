@@ -763,28 +763,35 @@ _rename_label_on_target() {
     log "[$repo] renamed $kind #$num: $from → $to"
 }
 
-reconcile_synonym_labels() {
-    local repo="$1"
-    local slug="${2:-}"
-    log "[$repo] scanning open issues + PRs for synonym labels"
-    local renamed=0 entry from to
+# _reconcile_label_renames <repo> <slug> <log_prefix> <pairs>
+#
+# Shared body for label-rewriting reconciler checks (#211). Iterates a
+# newline-separated <pairs> list of "from:to" entries and renames each
+# matching open issue / PR via the atomic _rename_label_on_target helper
+# (add-then-remove, #198). Workflow-aware gate from lib/workflow.sh (#209)
+# skips renames that would strip live triggers or apply dead labels.
+#
+# Two callers (kept as thin wrappers so log lines remain distinct and
+# operators can tell synonym renames from alias renames at a glance):
+#   - reconcile_synonym_labels  (LOOP_SYNONYM_MAP from reconciler.sh)
+#   - reconcile_alias_renames   (LOOP_DEPRECATED_ALIAS_MAP via labels.sh)
+_reconcile_label_renames() {
+    local repo="$1" slug="$2" log_prefix="$3" pairs="$4"
+    local renamed=0 from to
 
-    # Workflow-aware gating: don't rewrite a label that IS a workflow
-    # trigger for this project (would strip a live label), and don't
-    # rewrite TO a label that is NOT a trigger here (would apply a dead
-    # label). Shared helper in lib/workflow.sh — see #209.
-
-    for entry in "${LOOP_SYNONYM_MAP[@]}"; do
-        from="${entry%%:*}"; to="${entry##*:}"
+    while IFS=':' read -r from to; do
+        [ -z "$from" ] || [ -z "$to" ] && continue
+        # Self-mappings are no-ops (defensive — maps shouldn't contain them).
+        [ "$from" = "$to" ] && continue
 
         for kind in issue pr; do
             if [ -n "$slug" ]; then
                 if loop_label_is_trigger "$slug" "$kind" "$from"; then
-                    log "[$repo] synonym skip ($kind, $slug): '$from' is a workflow trigger here"
+                    log "[$repo] $log_prefix skip ($kind, $slug): '$from' is a workflow trigger here"
                     continue
                 fi
                 if ! loop_label_is_trigger "$slug" "$kind" "$to"; then
-                    log "[$repo] synonym skip ($kind, $slug): '$to' is not a workflow trigger here"
+                    log "[$repo] $log_prefix skip ($kind, $slug): '$to' is not a workflow trigger here"
                     continue
                 fi
             fi
@@ -798,110 +805,54 @@ reconcile_synonym_labels() {
 
             while IFS= read -r line; do
                 [ -z "$line" ] && continue
-                local num; num=$(printf '%s' "$line" | jq -r '.number // empty' 2>/dev/null)
+                local num
+                num=$(printf '%s' "$line" | jq -r '.number // empty' 2>/dev/null)
                 [ -z "$num" ] && continue
                 _rename_label_on_target "$repo" "$num" "$kind" "$from" "$to"
-                renamed=$((renamed+1))
+                renamed=$((renamed + 1))
             done <<EOF
 $items_json
 EOF
         done
-    done
+    done <<< "$pairs"
 
+    echo "$renamed"
+}
+
+reconcile_synonym_labels() {
+    local repo="$1" slug="${2:-}"
+    log "[$repo] scanning open issues + PRs for synonym labels"
+    local pairs
+    pairs=$(printf '%s\n' "${LOOP_SYNONYM_MAP[@]}")
+    local renamed
+    renamed=$(_reconcile_label_renames "$repo" "$slug" "synonym" "$pairs")
     if [ "$renamed" -gt 0 ]; then
         log "[$repo] synonyms renamed: $renamed"
     fi
 }
 
 # --- Check: deprecated label aliases — rename to canonical ------------------
-# Iterates every alias declared in LOOP_DEPRECATED_ALIAS_MAP (lib/labels.sh).
-# For each open issue or PR carrying an alias, adds the canonical replacement
-# first and then removes the alias (additive-then-subtractive, never lossy).
-# Idempotent: a re-run on a clean repo issues zero label calls. Surfaces a
-# per-project `alias_renamed=N` line in the reconciler log.
+# Iterates every alias declared in LOOP_DEPRECATED_ALIAS_MAP (lib/labels.sh)
+# and routes through _reconcile_label_renames. Now uses the atomic
+# _rename_label_on_target helper (add-then-remove, #198) — previously this
+# function had its own inline non-atomic remove-then-add (a #198 oversight
+# that was a latent bug for current-workflow projects on every tick).
 reconcile_alias_renames() {
-    local repo="$1"
-    local slug="${2:-}"
+    local repo="$1" slug="${2:-}"
     log "[$repo] scanning open issues + PRs for deprecated label aliases"
 
-    local renamed=0 alias canonical
-
-    # Workflow-aware gating (LOOP-205): the deprecated→canonical map in
-    # lib/labels.sh assumes the canonical names are workflow triggers. That's
-    # true for default.yaml after PR #188, but current.yaml still uses the
-    # "deprecated" names as live triggers (po-review, dev, review-pending,
-    # etc.). Renaming globally strips live triggers from current-workflow
-    # projects (ppl-study, NTC, vrefm-classifier, pa-scanner) — same class of
-    # bug as #192/#193 caught in the synonym renamer.
-    #
-    # Workflow-aware gating via the shared helper in lib/workflow.sh (#209).
-
-    # Pull all open PRs once — we filter the cached list per alias.
-    local prs_json
-    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
-
+    # Build pairs ("alias:canonical") from the deprecated alias map.
+    local pairs alias canonical
+    pairs=""
     while IFS= read -r alias; do
         [ -z "$alias" ] && continue
         canonical=$(loop_canonical_label "$alias")
-        # Skip self-mappings (defensive; map shouldn't contain them).
         [ "$canonical" = "$alias" ] && continue
-
-        # Issues carrying $alias.
-        if [ -n "$slug" ] && loop_label_is_trigger "$slug" issue "$alias"; then
-            log "[$repo] alias-rename skip (issue, $slug): '$alias' is a workflow trigger here"
-        elif [ -n "$slug" ] && ! loop_label_is_trigger "$slug" issue "$canonical"; then
-            log "[$repo] alias-rename skip (issue, $slug): '$canonical' is not a workflow trigger here"
-        else
-            local issues_json issue_nums
-            issues_json=$(backend_list_open_issues_raw "$repo" "$alias") || issues_json="[]"
-            issue_nums=$(ISS="$issues_json" python3 -c '
-import json, os
-for i in json.loads(os.environ["ISS"]):
-    print(i["number"])
-' 2>/dev/null || echo "")
-
-            local num
-            for num in $issue_nums; do
-                log "[$repo] alias-rename issue #$num: $alias → $canonical"
-                $DRY_RUN || {
-                    backend_add_label    "$repo" "$num" "$canonical" \
-                        || log "[$repo] WARN: failed to add $canonical to issue #$num"
-                    backend_remove_label "$repo" "$num" "$alias" \
-                        || log "[$repo] WARN: failed to remove $alias from issue #$num"
-                }
-                renamed=$((renamed + 1))
-            done
-        fi
-
-        # PRs carrying $alias (from the cached open-PRs list).
-        if [ -n "$slug" ] && loop_label_is_trigger "$slug" pr "$alias"; then
-            log "[$repo] alias-rename skip (pr, $slug): '$alias' is a workflow trigger here"
-        elif [ -n "$slug" ] && ! loop_label_is_trigger "$slug" pr "$canonical"; then
-            log "[$repo] alias-rename skip (pr, $slug): '$canonical' is not a workflow trigger here"
-        else
-            local pr_nums num
-            pr_nums=$(PJSON="$prs_json" ALIAS="$alias" python3 -c '
-import json, os
-alias = os.environ["ALIAS"]
-for p in json.loads(os.environ["PJSON"]):
-    names = [l["name"] if isinstance(l, dict) else l for l in p.get("labels", [])]
-    if alias in names:
-        print(p["number"])
-' 2>/dev/null || echo "")
-
-            for num in $pr_nums; do
-                log "[$repo] alias-rename PR #$num: $alias → $canonical"
-                $DRY_RUN || {
-                    backend_add_label    "$repo" "$num" "$canonical" \
-                        || log "[$repo] WARN: failed to add $canonical to PR #$num"
-                    backend_remove_label "$repo" "$num" "$alias" \
-                        || log "[$repo] WARN: failed to remove $alias from PR #$num"
-                }
-                renamed=$((renamed + 1))
-            done
-        fi
+        pairs+="${alias}:${canonical}"$'\n'
     done < <(loop_deprecated_aliases)
 
+    local renamed
+    renamed=$(_reconcile_label_renames "$repo" "$slug" "alias-rename" "$pairs")
     log "[$repo] alias_renamed=$renamed"
 }
 
