@@ -1513,6 +1513,108 @@ PY
     done <<< "$hits"
 }
 
+# --- Check: anomaly detector — surface ping-pong / starvation tickets ----
+# Closes #195. Deterministic check that mines the reconciler's own log file
+# for label-flip-rate anomalies. When a single ticket appears in N or more
+# touch events within a window, Signal the operator once (cool-down per
+# ticket) so they can investigate before the ticket consumes more cycles.
+#
+# Mined patterns: alias-rename, synonym, UNBLOCK, LOST (post-#214 logged
+# but not auto-routed) — every reconciler check that *touches* a ticket.
+#
+# Configurable env:
+#   LOOP_ANOMALY_THRESHOLD     default 4   (touches in window → anomalous)
+#   LOOP_ANOMALY_WINDOW_HOURS  default 1
+#   LOOP_ANOMALY_NOTIFY_HOURS  default 24  (per-ticket Signal cool-down)
+#   LOOP_ANOMALY_STATE_DIR     default /tmp/loop-anomaly-notified
+reconcile_anomalies() {
+    local repo="$1"
+    log "[$repo] anomaly detector: scanning recent reconciler activity"
+
+    local threshold="${LOOP_ANOMALY_THRESHOLD:-4}"
+    local window_hours="${LOOP_ANOMALY_WINDOW_HOURS:-1}"
+    local notify_hours="${LOOP_ANOMALY_NOTIFY_HOURS:-24}"
+    local state_dir="${LOOP_ANOMALY_STATE_DIR:-/tmp/loop-anomaly-notified}"
+    mkdir -p "$state_dir"
+
+    [ -f "$LOG_FILE" ] || { log "[$repo] no reconciler log to mine"; return 0; }
+
+    # Mine the reconciler log: count touch-events per ticket within the
+    # window, emit "<num>\t<count>" for tickets crossing the threshold.
+    REPO_FOR_PY="$repo" THRESHOLD="$threshold" WIN_HOURS="$window_hours" \
+    LOG_FILE_PY="$LOG_FILE" python3 - <<'PY' | while IFS=$'\t' read -r num touches; do
+import os, re, sys, time
+from datetime import datetime
+
+repo = os.environ['REPO_FOR_PY']
+threshold = int(os.environ['THRESHOLD'])
+window_seconds = int(os.environ['WIN_HOURS']) * 3600
+cutoff = time.time() - window_seconds
+
+ts_re   = re.compile(r'^\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]')
+repo_tag = f'[{repo}]'
+# Touch patterns this detector recognises:
+touch_re = re.compile(
+    r'(alias-rename (?:issue|PR) #\d+)'
+    r'|(synonym[^#]*#\d+)'
+    r'|(UNBLOCK (?:issue|PR) #\d+)'
+    r'|(LOST issue #\d+)'
+)
+num_re = re.compile(r'#(\d+)')
+counts = {}
+
+try:
+    with open(os.environ['LOG_FILE_PY'], 'r', errors='replace') as f:
+        for line in f:
+            tm = ts_re.match(line)
+            if tm:
+                try:
+                    epoch = datetime.strptime(tm.group(1), '%Y-%m-%d %H:%M:%S').timestamp()
+                except ValueError:
+                    continue
+                if epoch < cutoff:
+                    continue
+            else:
+                continue
+            if repo_tag not in line:
+                continue
+            if not touch_re.search(line):
+                continue
+            m = num_re.search(line)
+            if m:
+                counts[m.group(1)] = counts.get(m.group(1), 0) + 1
+except FileNotFoundError:
+    sys.exit(0)
+
+for num, count in counts.items():
+    if count >= threshold:
+        print(f"{num}\t{count}")
+PY
+        [ -z "$num" ] && continue
+        local repo_slug="${repo//\//-}"
+        local sentinel="$state_dir/${repo_slug}-${num}"
+        local cool_down_seconds=$(( notify_hours * 3600 ))
+        local now_epoch; now_epoch=$(date +%s)
+
+        if [ -f "$sentinel" ]; then
+            local mtime; mtime=$(stat -f %m "$sentinel" 2>/dev/null || stat -c %Y "$sentinel" 2>/dev/null || echo 0)
+            local age=$(( now_epoch - mtime ))
+            if [ "$age" -lt "$cool_down_seconds" ]; then
+                log "[$repo] anomaly: #$num touches=$touches in ${window_hours}h — Signal cooled-down (${age}s ago)"
+                continue
+            fi
+        fi
+
+        log "[$repo] ANOMALY: #$num — $touches reconciler touches in last ${window_hours}h (threshold=$threshold)"
+        $DRY_RUN && continue
+        loop_notify "Loop reconciler: $repo — issue/PR #$num was touched ${touches}× in the last ${window_hours}h. Likely a pipeline pathology (ping-pong, eventual-consistency drift, missing label, etc.). Operator: investigate. URL: https://github.com/${repo}/issues/${num}" \
+            || true
+        : > "$sentinel"
+    done
+
+    return 0
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -1539,6 +1641,7 @@ run_project() {
     reconcile_stale_blocked_issues "$REPO"
     reconcile_qa_failures "$REPO"
     reconcile_pr_label_audit "$REPO"
+    reconcile_anomalies "$REPO"
     reconcile_author_gated "$slug" "$REPO"
     reconcile_closed_issue_labels "$REPO"
     recovery_check_dependencies "$slug"
