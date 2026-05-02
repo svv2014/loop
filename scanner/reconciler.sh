@@ -1331,7 +1331,10 @@ PY
     done <<< "$target_prs"
 
     git -C "$_git_dir" worktree prune 2>/dev/null || true
-    [ -n "$_tmp_clone" ] && rm -rf "$_tmp_clone"
+    if [ -n "$_tmp_clone" ]; then
+        rm -rf "$_tmp_clone"
+    fi
+    return 0  # explicit — guard against trailing-conditional set -e hazard (#212)
 }
 
 # --- Check 13: stale blocked issues — Opus escalation after 30 min -----------
