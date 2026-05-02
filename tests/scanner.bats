@@ -198,6 +198,29 @@ teardown() {
     [ "$status" -eq 1 ]
 }
 
+# Regression: the default workflow uses `needs-dev` as the issue dev trigger
+# AND as the PR rework trigger. Before the fix, issue_is_claimed naively
+# treated every PR-trigger label as a claim and silently filtered out any
+# issue that had its own dev trigger — the dev handler never fired, the
+# pipeline stalled after PO. The fix subtracts issue triggers from the
+# PR-trigger set used for the claim check.
+@test "issue_is_claimed: returns 1 when default-workflow issue has only needs-dev (its own dev trigger)" {
+    _write_fixture_config
+    export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
+    export GH_MOCK_OUTPUT="needs-dev"
+    run issue_is_claimed "proj-default" "owner/default-repo" 1
+    [ "$status" -eq 1 ]
+}
+
+# Sanity: a real PR-only stage label still counts as a claim.
+@test "issue_is_claimed: returns 0 when default-workflow issue has needs-review (PR-only stage)" {
+    _write_fixture_config
+    export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
+    export GH_MOCK_OUTPUT="needs-review"
+    run issue_is_claimed "proj-default" "owner/default-repo" 1
+    [ "$status" -eq 0 ]
+}
+
 # ---------------------------------------------------------------------------
 # _pr_downstream_labels
 # ---------------------------------------------------------------------------

@@ -164,14 +164,29 @@ emit() {
 # Returns 0 if the issue has been dispatched or moved past the issue stage.
 # Claimed labels are derived from the project's workflow PR trigger labels
 # plus a fixed set of handler-set operational labels (in-progress, build, blocked).
+#
+# A PR trigger label that is *also* an issue trigger in the same workflow
+# (e.g. `needs-dev` is both the issue dev trigger and the PR rework trigger
+# in the default workflow) must NOT count as a claim — otherwise an issue
+# carrying its own dev trigger is silently filtered out and never dispatched.
 issue_is_claimed() {
     local slug="$1" repo="$2" num="$3"
-    local pr_trigger_labels
-    pr_trigger_labels=$(loop_polled_labels "$slug" pr 2>/dev/null | tr '\n' ' ')
+    local issue_trigger_labels pr_trigger_labels filtered_pr_labels
+    issue_trigger_labels=$(loop_polled_labels "$slug" issue 2>/dev/null | tr '\n' ' ')
+    pr_trigger_labels=$(loop_polled_labels "$slug" pr 2>/dev/null)
+    # Subtract issue triggers from the PR trigger set.
+    filtered_pr_labels=""
+    while IFS= read -r _lbl; do
+        [ -z "$_lbl" ] && continue
+        case " $issue_trigger_labels " in
+            *" $_lbl "*) continue ;;
+        esac
+        filtered_pr_labels="$filtered_pr_labels $_lbl"
+    done <<< "$pr_trigger_labels"
     # shellcheck disable=SC2086
     backend_issue_has_any_label "$repo" "$num" \
         in-progress build blocked 'done' \
-        ${pr_trigger_labels}
+        ${filtered_pr_labels}
 }
 
 # _pr_downstream_labels <slug> <from_label>

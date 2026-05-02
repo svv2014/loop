@@ -148,6 +148,7 @@ loop_label_is_trigger() {
         # Encode "empty result" distinctly so we don't re-query forever.
         [ -z "$set" ] && set="__EMPTY__"
         printf -v "$cache_var" '%s' "$set"
+        # shellcheck disable=SC2163  # exporting the var named by $cache_var; intentional indirection.
         export "$cache_var"
     fi
 

@@ -102,10 +102,10 @@ teardown() {
 }
 
 @test "filesystem-safe slug sanitisation (dots, slashes)" {
-    # suprun.ca has a dot; the helper must not produce a path that breaks.
-    loop_backoff_record_failure suprun.ca 10 dev "test"
-    [ "$(loop_backoff_count suprun.ca 10 dev)" -eq 1 ]
+    # example.com has a dot; the helper must not produce a path that breaks.
+    loop_backoff_record_failure example.com 10 dev "test"
+    [ "$(loop_backoff_count example.com 10 dev)" -eq 1 ]
     # Round-trip works: clear, then re-check.
-    loop_backoff_clear suprun.ca 10 dev
-    [ "$(loop_backoff_count suprun.ca 10 dev)" -eq 0 ]
+    loop_backoff_clear example.com 10 dev
+    [ "$(loop_backoff_count example.com 10 dev)" -eq 0 ]
 }
