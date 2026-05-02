@@ -308,9 +308,31 @@ C - CANCEL / OUT OF SCOPE (idea contradicts project goals, irrelevant, or explic
 
 D - UPGRADE TO EPIC (idea is too big for one dev cycle, more than 1 day of work):
    - Convert this issue to a tracker/epic (add label "tracker")
-   - Create 2-4 child issues, each scoped to less than 1 day, each with "${_po_trigger}" label
+   - Create child issues, each scoped to less than 1 day, each with "${_po_trigger}" label
+   - HARD CAP: do NOT create more than ${LOOP_PO_MAX_CHILDREN:-4} children in one decomposition.
+     If the epic genuinely needs more, create the first ${LOOP_PO_MAX_CHILDREN:-4} as a "phase 1"
+     subset, leave a comment explaining the rest is held for a later phase, and stop.
+   - REFACTOR-CLASS DETECTION (#202): if the epic title or body matches any of these phrases
+     (case-insensitive):
+       refactor / split (X into Y) / modularize / extract / restructure / rewrite / migrate / consolidate
+     treat it as a refactor that almost certainly touches overlapping files. Examples that bled
+     today: loop-monitor#5 (terminal dashboard, 29 comments), #83 (split server.py, 19 comments),
+     #28/29/30 children racing each other (11-13 comments each). Running parallel children that
+     edit the same files produces merge conflicts → rework loops → comment-bleed.
+     For refactor-class epics, you MUST chain the children via "Depends on #N" in their bodies
+     so loop processes them serially:
+       - Child 1: no deps
+       - Child 2 body: includes "Depends on #<child-1-num>"
+       - Child 3 body: "Depends on #<child-2-num>"
+       - ...etc.
+     Loop's recovery_check_dependencies (lib/recovery.sh, parser at lib/dep_parser.sh) parks each
+     later child with "blocked" until the prior child's PR merges. Result: serial processing,
+     zero merge conflicts, no rework storm.
+   - DISJOINT-FILE EPICS (rare — be honest, when in doubt assume overlap): if children verifiably
+     touch non-overlapping files, chaining is optional. Document the disjoint-file claim in each
+     child's body so the next reader can verify.
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label tracker --remove-label in-progress --remove-label ${_po_trigger}
-   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: decomposed into child issues: #X, #Y, #Z.'
+   - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: decomposed into child issues: #X, #Y, #Z. Chaining: <serial via Depends on / parallel because files are disjoint>.'
 
 E - NEEDS CLARIFICATION (request is ambiguous, one specific question can unblock it):
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: needs clarification: [one specific question].'
