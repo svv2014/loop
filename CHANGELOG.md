@@ -13,6 +13,75 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+### Reconciler stability + observability batch (2026-05-01 / 2026-05-02)
+
+A multi-PR sweep addressing root causes of label ping-pong, set -e
+foot-guns, vocab-migration drift, and lack of pathology visibility.
+The pipeline became dramatically more debuggable and self-healing in
+this batch.
+
+#### Fixed (writer correctness)
+- [#204] `_autopull_loop` returns 0 when no fast-forward — set -e was
+  killing the entire reconciler whenever no merge happened upstream.
+- [#206] `reconcile_alias_renames` is workflow-aware — stopped
+  stripping live trigger labels from `workflow: current` projects
+  (4 projects affected: ppl-study, NTC, vrefm-classifier, pa-scanner).
+- [#207, #208] `LOOP_PIPELINE_LABELS` consolidated into
+  `lib/labels.sh::LOOP_PIPELINE_TRACKED_LABELS`. Single source of
+  truth so vocab additions can't drift.
+- [#213] `LOOP_REQUIRED_LABELS` includes the canonical `needs-po`,
+  `in-po`, `needs-dev`, `in-dev` so freshly-onboarded repos bootstrap
+  them cleanly.
+- [#216] `merge-handler.sh` recognises `Fixes` / `Resolves` keywords
+  alongside `Closes` (matches GitHub's native auto-close vocabulary).
+- [#217] `_rename_label_on_target` is add-then-remove with early-
+  return on add-failure. No more label-less tickets when API flakes
+  mid-rename.
+- [#220] dev-handler strips the issue's stage trigger after opening a
+  closing PR via `loop_strip_pipeline_labels`; `reconcile_lost_issues`
+  skips Signal when an open PR closes the issue.
+- [#221] `reconcile_stale_base` ends with explicit `return 0`. Static
+  scan in `tests/reconciler-set-e-audit.bats` regression-guards every
+  `reconcile_*` / `recovery_*` function against the same trailing-
+  conditional `set -e` foot-gun.
+- [#222] `reconcile_synonym_labels` + `reconcile_alias_renames` →
+  thin wrappers over a shared `_reconcile_label_renames` helper. Net
+  49-line reduction; alias renamer also gains the atomic ordering
+  from #217 as a side effect.
+- [#225] PO Path D enforces a hard cap (`LOOP_PO_MAX_CHILDREN`,
+  default 4) and detects refactor-class epics (title/body keywords)
+  so their children are chained via `Depends on #N` for serial
+  processing — eliminates the merge-conflict storms on multi-file
+  refactors.
+
+#### Added (observability)
+- [#214] `reconcile_lost_issues` is observational only — Signal +
+  per-ticket cool-down, no auto-mutation. Eliminates the ping-pong
+  with `reconcile_alias_renames` that produced 41+ comments on a
+  single ticket.
+- [#218] `scanner.sh` installs a SIGHUP trap that reopens stdout/
+  stderr against `LOG_FILE`. Survives `logrotate copytruncate` /
+  `newsyslog R` without going silent.
+- [#223] `reconcile_anomalies` mines the reconciler log for tickets
+  touched more than threshold times within a window. Configurable
+  threshold (default 4), window (default 1h), cool-down (default 24h).
+- [#224] `reconcile_agent_distress` scans recent agent-authored
+  comments for narrative-pathology phrases (`reconciler keeps`,
+  `human action required`, `no progress after N cycles`). Built-in
+  phrase list overridable via `LOOP_DISTRESS_PHRASES_FILE`.
+
+#### Refactored
+- [#209, #219] `loop_label_is_trigger <slug> <kind> <label>` extracted
+  to `lib/workflow.sh` with per-(slug, kind) caching. Replaces two
+  duplicate copies of the gate in the reconciler.
+
+#### Tests added
+- 8 new bats files: `lost-issues-observational`, `rename-label-atomic`,
+  `label-is-trigger`, `scanner-log-sighup`, `reconciler-set-e-audit`,
+  `anomaly-detector`, `agent-distress`, `po-decomposition-instructions`.
+  39+ new cases covering writer contracts, observational invariants,
+  cool-downs, and prompt-text regression.
+
 
 ### Changed
 - [LOOP-160] feat: add reconcile-on-startup entrypoint (#171)

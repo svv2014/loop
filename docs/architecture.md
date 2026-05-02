@@ -94,15 +94,52 @@ Each handler:
 
 ### Reconciler (`scanner/reconciler.sh`)
 
-Every 15 minutes, sweeps for drift the scanner doesn't self-correct:
+Every 15 minutes, sweeps each configured project for drift the scanner
+doesn't self-correct. Two distinct classes of check:
 
+**Mutating checks** (corroboration-gated, never speculative):
+- Required-label bootstrap — creates any missing canonical Loop labels
+  on the repo (`needs-po`, `needs-dev`, `needs-review`, `needs-qa`, etc.)
+- Synonym + alias renames — rewrites deprecated label names to the
+  workflow's live trigger labels. Workflow-aware (won't strip a label
+  that IS a trigger for the project; won't apply one that isn't).
+  Atomic add-then-remove so add-failure preserves the original label.
 - Duplicate PRs (same `Closes #N`) — closes the older one
-- Orphaned `needs-review` issues (PR was closed without merging) —
-  resets to `dev`
-- Stale PRs (>24h with no movement) — notification only
-- Dependency unblock — parses `## Dependencies` section, re-labels
-  to `dev` once all referenced issues are closed
-- Missing-label routing — issues with no pipeline label get `po-review`
+- Obsolete open PRs (issue already closed by a merged PR) — closes
+  with reason
+- Dependency unblock — parses `blocked by #N`, `depends on #N`,
+  `## Dependencies` sections via `lib/dep_parser.sh`. Skips when an
+  open PR already closes the issue (work is on PR side, no requeue).
+- Stale-base auto-rebase — PRs whose base SHA diverged from main get
+  rebased automatically when conflict-free.
+- QA-failure transient retry vs repeated-failure clarification.
+- Conflict-blocked PR auto-recycle — closes a CONFLICTING PR and
+  re-queues the source issue to `dev`.
+- Orphaned in-progress reset — issue stuck `in-progress` >10 min with
+  no live handler lock → resets to `dev` (or canonical equivalent).
+- Closed-issue label scrub — strips stale pipeline labels off issues
+  closed in the last 7 days that the merge-handler didn't catch.
+- PR label audit — strips issue-only labels (`tracker`, `epic`,
+  `needs-clarification`) accidentally applied to PRs.
+
+**Observational checks** (Signal-only, no mutation):
+- Lost-issues detector — open issues with no pipeline label and no
+  closing PR get a Signal once per ticket per 24h cool-down. Operator
+  applies a trigger label or closes. Was the source of repeated label
+  ping-pong before #214 made it observational.
+- Anomaly detector — mines the reconciler's own log for ticket-level
+  pathology (one ticket touched ≥4 times within 1h). Threshold,
+  window, cool-down all tunable via env.
+- Agent-distress detector — scans agent-authored comments on
+  recently-updated tickets for narrative-pathology phrases ("reconciler
+  keeps", "human action required", "no progress after N cycles").
+  Surfaces to operator before the cycle escalates.
+- Author-gated digest — counts tickets skipped due to ALLOWED_AUTHORS
+  gate so an external user's request doesn't go silently unseen.
+
+The split between mutating and observational is intentional: mutators
+fight each other when they all run on the same ticket within one tick
+on stale data. Observational checks just report — operator decides.
 
 ### Lock layer (`lib/lock.sh`)
 
@@ -129,9 +166,12 @@ error). No-ops silently when unset. Concrete notifier scripts live in
 
 Loads `config/workflows/<name>.yaml`, applies project label overrides
 from `config/projects.yaml`. Public API: `loop_workflow_for_project`,
-`loop_label_for`, `loop_polled_labels`, `loop_handler_for_label`,
-`loop_workflow_validate`. Used by scanner and (selectively) by handlers
-to look up canonical-vs-actual label names.
+`loop_label_for`, `loop_polled_labels`, `loop_label_is_trigger`,
+`loop_handler_for_label`, `loop_workflow_validate`. Used by scanner
+and (selectively) by handlers to look up canonical-vs-actual label
+names. `loop_label_is_trigger` caches per-(slug, kind) trigger sets in
+env vars so a tick with many label candidates pays one workflow YAML
+read per project.
 
 ## Data flow on one feature
 
