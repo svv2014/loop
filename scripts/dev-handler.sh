@@ -79,6 +79,15 @@ fi
 
 log "dev handler: slug=$SLUG repo=$REPO issue=#$ISSUE_NUM attempt=$((retries + 1))/$MAX_RETRIES"
 
+# Exponential backoff (#153): if a previous failure scheduled a cool-down,
+# bail until the next-eligible time. Reconciler will retry on next tick.
+# shellcheck source=../lib/backoff.sh
+source "$LOOP_ROOT/lib/backoff.sh"
+if ! loop_backoff_check "$SLUG" "$ISSUE_NUM" dev; then
+    log "backoff: issue #$ISSUE_NUM still in cool-down (count=$(loop_backoff_count "$SLUG" "$ISSUE_NUM" dev)) — skipping this tick"
+    exit 0
+fi
+
 # Tick-time re-validation: bail cleanly if the trigger label is gone or the
 # issue closed since the scanner emitted this event.
 _DEV_TRIGGER=$(loop_label_for "$SLUG" "dev" 2>/dev/null) || _DEV_TRIGGER="dev"
@@ -198,6 +207,7 @@ if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; the
     bounty_report "dev_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" || true
     loop_notify "✅ [$SLUG] #$ISSUE_NUM dev done"
     retry_clear
+    loop_backoff_clear "$SLUG" "$ISSUE_NUM" dev
     # Belt-and-braces: if the agent forgot to swap labels, clean up here.
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
     # Locate the PR opened for this issue (by head ref pattern or Closes reference).
@@ -242,7 +252,10 @@ if matches:
 else
     _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup
     n=$(retry_incr)
-    log "dev agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES)"
+    # Record the failure in the backoff state too — the next scan tick
+    # will see the cool-down and skip until the next-eligible time.
+    loop_backoff_record_failure "$SLUG" "$ISSUE_NUM" dev "dev attempt ${n}/${MAX_RETRIES}" >/dev/null || true
+    log "dev agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES); backoff next-eligible logged"
     bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
