@@ -5,7 +5,7 @@
 #   - LOST issues trigger a Signal notification (loop_notify called)
 #   - LOST issues DO NOT mutate state (no backend_add_label, no
 #     backend_comment_issue) — this was the root cause of every label
-#     ping-pong incident on 2026-05-01 (suprun#10 41 comments,
+#     ping-pong incident on 2026-05-01 (proj-x#10 41 comments,
 #     ppl-study#421 80 comments).
 #   - Per-(repo, issue) cool-down suppresses a second Signal within
 #     LOOP_LOST_NOTIFY_HOURS.

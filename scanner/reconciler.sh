@@ -597,7 +597,7 @@ reconcile_lost_issues() {
     # etc.) and could be wrong on stale data (GitHub's read-after-write
     # consistency window for gh issue edit → gh issue list is non-zero).
     #
-    # Concrete failure: today on suprun.ca#10 the cycle was alias-rename
+    # Concrete failure: today on example.com#10 the cycle was alias-rename
     # writes po-review → needs-po, lost-issues' next gh-fetch in the same
     # tick missed the update OR labels.sh's pipeline-label set was stale,
     # lost-issues re-applied po-review, alias-rename re-renamed, ...
