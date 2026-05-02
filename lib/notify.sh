@@ -3,7 +3,18 @@
 # Sourced by all handlers. No-ops silently when LOOP_NOTIFY is unset or empty.
 
 loop_notify() {
-    [ -n "${LOOP_NOTIFY:-}" ] && eval "$LOOP_NOTIFY" "$1" || true
+    [ -n "${LOOP_NOTIFY:-}" ] || return 0
+    # Split LOOP_NOTIFY into argv-style words once (so the user-configured
+    # command + flags are properly tokenised), then invoke directly with
+    # the message as a single trailing argv. Avoids eval re-parsing the
+    # message — previously messages containing parens / backticks / $()
+    # (e.g. anomaly and agent-distress alerts with titles like "PR#441
+    # stale 44h in (needs-qa)") triggered "syntax error near unexpected
+    # token '('" and the notification was dropped silently.
+    local -a _LN_ARGV
+    # shellcheck disable=SC2206
+    read -ra _LN_ARGV <<< "$LOOP_NOTIFY"
+    "${_LN_ARGV[@]}" "$1" 2>/dev/null || true
 }
 
 # loop_notify_human_required <slug> <number> <label> [reason]
