@@ -95,7 +95,16 @@ loop_run_agent() {
 
     # Full orchestrator overrides everything (backward compat)
     if [ -n "${LOOP_ORCHESTRATOR:-}" ] && [ -x "${LOOP_ORCHESTRATOR}" ]; then
-        "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd"
+        # Optional per-call model override — callers like po-handler.sh set
+        # LOOP_AGENT_MODEL_OVERRIDE to give specific roles (e.g. PO) a
+        # stronger model without changing the orchestrator's global config.
+        # Requires the orchestrator to support `--model <id>`
+        # (svv2014/boba-orchestrator#30).
+        if [ -n "${LOOP_AGENT_MODEL_OVERRIDE:-}" ]; then
+            "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd" --model "$LOOP_AGENT_MODEL_OVERRIDE"
+        else
+            "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd"
+        fi
         return $?
     fi
 
