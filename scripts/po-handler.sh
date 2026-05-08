@@ -394,10 +394,15 @@ _post_failure_comment() {
     fi
 }
 
+# PO writes specs — give it a stronger model than the dev/qa workers.
+# loop_run_agent forwards LOOP_AGENT_MODEL_OVERRIDE to the orchestrator as
+# `--model <id>`, scoped to this single call. Falls back to whatever the
+# orchestrator config says if the override is unset.
+export LOOP_AGENT_MODEL_OVERRIDE="${LOOP_PO_MODEL:-claude-opus-4-7}"
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "po agent succeeded for #$ISSUE_NUM"
-    bounty_report "po_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
+    bounty_report "po_done" model="${LOOP_PO_MODEL:-claude-opus-4-7}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
     loop_notify "✅ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} done"
     retry_clear
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress

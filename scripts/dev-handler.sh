@@ -121,7 +121,7 @@ trap '_dev_label_cleanup' EXIT TERM INT
 # Isolated worktree per issue — prevents parallel dev-handlers from stomping on
 # each other's working tree (observed bug: files from branch A leaked into
 # branch B's PR when two handlers ran concurrently).
-WORKTREE_ROOT="/tmp/loop-worktree-${SLUG}-${ISSUE_NUM}"
+WORKTREE_ROOT="${ROOT}/.claude/worktrees/issue-${ISSUE_NUM}"
 if [ -d "$WORKTREE_ROOT" ]; then
     git -C "$ROOT" worktree remove "$WORKTREE_ROOT" --force 2>/dev/null || rm -rf "$WORKTREE_ROOT"
 fi
