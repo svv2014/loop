@@ -93,7 +93,7 @@ _senior_dev_label_cleanup() {
 }
 trap '_senior_dev_label_cleanup' EXIT TERM INT
 
-WORKTREE_ROOT="/tmp/loop-worktree-${SLUG}-senior-${ISSUE_NUM}"
+WORKTREE_ROOT="${ROOT}/.claude/worktrees/senior-${ISSUE_NUM}"
 if [ -d "$WORKTREE_ROOT" ]; then
     git -C "$ROOT" worktree remove "$WORKTREE_ROOT" --force 2>/dev/null || rm -rf "$WORKTREE_ROOT"
 fi
