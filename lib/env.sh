@@ -50,11 +50,3 @@ loop_run_orchestrator() {
             "$prompt"
     fi
 }
-
-# Helper: send notification (no-op if not configured)
-loop_notify() {
-    local msg="$1"
-    if [ -n "$LOOP_NOTIFY" ]; then
-        eval $LOOP_NOTIFY "\"$msg\"" 2>/dev/null || true
-    fi
-}
