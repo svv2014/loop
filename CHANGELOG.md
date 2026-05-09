@@ -13,6 +13,67 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-05-09
+
+A two-week batch focused on operational stability: every cascading
+failure mode observed in production has either an automated mitigation,
+a budget guard, or a documented recovery recipe. Pipeline now drains
+backlogs autonomously and reports its own health.
+
+### Pipeline stability batch (2026-05-08 / 2026-05-09)
+
+#### Added — autonomous recovery
+- [#244] Scanner caps non-dev pipeline stages at N concurrent emits per
+  tick (PO, senior-dev, review, QA, merge, rework). Default 1,
+  configurable per-project via `pipeline.max_concurrent_handlers` or
+  globally via `max_concurrent_handlers`. Closes the unbounded fan-out
+  that produced 12 parallel PO runs from a single backlog.
+- [#254] PR auto-rework watchdog (`scripts/pr-watchdog.sh`) — an
+  independent 15-min poll loop that labels stale loop-authored PRs
+  `needs-rework` so dev-rework picks them up. Catches PRs sitting in
+  `mergeable=CONFLICTING` (default 30 min grace) or `ci=FAILURE`
+  (default 60 min grace). Tunable via `LOOP_WATCHDOG_CONFLICT_GRACE` /
+  `LOOP_WATCHDOG_CI_GRACE`. Idempotent — never re-labels a PR already
+  in `needs-rework` / `blocked` / `needs-clarification`.
+- [#255] Daily handler-time budget (`LOOP_DAILY_HANDLER_BUDGET_SECONDS`).
+  Soft cap that stops the scanner from emitting new work once today's
+  cumulative handler wall-clock seconds reach the cap. Counter at
+  `/tmp/loop-budget-YYYYMMDD.counter` rolls over automatically. Single
+  env var, opt-in, no behavior change when unset.
+- [#257] `install.sh --bootstrap` registers the watchdog plist
+  alongside scanner / reconciler / digest. Standard `__VAR__`
+  placeholders. Idempotent.
+
+#### Added — failure classification + diagnosis
+- [#238] PO runs on opus 4.7 by default via per-call orchestrator model
+  override. Worker continues on the orchestrator-config default
+  (sonnet) for dev/qa work. Set `LOOP_PO_MODEL` to override.
+- [#245, #253] Failure classifier (`lib/failure_classifier.sh`)
+  distinguishes transient infra failures (Python tracebacks, network
+  errors, orchestrator import failures) from genuine spec ambiguity.
+  Transient → backoff retry without burning the counter. Permanent →
+  existing path to `needs-clarification`.
+- [#250] PO retry counter auto-clears when the issue's
+  `needs-clarification` label is removed (re-queue detected). Fixes
+  the stale-counter trap where re-queued tickets bounced back instantly.
+- [#251] `needs-clarification` comments now include redacted log
+  excerpt + run ID + model used. No more "see the log" black box.
+
+#### Added — operations
+- [#256] `docs/operations.md` — every state file, every recovery
+  recipe, copy-pasteable commands. Replaces ad-hoc grep-the-codebase
+  triage.
+- [#240] `dev-handler` EXIT trap correctly restores the resolved
+  trigger label (vs the original env-passed one) when killed mid-flight.
+- [#242] Custom-agent invocation no longer evaluates strings via
+  `eval` — closes a shell-injection vector if a custom command
+  contains user-supplied content.
+
+#### Documented
+- `loop.env.example` documents `LOOP_DAILY_HANDLER_BUDGET_SECONDS`,
+  `LOOP_WATCHDOG_CONFLICT_GRACE`, `LOOP_WATCHDOG_CI_GRACE` under a
+  new "Resource governance" section.
+
 ### Reconciler stability + observability batch (2026-05-01 / 2026-05-02)
 
 A multi-PR sweep addressing root causes of label ping-pong, set -e
