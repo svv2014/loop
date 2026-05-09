@@ -34,3 +34,33 @@ loop_failure_signature() {
     local text="$1"
     echo "$text" | grep -oE '(ImportError|ModuleNotFoundError|ConnectionError|TimeoutError|429|5[0-9]{2}|rate limit|timeout)' | head -1
 }
+
+# loop_is_missing_untracked_data <stderr_text>
+# Returns 0 (true) if the failure looks like the worker is asking for files
+# that don't exist in its worktree. Typical pattern: ML/data projects whose
+# preprocessed arrays / model checkpoints / large fixtures are gitignored
+# and therefore absent from the fresh worktree.
+#
+# Heuristic: stderr mentions a missing-file diagnostic AND references a path
+# that looks like runtime data (one of common extensions or directory hints).
+# Conservative — false positives are worse than false negatives here because
+# the consequence is permanently blocking the issue with an explanatory
+# comment, not transparently retrying.
+loop_is_missing_untracked_data() {
+    local text="$1"
+    [ -z "$text" ] && return 1
+    echo "$text" | grep -qE '(FileNotFoundError|No such file or directory|cannot find the file|does not exist)' || return 1
+    echo "$text" | grep -qE '(\.npy|\.npz|\.pt|\.pth|\.ckpt|\.h5|\.hdf5|\.parquet|\.pkl|\.joblib|\.bin|/data/|/models/|/checkpoints/|/fixtures/)' || return 1
+    return 0
+}
+
+# loop_extract_missing_path <stderr_text>
+# Best-effort: pull the offending path out of a "FileNotFoundError" or
+# "No such file or directory" line. Empty string if nothing recognisable.
+loop_extract_missing_path() {
+    local text="$1"
+    {
+        echo "$text" | grep -oE "FileNotFoundError[^']*'[^']+'" | grep -oE "'[^']+'" | tr -d "'" | head -1
+        echo "$text" | grep -oE "No such file or directory[^A-Za-z0-9_/.-]*[A-Za-z0-9_./-]+" | grep -oE "[A-Za-z0-9_./-]+$" | head -1
+    } | grep -v '^$' | head -1
+}

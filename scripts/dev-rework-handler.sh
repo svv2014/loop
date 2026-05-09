@@ -28,6 +28,8 @@ source "$LOOP_ROOT/lib/bounty.sh"
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
 source "$LOOP_ROOT/lib/cli-hint.sh"
+# shellcheck source=../lib/worktree.sh
+source "$LOOP_ROOT/lib/worktree.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-rework-handler.log"
 MAX_RETRIES=2
@@ -176,6 +178,10 @@ if ! git -C "$ROOT" worktree add "$WORKTREE_ROOT" "origin/$PR_BRANCH" 2>&1 | tee
     exit 1
 fi
 log "worktree ready: $WORKTREE_ROOT (branch $PR_BRANCH)"
+
+# Symlink any project-declared extra paths (gitignored runtime data, models)
+# from the primary checkout into the worktree.
+loop_link_worktree_extras "$ROOT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"
 
 # System invariant: rework agent must never run on a stale base. Always rebase
 # the branch onto current origin/<default> so the agent sees up-to-date world.

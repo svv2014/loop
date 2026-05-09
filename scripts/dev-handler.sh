@@ -26,6 +26,10 @@ source "$LOOP_ROOT/lib/bounty.sh"
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
 source "$LOOP_ROOT/lib/cli-hint.sh"
+# shellcheck source=../lib/worktree.sh
+source "$LOOP_ROOT/lib/worktree.sh"
+# shellcheck source=../lib/failure_classifier.sh
+source "$LOOP_ROOT/lib/failure_classifier.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-handler.log"
 MAX_RETRIES=3
@@ -132,6 +136,11 @@ if ! git -C "$ROOT" worktree add "$WORKTREE_ROOT" "origin/$DEFAULT_BRANCH" 2>&1 
     exit 1
 fi
 log "worktree ready: $WORKTREE_ROOT (isolated from other handlers)"
+
+# Symlink any project-declared extra paths (gitignored runtime data, models, etc.)
+# from the primary checkout into the worktree. Configurable per-project via
+# `dev.worktree_extra_paths` in projects.yaml. No-op if unset.
+loop_link_worktree_extras "$ROOT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"
 
 # Resolve workflow-specific labels for this project so the agent prompt + the
 # belt-and-braces apply the right names per the project's active workflow
@@ -251,6 +260,58 @@ if matches:
     cleanup_worktree
 else
     _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup
+
+    # Capture the agent output tail so we can classify the failure.
+    _agent_tail=$(tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
+
+    # Fail-fast on untracked-data dependencies — when the worker complains
+    # about a missing file that looks like gitignored runtime data (ML
+    # arrays, model checkpoints, large fixtures), retrying won't help.
+    # Block immediately with an explanation so the operator sees a real
+    # action item instead of three burned attempts.
+    if loop_is_missing_untracked_data "$_agent_tail"; then
+        _missing_path=$(loop_extract_missing_path "$_agent_tail")
+        log "dev agent failed for #$ISSUE_NUM — untracked-data dependency (${_missing_path:-?}); marking blocked without burning retry"
+        bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="untracked-data: ${_missing_path:-?}" || true
+        backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
+        backend_add_label "$REPO" "$ISSUE_NUM" blocked
+        _block_body=$(mktemp /tmp/loop-block-XXXXXX.md)
+        {
+            echo "## Blocked: untracked runtime dependency"
+            echo ""
+            echo "The dev agent runs in an isolated git worktree which only contains **tracked** files."
+            if [ -n "$_missing_path" ]; then
+                echo "It reported a missing file at: \`$_missing_path\`"
+            else
+                echo "It reported a missing file (path could not be auto-extracted; see comment tail below)."
+            fi
+            echo ""
+            echo "Loop's principle is that automated work should not depend on untrackable files."
+            echo "To unblock, choose one:"
+            echo ""
+            echo "1. **Track the file** in git (preferred when it's small and stable)."
+            echo "2. **Configure \`dev.worktree_extra_paths\`** in \`loop\`'s \`projects.yaml\` to symlink"
+            echo "   the gitignored directory into each worker worktree. Use this for large data"
+            echo "   (e.g. \`data/processed/\`, \`models/checkpoints/\`); document the read-only assumption."
+            echo "3. **Run the task manually** outside the autonomous pipeline."
+            echo ""
+            echo "<details><summary>Last agent output</summary>"
+            echo ""
+            echo '```'
+            echo "$_agent_tail" \
+                | sed 's/\(ANTHROPIC_API_KEY=\|GITHUB_TOKEN=\|GH_TOKEN=\|_SECRET=\)[^ ]*/\1REDACTED/g' \
+                | tail -40
+            echo '```'
+            echo "</details>"
+        } > "$_block_body"
+        backend_comment_issue "$REPO" "$ISSUE_NUM" "$(cat "$_block_body")" 2>/dev/null || true
+        rm -f "$_block_body"
+        loop_notify_human_required "$SLUG" "$ISSUE_NUM" blocked "Dev agent: untracked-data dependency"
+        retry_clear
+        cleanup_worktree
+        exit 0
+    fi
+
     n=$(retry_incr)
     # Record the failure in the backoff state too — the next scan tick
     # will see the cool-down and skip until the next-eligible time.
