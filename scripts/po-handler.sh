@@ -28,6 +28,8 @@ source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/redact.sh
+source "$LOOP_ROOT/lib/redact.sh"
 # shellcheck source=../lib/cli-hint.sh
 source "$LOOP_ROOT/lib/cli-hint.sh"
 
@@ -117,13 +119,18 @@ backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 
 # Safety net: restore the workflow PO trigger if killed or set -e fires before explicit cleanup.
 _IN_PROGRESS_CLAIMED=1
+_RUN_LOG=$(mktemp "/tmp/loop-po-run-${SLUG}-${ISSUE_NUM}-XXXX.log")
 _po_label_cleanup() {
     [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
     log "EXIT trap: clearing orphaned in-progress on #$ISSUE_NUM — restoring to ${_po_trigger}"
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
     backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger" 2>/dev/null || true
 }
-trap '_po_label_cleanup' EXIT TERM INT
+_po_exit_cleanup() {
+    _po_label_cleanup
+    rm -f "${_RUN_LOG:-}" 2>/dev/null || true
+}
+trap '_po_exit_cleanup' EXIT TERM INT
 
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
 
@@ -384,9 +391,36 @@ rm -f "$_PROMPT_FILE"
 
 _post_failure_comment() {
     local target_type="$1" target_num="$2" label_ctx="$3" _attempt="$4" max="$5"
-    # Post only a short marker — never the agent log/prompt, which contains
-    # internal pipeline instructions that must not become public.
-    local body="Automated ${label_ctx} failed ${max} times. Needs human clarification. Operator: see ${LOG_FILE} for the agent transcript."
+    local fallback_body="Automated ${label_ctx} failed ${max} times. Needs human clarification. Operator: see ${LOG_FILE} for the agent transcript."
+    local body="$fallback_body"
+    local run_log="${_RUN_LOG:-}"
+
+    if [ -n "$run_log" ] && [ -f "$run_log" ]; then
+        local tail_text redacted
+        tail_text=$(tail -n 50 "$run_log" 2>/dev/null || true)
+        redacted=$(loop_redact_secrets "$tail_text" 2>/dev/null) || redacted=""
+        if [ -n "$redacted" ]; then
+            local header full_body
+            header="Run: $(date -u +%FT%TZ) | model=${LOOP_PO_MODEL:-claude-opus-4-7} | project=${SLUG} | issue=#${ISSUE_NUM}"
+            full_body="${header}
+\`\`\`text
+${redacted}
+\`\`\`"
+            local max_bytes=60000
+            local body_len="${#full_body}"
+            if [ "$body_len" -gt "$max_bytes" ]; then
+                local excess=$(( body_len - max_bytes ))
+                local redacted_trimmed="${redacted:$excess}"
+                full_body="${header}
+\`\`\`text
+...truncated ${excess} chars...
+${redacted_trimmed}
+\`\`\`"
+            fi
+            body="$full_body"
+        fi
+    fi
+
     if [ "$target_type" = "issue" ]; then
         backend_comment_issue "$REPO" "$target_num" "$body" 2>/dev/null || true
     else
@@ -399,7 +433,7 @@ _post_failure_comment() {
 # `--model <id>`, scoped to this single call. Falls back to whatever the
 # orchestrator config says if the override is unset.
 export LOOP_AGENT_MODEL_OVERRIDE="${LOOP_PO_MODEL:-claude-opus-4-7}"
-if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE" | tee "$_RUN_LOG" >/dev/null; then
     _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "po agent succeeded for #$ISSUE_NUM"
     bounty_report "po_done" model="${LOOP_PO_MODEL:-claude-opus-4-7}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
