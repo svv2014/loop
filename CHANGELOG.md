@@ -99,6 +99,7 @@ this batch.
   operator-set-vs-agent-set split, and the deprecated-alias mapping.
 
 - [LOOP-234] fix EXIT trap in dev-handler to restore resolved trigger label (#240)
+- [LOOP-247] include redacted error context in needs-clarification comment (#251)
 ### Migration
 - Existing tickets carrying deprecated labels are auto-renamed by
   `reconcile_alias_renames` (shipped in #168) on the next reconciler tick;
