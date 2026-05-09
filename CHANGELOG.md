@@ -98,6 +98,7 @@ this batch.
 - [LOOP-169] new `docs/labels.md` documents the canonical taxonomy, the
   operator-set-vs-agent-set split, and the deprecated-alias mapping.
 
+- [LOOP-234] fix EXIT trap in dev-handler to restore resolved trigger label (#240)
 ### Migration
 - Existing tickets carrying deprecated labels are auto-renamed by
   `reconcile_alias_renames` (shipped in #168) on the next reconciler tick;
