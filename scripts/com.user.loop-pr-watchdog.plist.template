@@ -4,9 +4,9 @@
 <!--
   loop-pr-watchdog launchd template.
 
-  Install:
+  Install (LOOP_LOG_DIR must be set, e.g. via your loop.env):
     sed "s|@LOOP_ROOT@|$(cd "$(dirname "$0")/.." && pwd)|g; \
-         s|@LOG_DIR@|${LOOP_LOG_DIR:-/Users/$USER/.openclaw/workspace/logs/loop}|g" \
+         s|@LOG_DIR@|$LOOP_LOG_DIR|g" \
         scripts/com.user.loop-pr-watchdog.plist.template \
         > ~/Library/LaunchAgents/com.user.loop-pr-watchdog.plist
     launchctl load ~/Library/LaunchAgents/com.user.loop-pr-watchdog.plist
@@ -33,8 +33,6 @@
     <string>@LOG_DIR@/loop-pr-watchdog.log</string>
     <key>EnvironmentVariables</key>
     <dict>
-        <key>HOME</key>
-        <string>/Users/CHANGE_ME</string>
         <key>PATH</key>
         <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
     </dict>
