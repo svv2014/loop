@@ -456,10 +456,11 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE" | tee "$_RUN_
     retry_clear
     transient_clear
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
-    # Belt-and-braces: if agent forgot to apply progression label, add 'dev' as safe default.
-    if ! backend_issue_has_any_label "$REPO" "$ISSUE_NUM" dev needs-clarification blocked tracker 'done'; then
-        log "WARN: issue #$ISSUE_NUM has no progression label after PO agent — adding 'dev'"
-        backend_add_label "$REPO" "$ISSUE_NUM" dev
+    # Belt-and-braces: if agent forgot to apply progression label, add dev-queue label as safe default.
+    if ! backend_issue_has_any_label "$REPO" "$ISSUE_NUM" dev needs-dev needs-clarification blocked tracker 'done'; then
+        _fallback_dev_label=$(loop_label_for "$SLUG" "dev")
+        log "WARN: issue #$ISSUE_NUM has no progression label after PO agent — adding '$_fallback_dev_label'"
+        backend_add_label "$REPO" "$ISSUE_NUM" "$_fallback_dev_label"
     fi
 else
     _agent_rc=$?
