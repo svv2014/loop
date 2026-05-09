@@ -32,22 +32,29 @@ loop_gh_issues_with_label() {
     raw_tmp=$(mktemp)
     sort_tmp=$(mktemp)
 
+    # IMPORTANT: `gh issue list` returns both issues AND PRs (GitHub's API
+    # treats PRs as a kind of issue with shared number space). Without the
+    # `select(.url | contains("/issues/"))` filter, a PR carrying an issue-
+    # stage trigger label gets emitted as an issue event with a PR-shaped
+    # payload (pr_number, no issue_number) — breaks downstream interpolation
+    # and dispatches dev-handler against a PR. Filter to true issues by URL.
     gh issue list --repo "$repo" --label "$label" --state open \
         --json number,title,url,labels,author \
         --jq '
-          map(
-            ([.labels[].name]) as $L |
-            {
-              number, title, url, labels: $L, author: .author.login,
-              _p: (
-                if   ($L | index("p0-critical")) then 0
-                elif ($L | index("p1-high"))     then 1
-                elif ($L | index("p2-medium"))   then 2
-                elif ($L | index("p3-low"))      then 3
-                else 4 end),
-              _b: (if ($L | index("bug")) then 0 else 1 end)
-            }
-          )[]
+          map(select(.url | contains("/issues/")))
+          | map(
+              ([.labels[].name]) as $L |
+              {
+                number, title, url, labels: $L, author: .author.login,
+                _p: (
+                  if   ($L | index("p0-critical")) then 0
+                  elif ($L | index("p1-high"))     then 1
+                  elif ($L | index("p2-medium"))   then 2
+                  elif ($L | index("p3-low"))      then 3
+                  else 4 end),
+                _b: (if ($L | index("bug")) then 0 else 1 end)
+              }
+            )[]
         ' 2>/dev/null >"$raw_tmp" || true
 
     if [ ! -s "$raw_tmp" ]; then
