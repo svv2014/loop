@@ -436,6 +436,20 @@ YAML
     [ ! -f "$dispatch_log" ]
 }
 
+@test "emit: second identical event within 30-minute window is suppressed" {
+    local dispatch_log="$BATS_TMPDIR/dispatch-dedup.log"
+    rm -f "$dispatch_log"
+    dispatch_direct() { echo "dispatched" >> "$dispatch_log"; return 0; }
+
+    local json='{"type":"loop.dev_issue","payload":{"slug":"test","repo":"owner/repo"}}'
+    emit "$json" "dev_issue:owner/repo:99"
+    emit "$json" "dev_issue:owner/repo:99"
+
+    local count
+    count=$(wc -l < "$dispatch_log" 2>/dev/null | tr -d ' ')
+    [ "$count" -eq 1 ]
+}
+
 @test "emit: no dedup key file created when dedup_id is empty" {
     local dispatch_log="$BATS_TMPDIR/dispatch3.log"
     rm -f "$dispatch_log"
