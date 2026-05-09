@@ -169,12 +169,34 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     bounty_report "review_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" || true
     loop_notify "✅ [$SLUG] PR#$PR_NUM review done"
     retry_clear
-    backend_remove_label "$REPO" "$PR_NUM" in-review
+
+    # Deterministic decision sync: trust GitHub's reviewDecision over the agent's label edits.
+    _decision=$(backend_pr_view "$REPO" "$PR_NUM" --json reviewDecision --jq .reviewDecision 2>/dev/null || echo "")
+    # jq prints "null" when the field is absent — treat that as empty/fallthrough.
+    [ "$_decision" = "null" ] && _decision=""
+    log "review decision for PR #$PR_NUM: ${_decision:-<empty>}"
+
+    case "$_decision" in
+        CHANGES_REQUESTED)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" 2>/dev/null || true
+            backend_add_label    "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+            ;;
+        APPROVED)
+            # APPROVED path is unchanged — the agent applies needs-qa itself.
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+        *)
+            # Empty / REVIEW_REQUIRED / COMMENTED — fall through to belt-and-braces.
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+    esac
+
     # Belt-and-braces: if agent forgot to apply a decision label, default to rework
     # (workflow-resolved) so the PR doesn't silently disappear from the pipeline.
     if ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
             "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
-            "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
+            "$_REWORK_LABEL" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
             blocked 'done'; then
         log "WARN: PR #$PR_NUM has no decision label after review agent — defaulting to '${_REWORK_LABEL}'"
         backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED"
