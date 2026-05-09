@@ -132,7 +132,10 @@ DEDUP_DIR="/tmp/loop-scanner-dedup"
 mkdir -p "$DEDUP_DIR"
 
 _dedup_key() {
-    echo "$1" | md5sum | cut -d' ' -f1
+    printf '%s' "$1" | md5sum 2>/dev/null \
+        || printf '%s' "$1" | md5 -q 2>/dev/null \
+        || printf '%s' "$1" | sha256sum | cut -c1-32
+    true
 }
 
 # emit <json> <dedup_id>
