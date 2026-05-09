@@ -113,7 +113,7 @@ _dev_label_cleanup() {
     [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
     log "EXIT trap: clearing orphaned in-progress on #$ISSUE_NUM — restoring to dev"
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
-    backend_add_label "$REPO" "$ISSUE_NUM" dev 2>/dev/null || true
+    backend_add_label "$REPO" "$ISSUE_NUM" "$_DEV_TRIGGER" 2>/dev/null || true
     cleanup_worktree 2>/dev/null || true
 }
 trap '_dev_label_cleanup' EXIT TERM INT
