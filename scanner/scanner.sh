@@ -94,7 +94,23 @@ dispatch_direct() {
         *) log "WARN: no handler for event type '$event_type'"; return 1 ;;
     esac
     local effective_timeout="${HANDLER_TIMEOUT_SECONDS:-$HANDLER_TIMEOUT}"
-    LOOP_EVENT_JSON="$json" nohup timeout "$effective_timeout" "$handler" >> "$LOOP_LOG_DIR/loop-scanner.log" 2>&1 &
+    # Wrap with the budget tally helper so each handler's wall-clock time is
+    # accumulated into /tmp/loop-budget-YYYYMMDD.counter. Wrapper exits with
+    # the handler's exit code so timeout(1) and scanner behavior are unchanged.
+    LOOP_EVENT_JSON="$json" nohup timeout "$effective_timeout" \
+        "$LOOP_ROOT/scripts/_handler_with_budget.sh" "$handler" \
+        >> "$LOOP_LOG_DIR/loop-scanner.log" 2>&1 &
+}
+
+# _budget_exceeded — returns 0 (true) if today's accumulated handler-seconds
+# meet or exceed LOOP_DAILY_HANDLER_BUDGET_SECONDS. Empty/unset env var =
+# disabled (always returns 1).
+_budget_exceeded() {
+    [ -n "${LOOP_DAILY_HANDLER_BUDGET_SECONDS:-}" ] || return 1
+    local f="/tmp/loop-budget-$(date +%Y%m%d).counter"
+    local spent
+    spent=$(cat "$f" 2>/dev/null || echo 0)
+    [ "$spent" -ge "$LOOP_DAILY_HANDLER_BUDGET_SECONDS" ]
 }
 
 acquire_lock() {
@@ -469,6 +485,17 @@ _scan_pr_stage() {
 
 scan_project() {
     local slug="$1"
+
+    # Daily handler-time budget — if today's spend has met the cap, skip
+    # emitting new work entirely. In-flight handlers continue; only new
+    # dispatches are paused until the next day rolls over.
+    if _budget_exceeded; then
+        local spent
+        spent=$(cat "/tmp/loop-budget-$(date +%Y%m%d).counter" 2>/dev/null || echo 0)
+        log "BUDGET: ${spent}s/${LOOP_DAILY_HANDLER_BUDGET_SECONDS}s — skip $slug"
+        return
+    fi
+
     loop_load_project "$slug" || { log "skip: slug '$slug' unloadable"; return; }
     loop_load_backend
     local repo="$REPO"
