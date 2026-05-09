@@ -68,6 +68,14 @@ for p in data.get("projects", []) or []:
         print(f"AUTO_REBASE='{'true' if mg.get('auto_rebase', False) else 'false'}'")
         print(f"BACKEND='{sh(p.get('backend','github'))}'")
         print(f"MAX_CONCURRENT_PRS='{sh(dev.get('max_concurrent_prs', 1))}'")
+        # WORKTREE_EXTRA_PATHS: paths from the primary checkout to symlink into
+        # each fresh worker worktree. Useful for projects with gitignored runtime
+        # files (ML training data, downloaded models, large fixtures) that the
+        # worker needs to read but that aren't tracked by git. Newline-delimited.
+        # Configure per-project via `dev.worktree_extra_paths` in projects.yaml.
+        wtep = dev.get("worktree_extra_paths") or []
+        wtep_lines = [str(p).strip() for p in wtep if str(p).strip()]
+        print(f"WORKTREE_EXTRA_PATHS='{sh(chr(10).join(wtep_lines))}'")
         # MAX_CONCURRENT_HANDLERS: caps emits-per-tick for all non-dev pipeline
         # stages (po, senior-dev, review, qa, merge, dev-rework). Dev has its
         # own slot system (MAX_CONCURRENT_PRS) — that stays separate.
@@ -114,7 +122,7 @@ PY
         return 1
     fi
     eval "$out"
-    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS MAX_CONCURRENT_HANDLERS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES _PROJECT_AGENT _PROJECT_MODEL _PROJECT_FALLBACK
+    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS MAX_CONCURRENT_HANDLERS WORKTREE_EXTRA_PATHS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES _PROJECT_AGENT _PROJECT_MODEL _PROJECT_FALLBACK
 }
 
 # loop_list_slugs — print each project slug on its own line
