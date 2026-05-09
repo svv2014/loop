@@ -305,6 +305,28 @@ bootstrap_register_launchd() {
         fi
     fi
 
+    # PR auto-rework watchdog — labels stale loop-authored PRs needs-rework so
+    # the dev-rework handler picks them up. Independent of scanner; runs every
+    # 15 min on its own cadence. Only acts on PRs whose author is in the
+    # project's ALLOWED_AUTHORS, so disabled for any project that hasn't opted
+    # into a loop bot account.
+    local pr_watchdog_plist="$agents_dir/com.user.loop-pr-watchdog.plist"
+    if [ -f "$pr_watchdog_plist" ]; then
+        echo "[launchd] com.user.loop-pr-watchdog already registered — skipping"
+    else
+        sed \
+            -e "s|__LOOP_ROOT__|$LOOP_ROOT|g" \
+            -e "s|__LOG_DIR__|$log_dir|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__EXTRA_PATH__|$extra_path|g" \
+            "$template_dir/com.user.loop-pr-watchdog.plist.template" > "$pr_watchdog_plist"
+        if launchctl load "$pr_watchdog_plist" 2>/dev/null; then
+            echo "[launchd] com.user.loop-pr-watchdog loaded (every 15 min)"
+        else
+            echo "[launchd] WARNING: could not load com.user.loop-pr-watchdog (check Console.app)" >&2
+        fi
+    fi
+
     local digest_plist="$agents_dir/com.user.loop-digest.plist"
     if [ -f "$digest_plist" ]; then
         echo "[launchd] com.user.loop-digest already registered — skipping"
