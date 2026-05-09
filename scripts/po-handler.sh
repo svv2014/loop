@@ -30,9 +30,12 @@ source "$LOOP_ROOT/lib/bounty.sh"
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
 source "$LOOP_ROOT/lib/cli-hint.sh"
+# shellcheck source=../lib/failure_classifier.sh
+source "$LOOP_ROOT/lib/failure_classifier.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-po-handler.log"
 MAX_RETRIES=2
+MAX_TRANSIENT_RETRIES="${MAX_TRANSIENT_RETRIES:-3}"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [po-handler] $*" | tee -a "$LOG_FILE"; }
 
@@ -95,6 +98,11 @@ RETRY_FILE="/tmp/loop-po-retries-${SLUG}-${ISSUE_NUM}"
 retry_count() { [ -f "$RETRY_FILE" ] && cat "$RETRY_FILE" || echo 0; }
 retry_incr()  { local n; n=$(( $(retry_count) + 1 )); echo "$n" > "$RETRY_FILE"; echo "$n"; }
 retry_clear() { rm -f "$RETRY_FILE"; }
+
+TRANSIENT_FILE="/tmp/loop-po-transient-${SLUG}-${ISSUE_NUM}"
+transient_count() { [ -f "$TRANSIENT_FILE" ] && cat "$TRANSIENT_FILE" || echo 0; }
+transient_incr()  { local n; n=$(( $(transient_count) + 1 )); echo "$n" > "$TRANSIENT_FILE"; echo "$n"; }
+transient_clear() { rm -f "$TRANSIENT_FILE"; }
 
 retries=$(retry_count)
 if [ "$retries" -ge "$MAX_RETRIES" ] \
@@ -406,12 +414,17 @@ _post_failure_comment() {
 # `--model <id>`, scoped to this single call. Falls back to whatever the
 # orchestrator config says if the override is unset.
 export LOOP_AGENT_MODEL_OVERRIDE="${LOOP_PO_MODEL:-claude-opus-4-7}"
-if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+_PO_STDERR_FILE=$(mktemp /tmp/loop-po-stderr-XXXXXX)
+_po_stderr_cleanup() { rm -f "$_PO_STDERR_FILE"; }
+trap '_po_label_cleanup; _po_stderr_cleanup' EXIT TERM INT
+if loop_run_agent "$TASK_PROMPT" "$ROOT" 2> >(tee -a "$LOG_FILE" >> "$_PO_STDERR_FILE") | tee -a "$LOG_FILE"; then
     _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "po agent succeeded for #$ISSUE_NUM"
     bounty_report "po_done" model="${LOOP_PO_MODEL:-claude-opus-4-7}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
     loop_notify "✅ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} done"
     retry_clear
+    transient_clear
+    _po_stderr_cleanup
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
     # Belt-and-braces: if agent forgot to apply progression label, add 'dev' as safe default.
     if ! backend_issue_has_any_label "$REPO" "$ISSUE_NUM" dev needs-clarification blocked tracker 'done'; then
@@ -419,19 +432,40 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
         backend_add_label "$REPO" "$ISSUE_NUM" dev
     fi
 else
+    _agent_rc=$?
+    _stderr_tail=$(tail -n 50 "$_PO_STDERR_FILE" 2>/dev/null || echo "")
+    _po_stderr_cleanup
     _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup
-    n=$(retry_incr)
-    log "po agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES)"
-    bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
-    if [ "$n" -ge "$MAX_RETRIES" ]; then
-        backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
-        backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
-        _post_failure_comment issue "$ISSUE_NUM" "PO agent" "$n" "$MAX_RETRIES"
-        loop_notify "❌ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} failed: agent failed after $MAX_RETRIES attempts"
-        loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "PO agent failed after $MAX_RETRIES attempts"
+
+    if loop_is_transient_failure "$_stderr_tail" "$_agent_rc"; then
+        _sig=$(loop_failure_signature "$_stderr_tail")
+        _tc=$(transient_incr)
+        log "po agent transient failure for #$ISSUE_NUM (transient attempt $_tc/$MAX_TRANSIENT_RETRIES, sig: ${_sig:-unknown})"
+        bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="transient ${_tc}/${MAX_TRANSIENT_RETRIES} sig:${_sig:-unknown}" || true
+        if [ "$_tc" -ge "$MAX_TRANSIENT_RETRIES" ]; then
+            backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
+            backend_add_label "$REPO" "$ISSUE_NUM" blocked
+            loop_notify "🔴 [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} blocked: infra failure after $MAX_TRANSIENT_RETRIES transient attempts (${_sig:-unknown})"
+            loop_notify_human_required "$SLUG" "$ISSUE_NUM" blocked "infra: ${_sig:-unknown}"
+            transient_clear
+        else
+            backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
+            backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
+        fi
     else
-        backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
-        backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
+        n=$(retry_incr)
+        log "po agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES)"
+        bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
+        if [ "$n" -ge "$MAX_RETRIES" ]; then
+            backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
+            backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
+            _post_failure_comment issue "$ISSUE_NUM" "PO agent" "$n" "$MAX_RETRIES"
+            loop_notify "❌ [$SLUG] #$ISSUE_NUM ${LOOP_LABEL_DEPRECATED_PO_REVIEW} failed: agent failed after $MAX_RETRIES attempts"
+            loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "PO agent failed after $MAX_RETRIES attempts"
+        else
+            backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
+            backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger"
+        fi
     fi
     exit 1
 fi
