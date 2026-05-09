@@ -298,3 +298,85 @@ EOF
     [[ "$prompt" == *"needs-qa"* ]]
     [[ "$prompt" != *"review-pending"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# dev-handler EXIT trap label restoration (issue #234)
+# ---------------------------------------------------------------------------
+
+@test "dev-handler trap: canonical-vocab project restores needs-dev on abnormal exit" {
+    cat > "$BATS_TMPDIR/canonical.yaml" <<'YAML'
+version: 1
+projects:
+  - slug: canonical-proj
+    name: Canonical Project
+    repo: owner/canonical-repo
+    root: /tmp/fake
+    default_branch: main
+    workflow: default
+    labels:
+      dev: needs-dev
+YAML
+    export LOOP_CONFIG="$BATS_TMPDIR/canonical.yaml"
+
+    local ops_log="$BATS_TMPDIR/trap-canonical-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label() { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()    { echo "add $3"    >> "$ops_log"; }
+
+    # Replicate the trap body from dev-handler.sh using the resolved trigger
+    local _DEV_TRIGGER
+    _DEV_TRIGGER=$(loop_label_for "canonical-proj" "dev" 2>/dev/null) || _DEV_TRIGGER="dev"
+    local _IN_PROGRESS_CLAIMED=1
+    local REPO="owner/canonical-repo" ISSUE_NUM="1"
+
+    _dev_label_cleanup() {
+        [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
+        backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
+        backend_add_label    "$REPO" "$ISSUE_NUM" "$_DEV_TRIGGER" 2>/dev/null || true
+    }
+    _dev_label_cleanup
+
+    # Must restore the resolved label (needs-dev), not the hardcoded literal 'dev'
+    grep -q "add needs-dev" "$ops_log"
+    ! grep -q "add dev" "$ops_log"
+}
+
+@test "dev-handler trap: project with explicit dev label override restores dev on abnormal exit" {
+    # A project that explicitly maps the dev stage trigger back to the deprecated 'dev' label
+    cat > "$BATS_TMPDIR/legacy.yaml" <<'YAML'
+version: 1
+projects:
+  - slug: legacy-proj
+    name: Legacy Project
+    repo: owner/legacy-repo
+    root: /tmp/fake
+    default_branch: main
+    workflow: default
+    labels:
+      dev: dev
+YAML
+    export LOOP_CONFIG="$BATS_TMPDIR/legacy.yaml"
+
+    local ops_log="$BATS_TMPDIR/trap-legacy-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label() { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()    { echo "add $3"    >> "$ops_log"; }
+
+    local _DEV_TRIGGER
+    _DEV_TRIGGER=$(loop_label_for "legacy-proj" "dev" 2>/dev/null) || _DEV_TRIGGER="dev"
+    local _IN_PROGRESS_CLAIMED=1
+    local REPO="owner/legacy-repo" ISSUE_NUM="1"
+
+    _dev_label_cleanup() {
+        [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
+        backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
+        backend_add_label    "$REPO" "$ISSUE_NUM" "$_DEV_TRIGGER" 2>/dev/null || true
+    }
+    _dev_label_cleanup
+
+    # Project with explicit 'dev' override: trigger resolves to 'dev'
+    grep -q "add dev" "$ops_log"
+    ! grep -q "add needs-dev" "$ops_log"
+}
