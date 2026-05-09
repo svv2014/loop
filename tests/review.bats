@@ -133,3 +133,128 @@ teardown() {
     grep -q "re-apply"             "$comment_log"
     ! grep -q "automatically"      "$comment_log"
 }
+
+# ---------------------------------------------------------------------------
+# review-handler deterministic decision sync (issue #260)
+# ---------------------------------------------------------------------------
+
+@test "review decision CHANGES_REQUESTED: needs-rework added, in-review removed" {
+    local ops_log="$BATS_TMPDIR/label-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label()      { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()         { echo "add $3"    >> "$ops_log"; }
+    backend_pr_has_any_label()  { return 1; }  # no decision label yet
+    backend_pr_view()           { echo "CHANGES_REQUESTED"; }
+
+    local REPO="owner/test-repo"
+    local PR_NUM="99"
+    local _REWORK_LABEL="needs-rework"
+    local LOOP_LABEL_DEPRECATED_NEEDS_REWORK="needs-rework"
+    local LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED="changes-requested"
+    local LOOP_LABEL_NEEDS_QA="needs-qa"
+    local LOOP_LABEL_DEPRECATED_READY_FOR_QA="ready-for-qa"
+
+    _decision=$(backend_pr_view "$REPO" "$PR_NUM" --json reviewDecision --jq .reviewDecision 2>/dev/null || echo "")
+    [ "$_decision" = "null" ] && _decision=""
+
+    case "$_decision" in
+        CHANGES_REQUESTED)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" 2>/dev/null || true
+            backend_add_label    "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+            ;;
+        APPROVED)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+        *)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+    esac
+
+    grep -q "remove in-review"    "$ops_log"
+    grep -q "add needs-rework"    "$ops_log"
+    ! grep -q "add needs-qa"      "$ops_log"
+}
+
+@test "review decision APPROVED: no rework label applied" {
+    local ops_log="$BATS_TMPDIR/label-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label()      { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()         { echo "add $3"    >> "$ops_log"; }
+    backend_pr_view()           { echo "APPROVED"; }
+
+    local REPO="owner/test-repo"
+    local PR_NUM="99"
+    local _REWORK_LABEL="needs-rework"
+    local LOOP_LABEL_DEPRECATED_NEEDS_REWORK="needs-rework"
+    local LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED="changes-requested"
+
+    _decision=$(backend_pr_view "$REPO" "$PR_NUM" --json reviewDecision --jq .reviewDecision 2>/dev/null || echo "")
+    [ "$_decision" = "null" ] && _decision=""
+
+    case "$_decision" in
+        CHANGES_REQUESTED)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" 2>/dev/null || true
+            backend_add_label    "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+            ;;
+        APPROVED)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+        *)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+    esac
+
+    grep -q "remove in-review"    "$ops_log"
+    ! grep -q "add needs-rework"  "$ops_log"
+}
+
+@test "review decision empty: belt-and-braces default applies needs-rework" {
+    local ops_log="$BATS_TMPDIR/label-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label()      { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()         { echo "add $3"    >> "$ops_log"; }
+    backend_pr_has_any_label()  { return 1; }  # no decision label present
+    backend_pr_view()           { echo ""; }
+
+    local REPO="owner/test-repo"
+    local PR_NUM="99"
+    local _REWORK_LABEL="needs-rework"
+    local LOOP_LABEL_NEEDS_QA="needs-qa"
+    local LOOP_LABEL_DEPRECATED_READY_FOR_QA="ready-for-qa"
+    local LOOP_LABEL_DEPRECATED_NEEDS_REWORK="needs-rework"
+    local LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED="changes-requested"
+
+    _decision=$(backend_pr_view "$REPO" "$PR_NUM" --json reviewDecision --jq .reviewDecision 2>/dev/null || echo "")
+    [ "$_decision" = "null" ] && _decision=""
+
+    case "$_decision" in
+        CHANGES_REQUESTED)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" 2>/dev/null || true
+            backend_add_label    "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+            ;;
+        APPROVED)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+        *)
+            backend_remove_label "$REPO" "$PR_NUM" in-review
+            ;;
+    esac
+
+    # Belt-and-braces fires because no decision label is present.
+    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
+            "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
+            "$_REWORK_LABEL" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
+            blocked 'done'; then
+        backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED"
+        backend_add_label    "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+    fi
+
+    grep -q "remove in-review"   "$ops_log"
+    grep -q "add needs-rework"   "$ops_log"
+}
