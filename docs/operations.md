@@ -10,8 +10,8 @@ Every piece of mutable state loop creates, in one place:
 |---|---|---|
 | `/tmp/loop-po-retries-<slug>-<num>` | PO retry counter (1–`MAX_RETRIES`). Auto-cleared when an issue's `needs-clarification` label is removed. | Yes — issue gets a fresh attempt next emit. |
 | `/tmp/loop-scanner-dedup/<hash>` | Per-event "emitted within last 30 min" cache. | Yes — scanner re-emits within 30 min. |
-| `/tmp/loop-budget-YYYYMMDD.counter` | Daily handler-time budget tally (seconds spent today). Auto-rotates at midnight. | Yes — drops today's tally to 0. |
-| `/tmp/loop-budget-YYYYMMDD.counter.lock` | Lock file for the budget counter. | Yes (only if no handler is running). |
+| `${LOOP_LOG_DIR}/budget/YYYYMMDD.counter` | Daily handler-time budget tally (seconds spent today). Auto-rotates at midnight. Persists across OS reboots. | Yes — drops today's tally to 0. |
+| `${LOOP_LOG_DIR}/budget/YYYYMMDD.counter.lock` | Lock file for the budget counter. | Yes (only if no handler is running). |
 | `/tmp/loop-scanner.lock` | Single-instance lock for the scanner process. | Only if scanner is confirmed not running. |
 | `${LOOP_LOG_DIR}/loop-scanner.log` | Scanner heartbeat + emit log. | Logrotate-safe (scanner reopens on SIGHUP). |
 | `${LOOP_LOG_DIR}/loop-po-handler.log` | PO transcripts. Append-only. | Logrotate-safe with care. |
@@ -127,5 +127,5 @@ tail -20 ${LOOP_LOG_DIR}/loop-scanner.log
 pgrep -af 'po-handler|dev-handler|qa-handler|review-handler|merge-handler|dev-rework-handler'
 
 # Today's spend (if budget is enabled)
-cat /tmp/loop-budget-$(date +%Y%m%d).counter 2>/dev/null || echo "budget not yet tallied today"
+cat "${LOOP_LOG_DIR}/budget/$(date +%Y%m%d).counter" 2>/dev/null || echo "budget not yet tallied today"
 ```

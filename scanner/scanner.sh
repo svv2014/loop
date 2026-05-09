@@ -95,8 +95,8 @@ dispatch_direct() {
     esac
     local effective_timeout="${HANDLER_TIMEOUT_SECONDS:-$HANDLER_TIMEOUT}"
     # Wrap with the budget tally helper so each handler's wall-clock time is
-    # accumulated into /tmp/loop-budget-YYYYMMDD.counter. Wrapper exits with
-    # the handler's exit code so timeout(1) and scanner behavior are unchanged.
+    # accumulated into ${LOOP_LOG_DIR}/budget/YYYYMMDD.counter. Wrapper exits
+    # with the handler's exit code so timeout(1) and scanner behavior are unchanged.
     LOOP_EVENT_JSON="$json" nohup timeout "$effective_timeout" \
         "$LOOP_ROOT/scripts/_handler_with_budget.sh" "$handler" \
         >> "$LOOP_LOG_DIR/loop-scanner.log" 2>&1 &
@@ -105,11 +105,11 @@ dispatch_direct() {
 # _budget_exceeded — returns 0 (true) if today's accumulated handler-seconds
 # meet or exceed LOOP_DAILY_HANDLER_BUDGET_SECONDS. Empty/unset env var =
 # disabled (always returns 1).
+_budget_counter_path() { printf '%s/budget/%s.counter' "${LOOP_LOG_DIR:?LOOP_LOG_DIR must be set}" "$(date +%Y%m%d)"; }
 _budget_exceeded() {
     [ -n "${LOOP_DAILY_HANDLER_BUDGET_SECONDS:-}" ] || return 1
-    local f spent
-    f="/tmp/loop-budget-$(date +%Y%m%d).counter"
-    spent=$(cat "$f" 2>/dev/null || echo 0)
+    local spent
+    spent=$(cat "$(_budget_counter_path)" 2>/dev/null || echo 0)
     [ "$spent" -ge "$LOOP_DAILY_HANDLER_BUDGET_SECONDS" ]
 }
 
@@ -494,7 +494,7 @@ scan_project() {
     # dispatches are paused until the next day rolls over.
     if _budget_exceeded; then
         local spent
-        spent=$(cat "/tmp/loop-budget-$(date +%Y%m%d).counter" 2>/dev/null || echo 0)
+        spent=$(cat "$(_budget_counter_path)" 2>/dev/null || echo 0)
         log "BUDGET: ${spent}s/${LOOP_DAILY_HANDLER_BUDGET_SECONDS}s — skip $slug"
         return
     fi
