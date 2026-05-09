@@ -97,6 +97,13 @@ retry_incr()  { local n; n=$(( $(retry_count) + 1 )); echo "$n" > "$RETRY_FILE";
 retry_clear() { rm -f "$RETRY_FILE"; }
 
 retries=$(retry_count)
+if [ "$retries" -ge "$MAX_RETRIES" ] \
+   && ! backend_issue_has_any_label "$REPO" "$ISSUE_NUM" needs-clarification 2>/dev/null; then
+    log "counter reset (re-queue detected) on #$ISSUE_NUM — was ${retries}, now 0"
+    retry_clear
+    retries=0
+fi
+
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
     log "issue #$ISSUE_NUM already failed PO ${retries}x — labeling needs-clarification"
     backend_remove_label "$REPO" "$ISSUE_NUM" "$_po_trigger"

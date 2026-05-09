@@ -380,3 +380,69 @@ YAML
     grep -q "add dev" "$ops_log"
     ! grep -q "add needs-dev" "$ops_log"
 }
+
+# ---------------------------------------------------------------------------
+# po-handler re-queue detection (issue #246)
+# ---------------------------------------------------------------------------
+
+# Replicates the re-queue detection block from po-handler.sh.
+# Returns: sets retries and emits log lines to BATS_TMPDIR/requeue-log.txt
+_run_requeue_detection() {
+    local slug="$1" issue_num="$2" counter_val="$3" has_clarification="$4"
+    local REPO="owner/test-repo"
+    local RETRY_FILE="$BATS_TMPDIR/loop-po-retries-${slug}-${issue_num}"
+    local MAX_RETRIES=2
+    local log_file="$BATS_TMPDIR/requeue-log.txt"
+    rm -f "$log_file"
+
+    retry_count() { [ -f "$RETRY_FILE" ] && cat "$RETRY_FILE" || echo 0; }
+    retry_clear() { rm -f "$RETRY_FILE"; }
+    log() { echo "$*" >> "$log_file"; }
+
+    # Write counter file if value > 0
+    if [ "$counter_val" -gt 0 ]; then
+        echo "$counter_val" > "$RETRY_FILE"
+    fi
+
+    # Mock backend_issue_has_any_label: return 0 (has label) or 1 (does not)
+    if [ "$has_clarification" = "yes" ]; then
+        backend_issue_has_any_label() { return 0; }
+    else
+        backend_issue_has_any_label() { return 1; }
+    fi
+
+    retries=$(retry_count)
+    if [ "$retries" -ge "$MAX_RETRIES" ] \
+       && ! backend_issue_has_any_label "$REPO" "$issue_num" needs-clarification 2>/dev/null; then
+        log "counter reset (re-queue detected) on #$issue_num — was ${retries}, now 0"
+        retry_clear
+        retries=0
+    fi
+
+    echo "$retries"
+}
+
+@test "po-handler requeue: counter>=MAX_RETRIES and no needs-clarification — counter reset, retries=0" {
+    result=$(_run_requeue_detection "foo" "42" "2" "no")
+    [ "$result" = "0" ]
+    log_file="$BATS_TMPDIR/requeue-log.txt"
+    grep -q "counter reset (re-queue detected)" "$log_file"
+    # Counter file should be removed
+    [ ! -f "$BATS_TMPDIR/loop-po-retries-foo-42" ]
+}
+
+@test "po-handler requeue: counter>=MAX_RETRIES and needs-clarification still set — no reset, still bounces" {
+    result=$(_run_requeue_detection "foo" "43" "2" "yes")
+    [ "$result" = "2" ]
+    log_file="$BATS_TMPDIR/requeue-log.txt"
+    ! grep -q "counter reset" "$log_file"
+    # Counter file should still exist
+    [ -f "$BATS_TMPDIR/loop-po-retries-foo-43" ]
+}
+
+@test "po-handler requeue: no counter file, no needs-clarification — proceeds normally, retries=0" {
+    result=$(_run_requeue_detection "foo" "44" "0" "no")
+    [ "$result" = "0" ]
+    log_file="$BATS_TMPDIR/requeue-log.txt"
+    ! grep -q "counter reset" "$log_file"
+}
