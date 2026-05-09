@@ -69,7 +69,9 @@ _loop_invoke_agent() {
                 return 2
             fi
             local _cmd="${cmd:-$LOOP_AGENT_CMD}"
-            eval "$_cmd" "$prompt"
+            local -a _cmd_argv
+            read -ra _cmd_argv <<< "$_cmd"
+            "${_cmd_argv[@]}" "$prompt"
             ;;
         *)
             echo "ERROR: Unknown agent='$agent'. Use: claude, codex, gemini, aider, custom" >&2

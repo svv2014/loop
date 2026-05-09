@@ -156,6 +156,37 @@ SH
     grep -q "custom-local-model" "$ATTEMPTS_LOG"
 }
 
+@test "custom agent: prompt with shell metacharacters is not evaluated (no injection)" {
+    # Prompt contains $(echo INJECTED) — must arrive literally at the custom script.
+    local custom_script="$BATS_TMPDIR/safe-custom.sh"
+    local received_prompt_file="$BATS_TMPDIR/received_prompt"
+    cat > "$custom_script" <<'SH'
+#!/usr/bin/env bash
+# Record the literal first argument; do NOT eval it.
+printf '%s' "$1" > "$BATS_TMPDIR/received_prompt"
+exit 0
+SH
+    chmod +x "$custom_script"
+
+    # Make BATS_TMPDIR available inside the script via env
+    export BATS_TMPDIR
+    export LOOP_AGENT="custom"
+    export LOOP_AGENT_CMD="$custom_script"
+    unset _PROJECT_FALLBACK
+
+    local injection_prompt='hello $(echo INJECTED) world'
+    run loop_run_agent "$injection_prompt" "$BATS_TMPDIR"
+    [ "$status" -eq 0 ]
+
+    # The word INJECTED must NOT appear as standalone output (injection guard)
+    [[ "$output" != *"INJECTED"* ]]
+
+    # The prompt must have arrived verbatim (not evaluated)
+    local received
+    received="$(cat "$received_prompt_file")"
+    [ "$received" = "$injection_prompt" ]
+}
+
 @test "claude branch never passes --cwd flag (regression of LOOP-29 / LOOP-152)" {
     # Stub records full argv so we can assert no --cwd is passed.
     cat > "$STUB_DIR/claude" <<'STUB'
