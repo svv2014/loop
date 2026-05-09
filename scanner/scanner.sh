@@ -107,8 +107,8 @@ dispatch_direct() {
 # disabled (always returns 1).
 _budget_exceeded() {
     [ -n "${LOOP_DAILY_HANDLER_BUDGET_SECONDS:-}" ] || return 1
-    local f="/tmp/loop-budget-$(date +%Y%m%d).counter"
-    local spent
+    local f spent
+    f="/tmp/loop-budget-$(date +%Y%m%d).counter"
     spent=$(cat "$f" 2>/dev/null || echo 0)
     [ "$spent" -ge "$LOOP_DAILY_HANDLER_BUDGET_SECONDS" ]
 }
