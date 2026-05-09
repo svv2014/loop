@@ -68,6 +68,14 @@ for p in data.get("projects", []) or []:
         print(f"AUTO_REBASE='{'true' if mg.get('auto_rebase', False) else 'false'}'")
         print(f"BACKEND='{sh(p.get('backend','github'))}'")
         print(f"MAX_CONCURRENT_PRS='{sh(dev.get('max_concurrent_prs', 1))}'")
+        # MAX_CONCURRENT_HANDLERS: caps emits-per-tick for all non-dev pipeline
+        # stages (po, senior-dev, review, qa, merge, dev-rework). Dev has its
+        # own slot system (MAX_CONCURRENT_PRS) — that stays separate.
+        # Configure per-project via `pipeline.max_concurrent_handlers`,
+        # globally via top-level `max_concurrent_handlers`. Default: 1.
+        global_max_handlers = data.get("max_concurrent_handlers", 1)
+        pipeline = p.get("pipeline") or {}
+        print(f"MAX_CONCURRENT_HANDLERS='{sh(pipeline.get('max_concurrent_handlers', global_max_handlers))}'")
         # model: per-project override → global default_model → hardcoded fallback
         global_model = data.get("default_model") or "claude-sonnet-4-6"
         project_model = p.get("model") or global_model
@@ -106,7 +114,7 @@ PY
         return 1
     fi
     eval "$out"
-    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES _PROJECT_AGENT _PROJECT_MODEL _PROJECT_FALLBACK
+    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE BACKEND MAX_CONCURRENT_PRS MAX_CONCURRENT_HANDLERS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES _PROJECT_AGENT _PROJECT_MODEL _PROJECT_FALLBACK
 }
 
 # loop_list_slugs — print each project slug on its own line

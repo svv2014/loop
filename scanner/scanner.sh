@@ -301,8 +301,14 @@ _scan_issue_stage() {
         return
     fi
 
-    # Simple issue stage (e.g. po-handler)
+    # Simple issue stage (e.g. po-handler, senior-dev-handler).
+    # Cap new emits per tick at MAX_CONCURRENT_HANDLERS so a project with many
+    # ready issues doesn't fan out to N parallel handler runs every tick.
+    local _cap="${MAX_CONCURRENT_HANDLERS:-1}"
+    local _emitted=0
+    log "${event_type}: max=${_cap} (per-tick emit cap)"
     while IFS= read -r row; do
+        [ "$_emitted" -ge "$_cap" ] && break
         [ -z "$row" ] && continue
         local num title url author
         num=$(printf '%s' "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
@@ -321,6 +327,10 @@ _scan_issue_stage() {
         local evt
         evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$num" "$title" "$url")
         emit "$evt" "${event_type}:${slug}:${num}"
+        # Count attempts, not just fresh emits: a deduped ticket means its
+        # handler ran in the last 30 min and is likely still in flight, so
+        # it should consume a concurrency slot too.
+        _emitted=$(( _emitted + 1 ))
     done < <(backend_list_issues_with_label "$repo" "$trigger_label")
 }
 
@@ -428,7 +438,12 @@ _scan_pr_stage() {
         fi
     fi
 
+    # Cap new emits per tick at MAX_CONCURRENT_HANDLERS, same as _scan_issue_stage.
+    local _cap="${MAX_CONCURRENT_HANDLERS:-1}"
+    local _emitted=0
+    log "${event_type}: max=${_cap} (per-tick emit cap)"
     while IFS= read -r row; do
+        [ "$_emitted" -ge "$_cap" ] && break
         [ -z "$row" ] && continue
         local num title url
         num=$(printf '%s' "$row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
@@ -448,6 +463,7 @@ _scan_pr_stage() {
         evt=$(_emit_pr_event "$event_type" "$slug" "$repo" "$num" "$title" "$url" \
               "$rework_context_key" "$rework_context_val")
         emit "$evt" "${event_type}:${slug}:${num}"
+        _emitted=$(( _emitted + 1 ))
     done < <(backend_list_prs_with_label "$repo" "$trigger_label")
 }
 
