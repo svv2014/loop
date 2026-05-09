@@ -193,6 +193,42 @@ accordingly:
 
 See [`docs/security-model.md`](docs/security-model.md).
 
+## Status check
+
+Get a one-shot runtime health summary of the running pipeline:
+
+```bash
+./scripts/status.sh
+```
+
+Example output:
+
+```
+loop status — 2026-05-09 14:22:11
+
+scanner              OK       (PID 60401, last tick 4m12s ago, interval 30m)
+orchestrator         --       (LOOP_ORCHESTRATOR not set)
+event-queue          --       (LOOP_EVENT_QUEUE_URL not set)
+retry-counters       OK
+  loop-monitor#119 (2/2 — needs-clarification)
+active-handlers      OK
+  PO PID 9821 (started 1m38s ago)
+recent-failures      OK       (none in last 24h)
+```
+
+Machine-readable output:
+
+```bash
+./scripts/status.sh --json
+# {"status":"ok","checks":{...},"retry_counters":[...],"active_handlers":[...],"recent_failures":[...]}
+```
+
+Exit codes: `0` = all OK, `2` = any DEGRADED, `1` = any FAIL.
+
+> **Note:** `./install.sh status` is the install-time variant that checks env
+> files, agent CLI availability, and `gh` auth. `scripts/status.sh` is the
+> runtime variant that checks live pipeline state.
+
 ## Development
 
 ```bash
