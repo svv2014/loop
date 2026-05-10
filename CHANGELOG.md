@@ -13,6 +13,9 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+
+### Changed
+- [LOOP-262] resolve rework trigger label per-project in pr-watchdog (#277)
 ## [0.4.0] - 2026-05-10
 
 A 12-PR batch focused on making the autonomous pipeline self-correcting
