@@ -24,7 +24,7 @@ import json
 import sys
 from datetime import datetime, timezone
 
-EXCLUDE_LABELS = {"needs-rework", "blocked", "needs-clarification"}
+_DEFAULT_EXCLUDE_LABELS = "needs-rework,blocked,needs-clarification"
 
 
 def parse_iso(ts: str) -> datetime:
@@ -38,7 +38,14 @@ def main() -> int:
     ap.add_argument("--conflict-grace", type=int, required=True)
     ap.add_argument("--ci-grace", type=int, required=True)
     ap.add_argument("--allowed-authors", required=True, help="comma-separated")
+    ap.add_argument(
+        "--exclude-labels",
+        default=_DEFAULT_EXCLUDE_LABELS,
+        help="comma-separated labels that mark a PR as already handled",
+    )
     args = ap.parse_args()
+
+    exclude_labels = {l.strip() for l in args.exclude_labels.split(",") if l.strip()}
 
     allowed = {a.strip() for a in args.allowed_authors.split(",") if a.strip()}
     if not allowed:
@@ -57,7 +64,7 @@ def main() -> int:
             continue
 
         labels = {(l.get("name") or "") for l in pr.get("labels") or []}
-        if labels & EXCLUDE_LABELS:
+        if labels & exclude_labels:
             continue
 
         try:
