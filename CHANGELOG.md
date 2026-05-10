@@ -13,6 +13,79 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-10
+
+A 12-PR batch focused on making the autonomous pipeline self-correcting
+across the full life of a ticket — root-causing the bugs that caused
+the loop-monitor migration to stall for weeks, and giving handlers the
+context they need to fix their own failures rather than retry-burn.
+
+### Fixed — root-cause unblockers
+- **#266** `loop_gh_issues_with_label` filters PRs out of \`gh issue list\`
+  results. GitHub treats PRs as a kind of issue with shared number
+  space; without the filter, a PR carrying \`needs-dev\` was emitted as
+  a \`loop.dev_issue\` event with a PR-shaped payload (\`pr_number\` not
+  \`issue_number\`), boba-event's interpolator left \`{payload.issue_number}\`
+  as a literal string, and dev-handler bailed on the resulting nonsense.
+  This single fix unblocked loop-monitor's entire pipeline (stalled 17 days).
+- **#243** po-handler belt-and-braces guard recognises \`needs-dev\` (was
+  only checking the deprecated synonym). Eliminates a silent skip path.
+- **#239** \`_dedup_key\` portability: replace \`md5sum\` with a fallback
+  chain that includes \`md5 -q\` for macOS hosts.
+- **#241** Remove stale \`eval\`-based \`loop_notify\` from \`lib/env.sh\`
+  (shell-injection vector when \`LOOP_NOTIFY\` contained metacharacters).
+
+### Added — failure handling
+- **#265** Untracked-data fail-fast classifier + opt-in
+  \`dev.worktree_extra_paths\` per project. When the dev agent reports
+  a missing file that looks like ML training data / model checkpoints
+  (\`.npy\`/\`.pt\`/\`.ckpt\`/\`.h5\`/\`.parquet\`/\`.pkl\` extensions or
+  \`/data/\`/\`/models/\`/\`/checkpoints/\` path hints), the issue is
+  labelled \`blocked\` immediately with an actionable explanation
+  instead of burning the retry counter.
+- **#272** Reconciler auto-applies \`needs-rework\` when a loop-opened
+  PR has red CI for >threshold. Stale PRs no longer sit waiting for
+  a manual relabel.
+- **#269** review-handler deterministic \`CHANGES_REQUESTED → needs-rework\`
+  sync. Closes the lifecycle hole where review denied and nothing
+  triggered the next move.
+
+### Added — operability
+- **#252** \`scripts/status.sh\` — one-shot health summary (scanner,
+  orchestrator, event-queue, retry counters, active handlers, recent
+  failures). \`--json\` flag for programmatic consumption.
+- **#271** Daily-budget counter moved from \`/tmp/\` to
+  \`\${LOOP_LOG_DIR}/budget/\`. Persistent across OS reboots; previously
+  a mid-day reboot silently reset the day's tally to zero.
+
+### Changed — agent contract
+- **#273** dev-rework prompt now reads CI status (\`statusCheckRollup\`)
+  and fetches the actual log of each FAILURE check via \`gh run view --log-failed\`.
+  Agents no longer "fix" reviews while ignoring the lint output.
+- **#274** dev-handler + dev-rework prompts discover validation
+  commands by inspecting \`.github/workflows/\`, \`package.json\`,
+  \`Makefile\`, \`pyproject.toml\`, \`pre-commit-config.yaml\` — not from
+  a static \`DEV_VALIDATION_CMD\` operators have to keep in sync. The
+  string is preserved as a hint but the discovered set is authoritative.
+- **#275** Captured \`REBASE_CONFLICTS\` filenames threaded into the
+  rework prompt so the agent goes straight to the conflicting files
+  with a "resolve semantically — do not blindly --theirs/--ours"
+  instruction. Saves a discovery roundtrip per rework.
+
+### Migration
+
+From v0.3.0:
+1. \`git pull\` and restart scanner: \`launchctl kickstart -k gui/$(id -u)/com.user.loop-scanner\`.
+2. **Optional but recommended:** delete \`/tmp/loop-budget-*.counter\`
+   files; the new persistent location at \`\${LOOP_LOG_DIR}/budget/\`
+   takes over fresh.
+3. **For projects with gitignored runtime files** (ML data, models):
+   add \`dev.worktree_extra_paths\` to the project entry in
+   \`config/projects.yaml\` to pre-symlink them into worker worktrees.
+4. **Operators relying on \`DEV_VALIDATION_CMD\`:** keep it as a hint
+   if you want; it still works, but the agent now discovers and runs
+   the CI-equivalent set on its own. Drift becomes self-healing.
+
 ## [0.3.0] - 2026-05-09
 
 A two-week batch focused on operational stability: every cascading
