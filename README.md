@@ -111,7 +111,7 @@ see [docs/quick-start.md](docs/quick-start.md).
 6. **Merge handler** squash-merges, closes the linked issue, records a
    bounty event, triggers the judge for a PR scorecard.
 7. **Reconciler** runs every 15 minutes to clean up stuck states,
-   duplicate PRs, dependency unblocks.
+   duplicate PRs, dependency unblocks, and red-CI PRs (see below).
 
 The whole flow is just labels on issues and PRs. You can intervene at
 any stage by manually labeling.
@@ -151,6 +151,31 @@ Author your own — see [`config/workflows/README.md`](config/workflows/README.m
 - `config/projects.yaml` — your project registry. **Not committed.**
 - `config/projects.example.yaml` — annotated schema reference.
 - `config/workflows/*.yaml` — pipeline workflow definitions. Committed.
+
+## Auto-rework on red CI
+
+When Loop opens a PR (branch convention `feat/issue-N-*`) and a **required**
+CI check fails, the reconciler automatically applies `needs-rework` to the PR
+and strips the parent issue's trigger label so the dev agent can fix the
+failures on the next cycle. The reconciler is a no-op when:
+
+- The PR already carries `needs-rework` or `changes-requested`.
+- A human reviewer has approved or requested changes.
+- The failing check is not marked as **required** in the repository settings.
+
+A `pr_ci_failed` event is posted to loop-monitor (if `LOOP_MONITOR_URL` is
+set in `loop.env`) for observability.
+
+**To opt out per project**, add `dev.auto_rework_on_ci: false` to the project
+entry in `config/projects.yaml`:
+
+```yaml
+projects:
+  - slug: myapp
+    repo: owner/my-app
+    dev:
+      auto_rework_on_ci: false   # disable reconciler auto-rework on red CI
+```
 
 ## Supported AI agents
 

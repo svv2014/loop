@@ -1723,6 +1723,153 @@ for c in data.get("comments", [])[-10:]:
     return 0
 }
 
+# --- Check: CI red on loop-opened PRs → auto-apply needs-rework ---------------
+# Scans open PRs whose head branch matches the loop branch convention
+# (feat/issue-N-*). For each, queries `gh pr checks` to look for required
+# checks in FAILURE state. If found, and the PR has no human review and no
+# needs-rework label already, applies needs-rework to the PR and strips the
+# parent issue's trigger label (needs-dev / in-dev) so the scanner stops
+# re-claiming it. Emits a pr_ci_failed event to loop-monitor.
+#
+# No-op conditions (checked before any mutation):
+#   - PR already has needs-rework or changes-requested label
+#   - PR has at least one human APPROVED or CHANGES_REQUESTED review
+#   - dev.auto_rework_on_ci is false in projects.yaml for this project
+#
+# Configurable env (all optional):
+#   AUTO_REWORK_ON_CI      — set to "false" to disable per-project (default: true)
+#   LOOP_BRANCH_PREFIX     — branch prefix convention (default: feat/issue-)
+reconcile_ci_red_prs() {
+    local repo="$1"
+    local branch_prefix="${LOOP_BRANCH_PREFIX:-feat/issue-}"
+
+    # Per-project opt-out via dev.auto_rework_on_ci: false in projects.yaml.
+    if [ "${AUTO_REWORK_ON_CI:-true}" = "false" ]; then
+        log "[$repo] CI-rework: disabled via AUTO_REWORK_ON_CI=false — skipping"
+        return 0
+    fi
+
+    log "[$repo] CI-rework: scanning loop-opened PRs for red CI"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    # Filter to PRs whose head branch matches the loop convention.
+    local loop_prs
+    loop_prs=$(PJSON="$prs_json" PREFIX="$branch_prefix" python3 - <<'PY'
+import json, os, re
+prs = json.loads(os.environ['PJSON'])
+prefix = os.environ['PREFIX']
+pat = re.compile(r'^' + re.escape(prefix) + r'(\d+)-')
+for pr in prs:
+    head = pr.get('headRefName', '')
+    m = pat.match(head)
+    if not m:
+        continue
+    issue_num = m.group(1)
+    lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
+    print(f"{pr['number']}\t{head}\t{issue_num}\t{','.join(lbls)}\t{(pr.get('body') or '')[:400]}")
+PY
+)
+
+    if [ -z "$loop_prs" ]; then
+        log "[$repo] CI-rework: no loop-opened PRs found"
+        return 0
+    fi
+
+    local pr_num head_ref issue_num labels_csv pr_body
+    while IFS=$'\t' read -r pr_num head_ref issue_num labels_csv pr_body; do
+        [ -z "$pr_num" ] && continue
+
+        # Skip if PR already has needs-rework or changes-requested (already handled).
+        if echo "$labels_csv" | grep -qE '(needs-rework|changes-requested)'; then
+            log "[$repo] CI-rework: PR#$pr_num already has needs-rework/changes-requested — skip"
+            continue
+        fi
+
+        # Skip if PR has any human review (APPROVED or CHANGES_REQUESTED).
+        local review_state
+        review_state=$(gh pr view "$pr_num" --repo "$repo" \
+            --json reviews --jq '[.reviews[].state] | map(select(. == "APPROVED" or . == "CHANGES_REQUESTED")) | length' \
+            2>/dev/null || echo "0")
+        if [ "${review_state:-0}" -gt 0 ]; then
+            log "[$repo] CI-rework: PR#$pr_num has human review (state=$review_state) — skip"
+            continue
+        fi
+
+        # Query CI checks for this PR.
+        local checks_json
+        checks_json=$(gh pr checks "$pr_num" --repo "$repo" --json name,state,required \
+            2>/dev/null || echo "[]")
+
+        # Detect any required check in FAILURE state.
+        local has_failure
+        has_failure=$(CHECKS="$checks_json" python3 - <<'PY2'
+import json, os
+checks = json.loads(os.environ['CHECKS'])
+for c in checks:
+    # gh pr checks --json uses 'state' field with value 'FAILURE' for failed checks.
+    # 'required' is a bool; treat absent as False.
+    if c.get('required') and c.get('state', '').upper() in ('FAILURE', 'FAILED'):
+        print('yes')
+        break
+PY2
+)
+
+        if [ "$has_failure" != "yes" ]; then
+            log "[$repo] CI-rework: PR#$pr_num — no required check failures"
+            continue
+        fi
+
+        log "[$repo] CI-rework: PR#$pr_num (branch=$head_ref) has required CI failure — applying needs-rework"
+        loop_notify "Loop reconciler: $repo — PR#$pr_num (${head_ref}) has red required CI; applying needs-rework to issue #${issue_num}"
+
+        if $DRY_RUN; then
+            log "[$repo] DRY_RUN: would apply needs-rework to PR#$pr_num and strip trigger label from issue #$issue_num"
+            continue
+        fi
+
+        # Apply needs-rework to the PR.
+        backend_add_label "$repo" "$pr_num" needs-rework \
+            || log "[$repo] WARN: CI-rework: failed to add needs-rework to PR#$pr_num"
+
+        # Strip trigger label(s) from the parent issue so the scanner doesn't re-claim.
+        local trigger_label
+        for trigger_label in needs-dev in-dev dev in-progress; do
+            backend_remove_label "$repo" "$issue_num" "$trigger_label" 2>/dev/null || true
+        done
+
+        # Post a comment on the PR explaining the auto-rework.
+        local failing_checks
+        failing_checks=$(CHECKS="$checks_json" python3 - <<'PY3'
+import json, os
+checks = json.loads(os.environ['CHECKS'])
+names = [c['name'] for c in checks if c.get('required') and c.get('state','').upper() in ('FAILURE','FAILED')]
+print(', '.join(names) if names else 'unknown')
+PY3
+)
+        backend_comment_pr "$repo" "$pr_num" \
+            "Reconciler: required CI check(s) failed (\`${failing_checks}\`). Applying \`needs-rework\` so the dev agent can address the failures. Stripped trigger label from issue #${issue_num}." \
+            2>/dev/null || true
+
+        # Emit pr_ci_failed event to loop-monitor (fire-and-forget; non-fatal if absent).
+        local monitor_url="${LOOP_MONITOR_URL:-}"
+        if [ -n "$monitor_url" ]; then
+            local event_payload
+            event_payload=$(python3 -c "
+import json, sys
+print(json.dumps({'type':'pr_ci_failed','payload':{'repo':'${repo}','pr_number':${pr_num},'issue_number':${issue_num},'branch':'${head_ref}','failing_checks':'${failing_checks}'}}))" 2>/dev/null || echo "")
+            if [ -n "$event_payload" ]; then
+                curl -s -X POST "$monitor_url/events" \
+                    -H 'Content-Type: application/json' \
+                    -d "$event_payload" >/dev/null 2>&1 || true
+            fi
+        fi
+
+        log "[$repo] CI-rework: done — PR#$pr_num → needs-rework, issue #$issue_num trigger stripped"
+    done <<< "$loop_prs"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -1743,6 +1890,7 @@ run_project() {
     reconcile_needs_clarification "$REPO"
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
+    reconcile_ci_red_prs "$REPO"
     reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
     reconcile_stale_base "$REPO"
