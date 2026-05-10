@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 # pr-watchdog.sh — auto-rework stale loop-authored PRs.
 #
-# Polls every project's open PRs and labels them `needs-rework` if they are:
+# Polls every project's open PRs and labels them with the project's rework
+# trigger label (resolved via loop_stage_trigger; falls back to needs-rework) if:
 #   - authored by an account in ALLOWED_AUTHORS (per-project, from projects.yaml), and
 #   - sitting with a merge conflict for >CONFLICT_GRACE_SECONDS, or
 #   - failing CI for >CI_GRACE_SECONDS,
-#   - and don't already carry needs-rework / blocked / needs-clarification.
+#   - and don't already carry the rework trigger / needs-rework / blocked / needs-clarification.
 #
 # Designed to run every ~15 min via launchd / cron. The dev-rework handler
 # downstream picks up the label and rebases + fixes.
@@ -22,6 +23,8 @@ LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$LOOP_ROOT/lib/env.sh"
 # shellcheck source=../lib/config.sh
 source "$LOOP_ROOT/lib/config.sh"
+# shellcheck source=../lib/workflow.sh
+source "$LOOP_ROOT/lib/workflow.sh"
 # shellcheck source=../lib/backends/backend.sh
 source "$LOOP_ROOT/lib/backends/backend.sh"
 
@@ -57,6 +60,9 @@ while IFS= read -r slug; do
         continue
     fi
 
+    rework_label=$(loop_stage_trigger "$slug" "rework" "pr" 2>/dev/null || echo "")
+    [ -z "$rework_label" ] && rework_label="needs-rework"
+
     # One JSON dump per repo, piped to filter.
     local_payload=$(gh pr list --repo "$REPO" --state open --limit 50 \
         --json number,author,labels,mergeable,statusCheckRollup,createdAt,updatedAt \
@@ -65,19 +71,20 @@ while IFS= read -r slug; do
     while IFS=$'\t' read -r num reason; do
         [ -z "$num" ] && continue
         if $DRY_RUN; then
-            log "DRY $slug #$num would-rework: $reason"
+            log "DRY $slug #$num would-rework ($rework_label): $reason"
             continue
         fi
-        log "rework $slug #$num: $reason"
-        if backend_add_label "$REPO" "$num" needs-rework 2>/dev/null; then
-            loop_notify "🛠 [$slug] PR #$num auto-rework: $reason" || true
+        log "rework $slug #$num ($rework_label): $reason"
+        if backend_add_label "$REPO" "$num" "$rework_label" 2>/dev/null; then
+            loop_notify "🛠 [$slug] PR #$num auto-rework ($rework_label): $reason" || true
         else
-            log "WARN: failed to add label to $slug #$num"
+            log "WARN: failed to add label $rework_label to $slug #$num"
         fi
     done < <(printf '%s' "$local_payload" | python3 "$LOOP_ROOT/scripts/_watchdog_filter.py" \
             --conflict-grace "$CONFLICT_GRACE_SECONDS" \
             --ci-grace "$CI_GRACE_SECONDS" \
-            --allowed-authors "$ALLOWED_AUTHORS")
+            --allowed-authors "$ALLOWED_AUTHORS" \
+            --exclude-labels "$rework_label,blocked,needs-clarification,needs-rework")
 done < <(loop_list_slugs)
 
 log "tick done"
