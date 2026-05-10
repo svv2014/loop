@@ -224,7 +224,14 @@ _FULL_PR_DIAGNOSTICS="Read the PR's full state before deciding what to fix. The 
 
    a. Mergeability:
       gh pr view ${PR_NUM} --repo ${REPO} --json mergeable,mergeStateStatus
-      If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase first (see below) before anything else.
+      If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase first (see below) before anything else.${REBASE_CONFLICTS:+
+
+      AUTO-REBASE ALREADY ATTEMPTED AND ABORTED — these files conflicted:
+        ${REBASE_CONFLICTS}
+      Re-run \`git rebase origin/${DEFAULT_BRANCH}\` and resolve each file
+      with intent (read both sides, integrate semantically — do not blindly
+      \`--theirs\` or \`--ours\`). Then \`git add\` resolved files,
+      \`git rebase --continue\`, and \`git push --force-with-lease origin ${PR_BRANCH}\`.}
 
    b. CI check status:
       gh pr view ${PR_NUM} --repo ${REPO} --json statusCheckRollup
