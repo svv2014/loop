@@ -220,26 +220,47 @@ _QA_LABEL=$(loop_label_for "$SLUG" "needs-qa")
 _QA_PASS_LABEL=$(loop_label_for "$SLUG" "qa-pass")
 _QA_FAIL_LABEL=$(loop_label_for "$SLUG" "qa-fail")
 
+_FULL_PR_DIAGNOSTICS="Read the PR's full state before deciding what to fix. The trigger could be ANY of: failing CI, merge conflict, reviewer feedback, QA failure. Always check all four.
+
+   a. Mergeability:
+      gh pr view ${PR_NUM} --repo ${REPO} --json mergeable,mergeStateStatus
+      If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase first (see below) before anything else.
+
+   b. CI check status:
+      gh pr view ${PR_NUM} --repo ${REPO} --json statusCheckRollup
+      For EACH check whose conclusion is FAILURE, fetch the actual log:
+        gh run view <run-id> --repo ${REPO} --log-failed | tail -120
+      where <run-id> is the run-id surfaced by statusCheckRollup. The log shows
+      exactly which file/line failed (lint rule, type error, build error,
+      test assertion). DO NOT guess what's wrong — read the log.
+
+   c. Review feedback:
+      gh pr view ${PR_NUM} --repo ${REPO} --json reviews,comments
+      Focus on the most recent review with state=REQUEST_CHANGES, plus its
+      inline comments and general comments. Address every concrete point.
+
+   d. PR comments (e.g. QA failure summaries):
+      Same json fetch above; look for comments containing 'qa-fail', 'QA',
+      lint output, build output, or test failures.
+
+   Now you have the full picture: rebase if needed → fix each CI failure
+   using the actual log output → address review feedback → run validation
+   locally before committing."
+
 if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
     _REWORK_TRIGGER="a QA failure"
-    _STEP2="2. This rework was triggered by a QA FAILURE. Fix the issues reported below.
-   QA failure details:
+    _STEP2="2. ${_FULL_PR_DIAGNOSTICS}
+
+   QA failure details captured at dispatch (use as a starting point; still
+   re-read PR state above):
    ---
    ${QA_FAILURE_DETAILS}
-   ---
-   If no details are shown, run: gh pr view ${PR_NUM} --repo ${REPO} --json comments
-   and look for comments containing QA failure output.
-   Check for merge conflicts too:
-   gh pr view ${PR_NUM} --repo ${REPO} --json mergeable,mergeStateStatus
-   - If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase first (see below), then fix QA issues."
+   ---"
     _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Fixed QA failure: <summary of what was fixed>'"
 else
-    _REWORK_TRIGGER="reviewer feedback"
-    _STEP2="2. Check PR state details -- the trigger could be reviewer feedback OR a merge conflict:
-   gh pr view ${PR_NUM} --repo ${REPO} --json body,reviews,comments,mergeable,mergeStateStatus
-   - If mergeable=CONFLICTING or mergeStateStatus=DIRTY: rebase onto origin/${DEFAULT_BRANCH} and resolve conflicts. Use 'git fetch origin && git rebase origin/${DEFAULT_BRANCH}', resolve each conflicted file, 'git add' resolved files, 'git rebase --continue', then 'git push --force-with-lease origin ${PR_BRANCH}'. Skip to step 6.
-   - Otherwise: focus on the most recent review with state REQUEST_CHANGES and its inline comments."
-    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Addressed review feedback: <summary>'"
+    _REWORK_TRIGGER="reviewer feedback or CI failure"
+    _STEP2="2. ${_FULL_PR_DIAGNOSTICS}"
+    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Addressed feedback / fixed CI: <summary>'"
 fi
 
 if [ -n "$DEV_VALIDATION_CMD" ]; then
