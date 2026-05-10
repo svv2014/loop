@@ -263,11 +263,12 @@ else
     _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Addressed feedback / fixed CI: <summary>'"
 fi
 
-if [ -n "$DEV_VALIDATION_CMD" ]; then
-    _VALIDATION_STEP="4. Run validation: ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}"
-else
-    _VALIDATION_STEP=""
-fi
+_VALIDATION_STEP="4. Validate locally before committing — match CI exactly. Discover what CI runs by reading the project itself:
+   a. Inspect .github/workflows/*.yml — list every \`run:\` step in jobs triggered on pull_request / push.
+   b. Inspect package.json (scripts), Makefile (targets), pyproject.toml ([tool.*]), .pre-commit-config.yaml for the actual commands.
+   c. Run those commands locally in this worktree, in dependency order (lint → typecheck → tests → build). Iterate until ALL pass.
+   d. If deps are missing (node_modules, build venv): install, then run. Some gitignored paths may be pre-symlinked — check before installing.${DEV_VALIDATION_CMD:+ Operator-provided hint (run this in addition to the discovery above): ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}}
+   Push only after every CI-equivalent check passes locally."
 _BACKEND_CLI_NOTE=$(backend_cli_note)
 
 _PROMPT_FILE=$(mktemp /tmp/rework-prompt-XXXXXX.txt)

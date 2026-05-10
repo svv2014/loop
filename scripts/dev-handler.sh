@@ -176,7 +176,12 @@ Your job:
    If a branch named fix/issue-${ISSUE_NUM}-* or feat/issue-${ISSUE_NUM}-* already exists on origin, delete it first:
    git push origin --delete <existing-branch-name>
 3. Implement the change. Follow CLAUDE.md conventions.
-$( [ -n "$DEV_VALIDATION_CMD" ] && echo "4. Run validation: ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}" )
+4. Validate locally before committing — match CI exactly. Discover what CI runs by reading the project itself:
+   a. Inspect \`.github/workflows/*.yml\` — list every step (\`run:\` blocks) for jobs triggered on \`pull_request\` or \`push\`.
+   b. Inspect \`package.json\` (\`scripts\`), \`Makefile\` (targets), \`pyproject.toml\` (\`[tool.*]\`), \`pre-commit-config.yaml\` for the actual commands those steps invoke.
+   c. Run those commands locally in this worktree, in dependency order (lint → typecheck → tests → build). Iterate until ALL pass.
+   d. If a command needs deps not in the worktree (e.g. \`node_modules\`, build venv): install them, then run. ${WORKTREE_EXTRA_PATHS:+Some gitignored paths are pre-symlinked from the primary checkout — check before installing.}${DEV_VALIDATION_CMD:+ Operator-provided hint (run this, but do NOT skip the discovery above): ${DEV_VALIDATION_CMD//\{project_root\}/$ROOT}}
+   Commit only after every CI-equivalent check passes locally. Shipping a PR with predictable lint/build failures wastes a full rework cycle.
 5. Before committing, verify there are actual staged changes:
    git diff --cached --quiet && echo 'WARNING: no staged changes' || true
    If there are no changes to commit, comment on the issue explaining why (e.g. already implemented, out of scope) and add label 'needs-clarification' instead of opening an empty PR.
