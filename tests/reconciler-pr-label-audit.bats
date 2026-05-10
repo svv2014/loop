@@ -90,3 +90,18 @@ teardown() {
     [ ! -s "$OPS_LOG" ] || ! grep -q "remove_label" "$OPS_LOG"
     [ ! -s "$OPS_LOG" ] || ! grep -q "comment_pr"   "$OPS_LOG"
 }
+
+# Regression: `needs-dev` is the PR rework trigger in the default workflow.
+# Previously this list included `needs-dev`, so the reconciler stripped it
+# from PRs that had just been routed back for rework by review-handler. The
+# PR was left with zero pipeline labels and stalled invisibly. The fix
+# removed `needs-dev` from LOOP_ISSUE_ONLY_LABELS — assert the audit no
+# longer touches it.
+@test "reconcile_pr_label_audit: PR carrying needs-dev (PR rework trigger) is untouched" {
+    export MOCK_PRS_JSON='[{"number":80,"labels":[{"name":"needs-dev"}]}]'
+
+    run reconcile_pr_label_audit "$REPO"
+    [ "$status" -eq 0 ]
+
+    [ ! -s "$OPS_LOG" ] || ! grep -q "remove_label" "$OPS_LOG"
+}

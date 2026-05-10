@@ -250,9 +250,15 @@ loop_pipeline_tracked_labels_string() {
 # Reconciler strips any of these found on an open PR. Includes deprecated
 # aliases of the trigger labels so a stale `dev`/`po-review`/`plan` on a PR
 # also gets cleaned up.
+#
+# NOTE: `needs-dev` was intentionally REMOVED from this list. In the default
+# workflow (config/workflows/default.yaml) `needs-dev` is also the PR rework
+# trigger emitted by review-handler when changes are requested. Stripping it
+# from open PRs broke the rework flow: PRs ended up with no pipeline label and
+# became invisible to the scanner. Issue/PR overlap of `needs-dev` is by
+# design in the default workflow; treat it as a PR-valid label.
 LOOP_ISSUE_ONLY_LABELS=(
     needs-po
-    needs-dev
     tracker
     epic
     needs-clarification
