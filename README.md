@@ -276,6 +276,43 @@ projects:
       auto_rebase_on_base_move: false   # disable reconciler auto-rebase on base-move
 ```
 
+### Label-state convergence
+
+Stage handlers each touch a narrow set of labels, and occasionally leave a
+ticket in a workflow-illegal combination — e.g. a PR with both `qa-pass` AND
+`needs-dev`, or a PR carrying `qa-fail` but no `needs-rework`. These
+combinations confuse the next handler: sometimes the wrong role claims,
+sometimes nothing claims and the ticket stalls.
+
+Every reconciler tick runs `reconcile_label_consistency`, which enforces
+per-stage exclusivity rules so the label state always represents a single
+workflow stage.
+
+**PR rules:**
+
+- `qa-pass` present → strip `needs-dev`, `needs-review`, `needs-rework`,
+  `changes-requested`, `qa-fail`, `in-review`, `in-rework`.
+- `qa-fail` or `changes-requested` present → ensure `needs-rework` is set
+  (add if missing); strip `qa-pass` and `needs-review`.
+- `needs-review` present → never co-exists with `needs-dev`, `needs-rework`,
+  or `changes-requested`. On conflict, the rework signal wins and
+  `needs-review` is removed.
+- `ready-for-qa` present → strip `needs-review`, `needs-dev`.
+
+**Issue rules:**
+
+- `needs-dev` present → strip `needs-po`, `in-po`, `po-review`, `plan`.
+- `needs-po` present → strip `needs-dev`, `in-progress`, `dev`.
+- `blocked` present → terminal state; strip every trigger label
+  (`needs-po`, `needs-dev`, `in-po`, `in-progress`, `dev`, etc).
+
+Each convergence emits a `label_state_converged` event to loop-monitor (if
+`LOOP_MONITOR_URL` is set) with the added/removed labels for observability.
+
+**Opt-out:** set `LOOP_LABEL_CONVERGE=false` in `loop.env` to disable the
+sweep. The check honours `DRY_RUN` (logs intended mutations, makes no API
+calls).
+
 ## Pipeline concurrency & priority
 
 Loop's scanner picks issues to claim every 5 minutes. Two knobs control how
