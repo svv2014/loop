@@ -172,6 +172,33 @@ posted to loop-monitor (when `LOOP_MONITOR_URL` is set) for observability.
 this if your repo has issues that should stay unlabeled (e.g. discussion
 threads) or if you prefer to label every issue manually.
 
+## Auto-close finished trackers
+
+Tracker / epic issues collect a list of child issue references in the body.
+Once every referenced child is closed, the umbrella issue is effectively
+done, but it rarely gets closed by hand. Each reconciler tick now runs
+`reconcile_tracker_issues`, which parses child references out of each open
+issue labelled `tracker` or `epic`, verifies each child's state via `gh`,
+and closes the tracker (with a comment listing the shipped children) only
+when **all** referenced children are closed.
+
+Parsing is intentionally narrow — false negatives (a child reference we
+don't recognise) are fine; false positives (closing a tracker while open
+work remains) are not. Recognised patterns:
+
+- GitHub task list checkboxes: `- [ ] #123` or `- [x] #123` (the box is
+  treated as a hint only — the child's real state on the server wins, so a
+  manually-ticked `[x]` won't close the tracker if the issue is still open)
+- Plain `#N` inside list items: `- See #45 for context`
+- Keyword references: `Tracks #N`, `Sub-issue #N`, `Child: #N`,
+  `Closes #N`, `Fixes #N`, `Resolves #N` (case-insensitive)
+
+Trackers with no parseable children are skipped — we never close without
+proof. A `tracker_closed` event is posted to loop-monitor (when
+`LOOP_MONITOR_URL` is set) for observability.
+
+**Opt out** by setting `LOOP_AUTO_CLOSE_TRACKERS=false` in `loop.env`.
+
 ## Auto-rework on red CI
 
 When Loop opens a PR (branch convention `feat/issue-N-*`) and a **required**
