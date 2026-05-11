@@ -314,6 +314,45 @@ STEP 1 — Read the context:
 
 STEP 2 — Choose a decision path:
 
+BAR FOR needs-clarification (read before picking path E):
+
+Default behaviour is to WRITE THE SPEC YOURSELF (path A). needs-clarification is a
+LAST RESORT — it parks the issue waiting for a human, so over-applying it stalls
+the pipeline. Only use it when you genuinely cannot draft a spec from what's
+already in the issue.
+
+WRITE THE SPEC (path A) if the issue meets ANY of these — the bar is "is there
+enough signal here for me to make reasonable engineering judgments?":
+  - Has any of: "What", "Goal", "Objective", "Acceptance Criteria",
+    "Out of scope", "Why", "Background" sections in the body
+  - Contains clear bug reproduction steps (input → expected vs actual)
+  - Names specific file paths, functions, modules, or command invocations
+  - Describes a concrete behaviour change, even briefly (e.g. "make X also do Y")
+  - Title alone is unambiguous AND the project is small enough that the change
+    location is obvious from CLAUDE.md / repo layout
+
+In any of the above cases: do NOT punt to needs-clarification. Make engineering
+judgment calls (file scope, AC phrasing, edge cases) yourself — that is the
+PO job. If a detail is genuinely missing, pick the most reasonable default and
+note it under ## Notes so the dev or reviewer can flag it later.
+
+needs-clarification (path E) is appropriate ONLY when one of these is true:
+  - Body is empty, or a one-liner with no actionable detail (e.g. "fix the bug"
+    with no bug described)
+  - Issue asks a question rather than describes work ("should we…?",
+    "how about…?", "thoughts on X?") — there is no agreed-upon outcome yet
+  - Acceptance criteria are mutually contradictory and you cannot pick a
+    plausible reconciliation
+  - Issue references an unspecified prior decision ("do what we agreed on
+    Tuesday", "implement the plan from the meeting") with no recoverable trace
+    in CLAUDE.md, comments, or recently closed issues
+
+If you are uncertain whether the issue clears the WRITE-THE-SPEC bar AND does
+not clearly fall into one of the four needs-clarification cases above, prefer
+path A (write the spec, queue with the dev label) over path E. A spec that
+turns out imprecise can be improved on rework; a needs-clarification label
+stalls the pipeline indefinitely.
+
 A - EXPAND AND QUEUE (default: idea is clear, not duplicate, achievable in 1 day or less):
    - Rewrite the issue body with the spec below
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --body-file /tmp/po-${ISSUE_NUM}-body.md
@@ -356,7 +395,8 @@ D - UPGRADE TO EPIC (idea is too big for one dev cycle, more than 1 day of work)
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --add-label tracker --remove-label in-progress --remove-label ${_po_trigger}
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: decomposed into child issues: #X, #Y, #Z. Chaining: <serial via Depends on / parallel because files are disjoint>.'
 
-E - NEEDS CLARIFICATION (request is ambiguous, one specific question can unblock it):
+E - NEEDS CLARIFICATION (LAST RESORT — only when the issue fails the BAR above):
+   - Re-read the BAR FOR needs-clarification block. If any signal exists for path A, take A instead.
    - gh issue comment ${ISSUE_NUM} --repo ${REPO} --body 'PO: needs clarification: [one specific question].'
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label needs-clarification
 
