@@ -450,6 +450,141 @@ YAML
     [ "$count" -eq 1 ]
 }
 
+# ---------------------------------------------------------------------------
+# _sort_rows_by_priority — priority-aware candidate ordering
+# ---------------------------------------------------------------------------
+
+@test "_sort_rows_by_priority: p1 sorts before p2 and p3, unlabeled is last" {
+    local out
+    out=$(printf '%s\n%s\n%s\n%s\n' \
+        '{"number":3,"labels":["p3-low"]}' \
+        '{"number":1,"labels":["p1-high"]}' \
+        '{"number":4,"labels":[]}' \
+        '{"number":2,"labels":["p2-medium"]}' \
+        | _sort_rows_by_priority)
+    local first second third fourth
+    first=$(echo  "$out" | sed -n '1p')
+    second=$(echo "$out" | sed -n '2p')
+    third=$(echo  "$out" | sed -n '3p')
+    fourth=$(echo "$out" | sed -n '4p')
+    [[ "$first"  == *'"number":1'* ]]
+    [[ "$second" == *'"number":2'* ]]
+    [[ "$third"  == *'"number":3'* ]]
+    [[ "$fourth" == *'"number":4'* ]]
+}
+
+@test "_sort_rows_by_priority: p0-critical wins over p1-high; lower number tiebreaks" {
+    local out
+    out=$(printf '%s\n%s\n%s\n' \
+        '{"number":10,"labels":["p1-high"]}' \
+        '{"number":7,"labels":["p1-high"]}' \
+        '{"number":99,"labels":["p0-critical"]}' \
+        | _sort_rows_by_priority)
+    [[ "$(echo "$out" | sed -n '1p')" == *'"number":99'*  ]]
+    [[ "$(echo "$out" | sed -n '2p')" == *'"number":7'*   ]]
+    [[ "$(echo "$out" | sed -n '3p')" == *'"number":10'*  ]]
+}
+
+@test "priority-aware scanner: mixed p1/p2/p3 candidates → dev_issue emits p1 first" {
+    _write_fixture_config
+    export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
+
+    local R1 R2 R3
+    R1='{"number":11,"title":"low","url":"http://gh/11","labels":["needs-dev","p3-low"],"author":"bot"}'
+    R2='{"number":12,"title":"med","url":"http://gh/12","labels":["needs-dev","p2-medium"],"author":"bot"}'
+    R3='{"number":13,"title":"high","url":"http://gh/13","labels":["needs-dev","p1-high"],"author":"bot"}'
+
+    backend_list_issues_with_label() {
+        local _label="$2"
+        if [ "$_label" = "needs-dev" ]; then
+            printf '%s\n%s\n%s\n' "$R1" "$R2" "$R3"
+        fi
+        return 0
+    }
+    backend_list_prs_with_label()  { return 0; }
+    backend_list_open_prs_raw()    { echo "[]"; }
+    backend_issue_has_any_label()  { return 1; }
+    backend_pr_has_any_label()     { return 1; }
+    backend_issue_unmet_deps()     { return 1; }
+    loop_load_backend()            { return 0; }
+    loop_load_project() {
+        REPO="owner/default-repo"
+        MAX_CONCURRENT_PRS=1
+        PIPELINE_SLOTS=""
+        BACKEND=github
+        WORKFLOW=default
+        ALLOWED_AUTHORS=""
+        LOOP_LABEL_OVERRIDES=""
+        return 0
+    }
+
+    local emit_log="$BATS_TMPDIR/emit-prio.log"
+    rm -f "$emit_log"
+    emit() { echo "$1" >> "$emit_log"; return 0; }
+
+    scan_project "proj-default"
+
+    [ -f "$emit_log" ]
+    # MAX_CONCURRENT_PRS=1 means exactly one emit; it must be the p1-high (#13).
+    local lines
+    lines=$(wc -l < "$emit_log" | tr -d ' ')
+    [ "$lines" -eq 1 ]
+    grep -q '"issue_number": 13' "$emit_log"
+}
+
+# ---------------------------------------------------------------------------
+# pipeline_slots — serial-mode gate
+# ---------------------------------------------------------------------------
+
+@test "pipeline_slots=1 + in-flight ticket: scanner emits nothing at first stage" {
+    _write_fixture_config
+    export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
+
+    # Use proj-minimal so the first issue trigger is `needs-dev` and there is
+    # no PO stage to confound the test.
+    local NEW_ISSUE INFLIGHT_ISSUE
+    NEW_ISSUE='{"number":21,"title":"fresh","url":"http://gh/21","labels":["needs-dev"],"author":"bot"}'
+    INFLIGHT_ISSUE='{"number":20,"title":"old","url":"http://gh/20","labels":["in-progress"],"author":"bot"}'
+
+    backend_list_issues_with_label() {
+        local _label="$2"
+        case "$_label" in
+            needs-dev)   printf '%s\n' "$NEW_ISSUE" ;;
+            in-progress) printf '%s\n' "$INFLIGHT_ISSUE" ;;
+        esac
+        return 0
+    }
+    backend_list_prs_with_label()  { return 0; }
+    backend_list_open_prs_raw()    { echo "[]"; }
+    backend_issue_has_any_label()  { return 1; }
+    backend_pr_has_any_label()     { return 1; }
+    backend_issue_unmet_deps()     { return 1; }
+    loop_load_backend()            { return 0; }
+    loop_load_project() {
+        REPO="owner/minimal-repo"
+        MAX_CONCURRENT_PRS=3
+        PIPELINE_SLOTS=1
+        BACKEND=github
+        WORKFLOW=minimal
+        ALLOWED_AUTHORS=""
+        LOOP_LABEL_OVERRIDES=""
+        return 0
+    }
+
+    local emit_log="$BATS_TMPDIR/emit-serial.log"
+    rm -f "$emit_log"
+    emit() { echo "$1" >> "$emit_log"; return 0; }
+
+    scan_project "proj-minimal"
+
+    # Either the emit log was never created or it has zero entries.
+    if [ -f "$emit_log" ]; then
+        local lines
+        lines=$(wc -l < "$emit_log" | tr -d ' ')
+        [ "$lines" -eq 0 ]
+    fi
+}
+
 @test "emit: no dedup key file created when dedup_id is empty" {
     local dispatch_log="$BATS_TMPDIR/dispatch3.log"
     rm -f "$dispatch_log"
