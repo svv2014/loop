@@ -97,6 +97,29 @@ labels (trigger labels declared in the file or terminal labels below).
 Missing handler scripts produce a warning but do not cause validation
 to fail.
 
+### State-machine lint
+
+`scripts/lint-workflow.sh` runs a structural audit of every workflow's
+state machine and fails CI when it finds either of these gaps:
+
+- **Dead-end label** — a label that a handler can produce (`on_done`,
+  `on_pass`, `on_fail`, `on_blocked`, `on_clarification`,
+  `on_failed_after_max`, or one of `decisions.*`) but no stage triggers
+  on. Tickets reaching that label sit forever because no handler claims
+  them. (Terminals `done`, `blocked`, `needs-clarification` are valid
+  sinks and ignored.)
+- **Orphan trigger** — a `trigger_label` that no handler in the same
+  workflow ever produces, *unless* it is the workflow's entry point
+  (the first issue stage's trigger, e.g. `needs-po` or `needs-dev`).
+
+```bash
+./scripts/lint-workflow.sh                          # audit every file
+./scripts/lint-workflow.sh path/to/workflow.yaml    # audit one file
+```
+
+This check runs in CI on every PR. See the
+[state machine per workflow](#state-machine-per-workflow) section below.
+
 ## Canonical label set
 
 These are the canonical label names used in `default.yaml`. Projects may
@@ -161,6 +184,94 @@ po-review (issue) → dev (issue) → review-pending (PR) → ready-for-qa (PR)
 
 See [docs/migration-from-asdlc.md](../../docs/migration-from-asdlc.md) for a full
 side-by-side mapping and instructions for creating your own `current.yaml`.
+
+## State machine per workflow
+
+Each workflow is a directed graph: trigger labels are states, handler
+output fields (`on_done`, `on_pass`, `on_fail`, `decisions.*`, etc.) are
+transitions. The diagrams below enumerate every state and transition so
+operators can audit coverage at a glance. `scripts/lint-workflow.sh`
+checks each file mechanically against the same model.
+
+Notation: `LABEL --(stage.field)--> LABEL`. Terminal states (`done`,
+`blocked`, `needs-clarification`) are sinks.
+
+### `default`
+
+Entry: `needs-po` (set externally when a new issue is filed).
+
+```
+needs-po       --(po.on_done)-->            needs-dev (issue)
+needs-po       --(po.on_blocked)-->         blocked
+needs-po       --(po.on_clarification)-->   needs-clarification
+needs-dev      --(dev.on_done)-->           needs-review
+needs-dev      --(dev.on_failed_after_max)--> blocked
+needs-review   --(review.approve)-->        needs-qa
+needs-review   --(review.reject)-->         needs-dev      (PR rework)
+needs-dev (PR) --(rework.on_done)-->        needs-review
+needs-dev (PR) --(rework.on_failed_after_max)--> blocked
+needs-qa       --(qa.on_pass)-->            qa-pass
+needs-qa       --(qa.on_fail)-->            qa-fail
+qa-pass        --(merge.on_done)-->         done
+qa-fail        --(qa-rework.on_done)-->     needs-review
+qa-fail        --(qa-rework.on_failed_after_max)--> blocked
+```
+
+Every produced label is either a trigger or a terminal. No dead-ends.
+
+### `current` (operator-local, gitignored)
+
+Entry: `po-review`.
+
+```
+po-review        --(po.on_done)-->            dev
+po-review        --(po.on_blocked)-->         blocked
+po-review        --(po.on_clarification)-->   needs-clarification
+dev              --(dev.on_done)-->           review-pending
+dev              --(dev.on_failed_after_max)--> blocked
+review-pending   --(review.approve)-->        ready-for-qa
+review-pending   --(review.reject)-->         changes-requested
+changes-requested --(rework.on_done)-->       review-pending
+changes-requested --(rework.on_failed_after_max)--> blocked
+ready-for-qa     --(qa.on_pass)-->            qa-pass
+ready-for-qa     --(qa.on_fail)-->            qa-fail
+qa-pass          --(merge.on_done)-->         done
+qa-fail          --(qa-rework.on_done)-->     review-pending
+qa-fail          --(qa-rework.on_failed_after_max)--> blocked
+```
+
+The `qa-rework` stage was added to close the `qa-fail` dead-end found
+during the workflow audit — previously a `qa-fail` label had no handler
+claim and the PR stalled.
+
+### `docs-only`
+
+Entry: `needs-dev`.
+
+```
+needs-dev      --(dev.on_done)-->           needs-review
+needs-dev      --(dev.on_failed_after_max)--> blocked
+needs-review   --(review.approve)-->        qa-pass
+needs-review   --(review.reject)-->         needs-dev    (PR rework)
+needs-dev (PR) --(rework.on_done)-->        needs-review
+needs-dev (PR) --(rework.on_failed_after_max)--> blocked
+qa-pass        --(merge.on_done)-->         done
+```
+
+No QA stage; `qa-pass` is the "approved, ready to merge" signal. No
+dead-ends.
+
+### `minimal`
+
+Entry: `needs-dev`.
+
+```
+needs-dev --(dev.on_done)-->               needs-qa
+needs-dev --(dev.on_failed_after_max)-->   blocked
+needs-qa  --(merge.on_done)-->             done
+```
+
+No review or QA stage. No dead-ends.
 
 ## Per-project overrides
 

@@ -32,6 +32,11 @@ jobs:
           done
           shellcheck -S warning "${files[@]}"
 
+      - name: Workflow state-machine lint
+        run: |
+          python3 -c 'import yaml' 2>/dev/null || sudo apt-get install -y python3-yaml
+          ./scripts/lint-workflow.sh
+
       - name: No personal identifiers
         run: |
           if git grep -iE 'vadim|/Users/vadim|boba-event|openclaw|suprun|com\.vadim' -- ':!LICENSE' ':!.github/workflows/qa-build-test.yml' ':!.github/workflows/ci.yml'; then
