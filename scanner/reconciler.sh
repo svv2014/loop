@@ -2280,6 +2280,92 @@ print(len(human))" 2>/dev/null || echo "0")
     return 0
 }
 
+# --- Sweep: auto-label fully-unlabelled open issues with needs-po -------------
+# Operator-filed issues sometimes land in a repo without any pipeline label —
+# they have a priority tag at best, sometimes nothing. The scanner skips them
+# silently because nothing triggers, and the operator has to label every issue
+# by hand to get them into the pipeline. This sweep promotes those orphans to
+# `needs-po` so the PO handler picks them up on the next tick.
+#
+# Conservative by design:
+#   - skip issues that already carry any workflow trigger label
+#   - skip terminal/holding labels (needs-clarification, blocked, done)
+#   - skip epic / tracker tickets (umbrella issues, not actionable themselves)
+#   - skip issues whose author is outside ALLOWED_AUTHORS (unless operator-
+#     approved) — same author gate the scanner already enforces
+#   - opt-out via LOOP_AUTO_NEEDS_PO=false
+reconcile_orphan_issues() {
+    local repo="$1" slug="$2"
+
+    if [ "${LOOP_AUTO_NEEDS_PO:-true}" = "false" ]; then
+        return 0
+    fi
+
+    log "[$repo] scanning for orphan issues without pipeline labels"
+
+    local issues_json
+    issues_json=$(gh issue list --repo "$repo" --state open --limit 200 \
+        --json number,title,labels,author 2>/dev/null || echo "[]")
+
+    local orphans
+    orphans=$(ALLOWED="${ALLOWED_AUTHORS:-}" ISSUES="$issues_json" python3 - <<'PY'
+import json, os
+allowed_raw = os.environ.get('ALLOWED', '').strip()
+allowed = {a.strip() for a in allowed_raw.split(',') if a.strip()}
+issues = json.loads(os.environ.get('ISSUES') or '[]')
+
+TRIGGERS = {
+    'needs-po', 'in-po', 'po-review',
+    'dev', 'plan', 'needs-dev', 'in-progress',
+}
+TERMINALS = {'needs-clarification', 'blocked', 'done'}
+SKIP_KIND = {'epic', 'tracker'}
+
+for it in issues:
+    num = it.get('number')
+    if num is None:
+        continue
+    labels = {
+        (l.get('name') if isinstance(l, dict) else l)
+        for l in (it.get('labels') or [])
+    }
+    if labels & TRIGGERS:
+        continue
+    if labels & TERMINALS:
+        continue
+    if labels & SKIP_KIND:
+        continue
+    if allowed:
+        author_obj = it.get('author') or {}
+        author = author_obj.get('login') or author_obj.get('name') or ''
+        if author and author not in allowed and 'operator-approved' not in labels:
+            continue
+    title = (it.get('title') or '').replace('\n', ' ').strip()[:80]
+    print(f"{num}\t{title}")
+PY
+    )
+
+    if [ -z "$orphans" ]; then
+        log "[$repo] no orphan issues found"
+        return 0
+    fi
+
+    while IFS=$'\t' read -r num title; do
+        [ -z "$num" ] && continue
+        if $DRY_RUN; then
+            log "[$repo] DRY: would add needs-po to orphan issue #$num: $title"
+            continue
+        fi
+        log "[$repo] auto-label needs-po: orphan issue #$num: $title"
+        backend_add_label "$repo" "$num" "needs-po"
+        _loop_emit_event "auto_labeled_needs_po" \
+            "{\"repo\":\"$repo\",\"slug\":\"$slug\",\"issue_num\":$num}" \
+            || true
+    done <<< "$orphans"
+
+    return 0
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -2303,6 +2389,7 @@ run_project() {
     reconcile_ci_red_prs "$REPO"
     reconcile_ci_green_prs "$REPO" "$slug"
     reconcile_pr_base_moved "$REPO" "$slug"
+    reconcile_orphan_issues "$REPO" "$slug"
     reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
     reconcile_stale_base "$REPO"
