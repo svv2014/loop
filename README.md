@@ -152,6 +152,26 @@ Author your own — see [`config/workflows/README.md`](config/workflows/README.m
 - `config/projects.example.yaml` — annotated schema reference.
 - `config/workflows/*.yaml` — pipeline workflow definitions. Committed.
 
+## Auto-label orphan issues
+
+Operator-filed issues sometimes land in a repo without any pipeline label —
+a priority tag at best, sometimes nothing — and the scanner skips them
+silently because no trigger label fires. The reconciler now picks these
+orphans up on each tick and applies `needs-po` so the PO handler claims
+them on the following scan.
+
+The sweep is conservative: it acts only on open issues with no workflow
+trigger label (`needs-po`, `in-po`, `po-review`, `dev`, `plan`,
+`needs-dev`, `in-progress`), no terminal label (`needs-clarification`,
+`blocked`, `done`), and no `epic` / `tracker` umbrella tags. Issues whose
+author is outside `ALLOWED_AUTHORS` are skipped unless they carry the
+`operator-approved` override label. An `auto_labeled_needs_po` event is
+posted to loop-monitor (when `LOOP_MONITOR_URL` is set) for observability.
+
+**Opt out** by setting `LOOP_AUTO_NEEDS_PO=false` in `loop.env`. Disable
+this if your repo has issues that should stay unlabeled (e.g. discussion
+threads) or if you prefer to label every issue manually.
+
 ## Auto-rework on red CI
 
 When Loop opens a PR (branch convention `feat/issue-N-*`) and a **required**
