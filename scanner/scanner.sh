@@ -275,19 +275,24 @@ for _, _, line in rows:
 '
 }
 
-# count_inflight_issues <slug> <repo>
+# count_inflight_issues <slug> <repo> [exclude_label]
 # Count distinct open issues that carry at least one pipeline label (workflow
 # issue or PR trigger labels, plus handler-set in-flight labels in-progress/blocked).
 # Used by the per-project `pipeline_slots` gate.
+#
+# <exclude_label> (optional): a label to OMIT from the pipeline set. The caller
+# passes the first-stage issue trigger here so the queue waiting for that
+# stage isn't counted against the gate — otherwise a backlog of e.g. needs-po
+# tickets self-blocks the very stage that would drain them (#267 follow-up).
 count_inflight_issues() {
-    local slug="$1" repo="$2"
+    local slug="$1" repo="$2" exclude="${3:-}"
     local labels
     labels=$(
         {
             loop_polled_labels "$slug" issue 2>/dev/null
             loop_polled_labels "$slug" pr 2>/dev/null
             printf 'in-progress\nblocked\n'
-        } | awk 'NF && !seen[$0]++'
+        } | awk -v ex="$exclude" 'NF && $0 != ex && !seen[$0]++'
     )
     local seen_tmp
     seen_tmp=$(mktemp)
@@ -561,7 +566,7 @@ scan_project() {
     local _slots_gate_active=false
     if [ -n "${PIPELINE_SLOTS:-}" ] && [ "$PIPELINE_SLOTS" -ge 1 ] 2>/dev/null; then
         local _if_issues _if_prs _if_total
-        _if_issues=$(count_inflight_issues "$slug" "$repo")
+        _if_issues=$(count_inflight_issues "$slug" "$repo" "$_first_issue_trigger")
         _if_prs=$(count_inflight_prs "$slug" "$repo")
         _if_total=$(( _if_issues + _if_prs ))
         log "pipeline_slots=${PIPELINE_SLOTS} in-flight=${_if_total} (issues=${_if_issues} prs=${_if_prs})"
