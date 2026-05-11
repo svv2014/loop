@@ -2537,6 +2537,160 @@ PY
     return 0
 }
 
+# --- Sweep: auto-close trackers / epics whose children are all done -------
+# Tracker / epic issues collect a list of child issue references in their
+# body. Once every child is closed, the umbrella issue is effectively done
+# but humans rarely remember to close it. This sweep parses child issue
+# references from the body, verifies each child's state via gh, and closes
+# the tracker only when ALL referenced children are CLOSED.
+#
+# Parsing is intentionally narrow — false negatives (a child reference we
+# don't recognise) are fine; false positives (closing a tracker with still-
+# open work) are not. Recognized patterns (case-insensitive for keywords):
+#   - GitHub task list checkboxes:       "- [ ] #123" / "- [x] #123"
+#   - Plain "#N" inside list items:      "- See #45 for context"
+#   - Keyword references:                "Tracks #N", "Sub-issue #N",
+#                                        "Child: #N", "Closes #N"
+# The checkbox '[x]' is treated as a hint only — the child's real state on
+# the tracker is determined by `gh issue view`.
+#
+# Skipped:
+#   - Trackers with no parseable children (we never close without proof).
+#   - LOOP_AUTO_CLOSE_TRACKERS=false   (opt-out env)
+# DRY_RUN honored.
+reconcile_tracker_issues() {
+    local repo="$1" slug="$2"
+
+    if [ "${LOOP_AUTO_CLOSE_TRACKERS:-true}" = "false" ]; then
+        return 0
+    fi
+
+    log "[$repo] tracker-close sweep"
+
+    local trackers_json
+    trackers_json=$(gh issue list --repo "$repo" --state open --limit 200 \
+        --label tracker --json number,title,body,labels 2>/dev/null || echo "[]")
+    local epics_json
+    epics_json=$(gh issue list --repo "$repo" --state open --limit 200 \
+        --label epic --json number,title,body,labels 2>/dev/null || echo "[]")
+
+    local merged
+    merged=$(TRACKERS="$trackers_json" EPICS="$epics_json" python3 - <<'PY'
+import json, os
+seen = {}
+for raw in (os.environ.get('TRACKERS') or '[]', os.environ.get('EPICS') or '[]'):
+    try:
+        items = json.loads(raw)
+    except Exception:
+        items = []
+    for it in items:
+        num = it.get('number')
+        if num is None or num in seen:
+            continue
+        seen[num] = it
+print(json.dumps(list(seen.values())))
+PY
+    )
+
+    local parsed
+    parsed=$(TRACKERS="$merged" python3 - <<'PY'
+import json, os, re
+trackers = json.loads(os.environ.get('TRACKERS') or '[]')
+
+KEYWORD_RE = re.compile(
+    r'\b(?:tracks|sub-issue|child|closes?|closed|fix(?:es|ed)?|resolves?|resolved)\b[:\s]*#(\d+)',
+    re.IGNORECASE,
+)
+CHECKBOX_RE = re.compile(r'^\s*-\s*\[[ xX]\]\s*#(\d+)')
+LIST_HASH_RE = re.compile(r'^\s*[-*]\s+.*?#(\d+)')
+
+for tr in trackers:
+    num = tr.get('number')
+    body = tr.get('body') or ''
+    title = (tr.get('title') or '').replace('\n', ' ').strip()[:80]
+    children = []
+    seen = set()
+
+    def add(n):
+        try:
+            n = int(n)
+        except (TypeError, ValueError):
+            return
+        if n == num or n in seen:
+            return
+        seen.add(n)
+        children.append(n)
+
+    for line in body.splitlines():
+        m = CHECKBOX_RE.match(line)
+        if m:
+            add(m.group(1))
+            continue
+        m = LIST_HASH_RE.match(line)
+        if m:
+            add(m.group(1))
+        for km in KEYWORD_RE.finditer(line):
+            add(km.group(1))
+
+    if not children:
+        continue
+    print('\t'.join([str(num), title, ','.join(str(c) for c in children)]))
+PY
+    )
+
+    if [ -z "$parsed" ]; then
+        log "[$repo] tracker-close: no trackers with parseable children"
+        return 0
+    fi
+
+    local tnum ttitle tchildren
+    while IFS=$'\t' read -r tnum ttitle tchildren; do
+        [ -z "$tnum" ] && continue
+        [ -z "$tchildren" ] && continue
+
+        local all_closed=true
+        local closed_list=""
+        local IFS_ORIG="$IFS"
+        IFS=','
+        local c
+        for c in $tchildren; do
+            [ -z "$c" ] && continue
+            local cstate
+            cstate=$(gh issue view "$c" --repo "$repo" --json state --jq .state 2>/dev/null || echo "")
+            if [ "$cstate" != "CLOSED" ] && [ "$cstate" != "closed" ]; then
+                all_closed=false
+                break
+            fi
+            closed_list="${closed_list}#${c} "
+        done
+        IFS="$IFS_ORIG"
+
+        if ! $all_closed; then
+            log "[$repo] tracker #$tnum: open child remaining — skip"
+            continue
+        fi
+
+        local comment
+        comment="Loop reconciler: closing tracker — all referenced children are closed: ${closed_list%% }"
+
+        if $DRY_RUN; then
+            log "[$repo] DRY tracker-close #$tnum ($ttitle) children=${tchildren}"
+            continue
+        fi
+
+        log "[$repo] tracker-close #$tnum ($ttitle) children=${tchildren}"
+        backend_comment_issue "$repo" "$tnum" "$comment" \
+            || log "[$repo] failed to comment on tracker #$tnum"
+        backend_close_issue "$repo" "$tnum" \
+            || log "[$repo] failed to close tracker #$tnum"
+        _loop_emit_event "tracker_closed" \
+            "{\"repo\":\"$repo\",\"slug\":\"$slug\",\"issue_num\":$tnum,\"children\":\"$tchildren\"}" \
+            || true
+    done <<< "$parsed"
+
+    return 0
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -2561,6 +2715,7 @@ run_project() {
     reconcile_ci_green_prs "$REPO" "$slug"
     reconcile_pr_base_moved "$REPO" "$slug"
     reconcile_orphan_issues "$REPO" "$slug"
+    reconcile_tracker_issues "$REPO" "$slug"
     reconcile_label_consistency "$REPO" "$slug"
     reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
