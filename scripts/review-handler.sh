@@ -27,6 +27,8 @@ source "$LOOP_ROOT/lib/bounty.sh"
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
 source "$LOOP_ROOT/lib/cli-hint.sh"
+# shellcheck source=../lib/failure_category.sh
+source "$LOOP_ROOT/lib/failure_category.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-review-handler.log"
 MAX_RETRIES=2
@@ -164,7 +166,9 @@ EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
 
-if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+_REVIEW_RUN_LOG=$(mktemp /tmp/loop-review-run-XXXXXX.log)
+trap 'rm -f "${_REVIEW_RUN_LOG:-}"' EXIT
+if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE" | tee "$_REVIEW_RUN_LOG" >/dev/null; then
     log "review agent finished for PR #$PR_NUM"
     bounty_report "review_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" || true
     loop_notify "✅ [$SLUG] PR#$PR_NUM review done"
@@ -205,7 +209,9 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
 else
     n=$(retry_incr)
     log "review agent failed for PR #$PR_NUM (attempt $n/$MAX_RETRIES)"
-    bounty_report "review_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
+    _review_stderr_tail=$(tail -n 50 "${_REVIEW_RUN_LOG:-/dev/null}" 2>/dev/null || echo "")
+    _review_failure_reason=$(loop_failure_category "$_review_stderr_tail" 1)
+    bounty_report "review_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" detail="attempt ${n}/${MAX_RETRIES}" failure_reason="$_review_failure_reason" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$PR_NUM" in-review
         backend_remove_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"

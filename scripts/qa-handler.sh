@@ -27,6 +27,8 @@ source "$LOOP_ROOT/lib/bounty.sh"
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
 source "$LOOP_ROOT/lib/cli-hint.sh"
+# shellcheck source=../lib/failure_category.sh
+source "$LOOP_ROOT/lib/failure_category.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-qa-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [qa-handler] $*" | tee -a "$LOG_FILE"; }
@@ -224,7 +226,9 @@ EOF
 TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
 
-if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+_QA_RUN_LOG=$(mktemp /tmp/loop-qa-run-XXXXXX.log)
+trap 'rm -f "${_QA_RUN_LOG:-}"' EXIT
+if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE" | tee "$_QA_RUN_LOG" >/dev/null; then
     log "qa agent finished for PR #$PR_NUM"
     loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
@@ -249,7 +253,9 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     fi
 else
     log "qa agent failed for PR #$PR_NUM"
-    bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
+    _qa_stderr_tail=$(tail -n 50 "${_QA_RUN_LOG:-/dev/null}" 2>/dev/null || echo "")
+    _qa_failure_reason=$(loop_failure_category "$_qa_stderr_tail" 1)
+    bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" failure_reason="$_qa_failure_reason" || true
     loop_notify "❌ [$SLUG] PR#$PR_NUM qa failed: agent error"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"

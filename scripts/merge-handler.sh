@@ -21,6 +21,8 @@ source "$LOOP_ROOT/lib/bounty.sh"
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/recovery.sh
 source "$LOOP_ROOT/lib/recovery.sh"
+# shellcheck source=../lib/failure_category.sh
+source "$LOOP_ROOT/lib/failure_category.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-merge-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [merge-handler] $*" | tee -a "$LOG_FILE"; }
@@ -101,7 +103,8 @@ if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FIL
     # Non-conflict failure (e.g. required check missing, API flake). Don't
     # loop on this either — mark blocked so a human can look.
     log "ERROR: merge failed for non-conflict reason (state=$POST_STATE)"
-    bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="state=${POST_STATE}" || true
+    _merge_failure_reason=$(loop_failure_category "state=${POST_STATE}" 1)
+    bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="state=${POST_STATE}" failure_reason="$_merge_failure_reason" || true
     loop_notify "❌ [$SLUG] PR#$PR_NUM merge failed: merge command failed"
     backend_remove_label "$REPO" "$PR_NUM" qa-pass
     backend_add_label "$REPO" "$PR_NUM" blocked
