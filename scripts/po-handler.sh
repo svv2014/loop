@@ -34,6 +34,8 @@ source "$LOOP_ROOT/lib/redact.sh"
 source "$LOOP_ROOT/lib/cli-hint.sh"
 # shellcheck source=../lib/failure_classifier.sh
 source "$LOOP_ROOT/lib/failure_classifier.sh"
+# shellcheck source=../lib/failure_category.sh
+source "$LOOP_ROOT/lib/failure_category.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-po-handler.log"
 MAX_RETRIES=2
@@ -507,11 +509,12 @@ else
     _stderr_tail=$(tail -n 50 "$_RUN_LOG" 2>/dev/null || echo "")
     _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup
 
+    _failure_reason=$(loop_failure_category "$_stderr_tail" "$_agent_rc")
     if loop_is_transient_failure "$_stderr_tail" "$_agent_rc"; then
         _sig=$(loop_failure_signature "$_stderr_tail")
         _tc=$(transient_incr)
         log "po agent transient failure for #$ISSUE_NUM (transient attempt $_tc/$MAX_TRANSIENT_RETRIES, sig: ${_sig:-unknown})"
-        bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="transient ${_tc}/${MAX_TRANSIENT_RETRIES} sig:${_sig:-unknown}" || true
+        bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="transient ${_tc}/${MAX_TRANSIENT_RETRIES} sig:${_sig:-unknown}" failure_reason="$_failure_reason" || true
         if [ "$_tc" -ge "$MAX_TRANSIENT_RETRIES" ]; then
             backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
             backend_add_label "$REPO" "$ISSUE_NUM" blocked
@@ -525,7 +528,7 @@ else
     else
         n=$(retry_incr)
         log "po agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES)"
-        bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
+        bounty_report "po_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=po project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" failure_reason="$_failure_reason" || true
         if [ "$n" -ge "$MAX_RETRIES" ]; then
             backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
             backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
