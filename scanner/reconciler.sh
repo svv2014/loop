@@ -1921,7 +1921,10 @@ for pr in prs:
         continue
     issue_num = m.group(1)
     lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
-    print(f"{pr['number']}\t{head}\t{issue_num}\t{','.join(lbls)}\t{(pr.get('body') or '')[:400]}")
+    # NOTE: do NOT emit PR body — bodies contain newlines which would split the
+    # `while IFS=$'\t' read` loop into one iteration per body line, causing each
+    # markdown line (`### Changes`, `- foo.md`, etc.) to be treated as a PR number.
+    print(f"{pr['number']}\t{head}\t{issue_num}\t{','.join(lbls)}")
 PY
 )
 
@@ -1930,8 +1933,8 @@ PY
         return 0
     fi
 
-    local pr_num head_ref issue_num labels_csv pr_body
-    while IFS=$'\t' read -r pr_num head_ref issue_num labels_csv pr_body; do
+    local pr_num head_ref issue_num labels_csv
+    while IFS=$'\t' read -r pr_num head_ref issue_num labels_csv; do
         [ -z "$pr_num" ] && continue
 
         # PR must have needs-dev to be a promotion candidate.
