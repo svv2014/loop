@@ -187,6 +187,33 @@ SH
     [ "$received" = "$injection_prompt" ]
 }
 
+@test "custom agent: working directory is the cwd argument, not the caller's directory" {
+    local fake_worktree
+    fake_worktree="$(mktemp -d)"
+    local pwd_capture="$BATS_TMPDIR/custom_pwd"
+
+    local custom_script="$BATS_TMPDIR/pwd-recorder.sh"
+    cat > "$custom_script" <<SH
+#!/usr/bin/env bash
+printf '%s' "\$PWD" > "$pwd_capture"
+exit 0
+SH
+    chmod +x "$custom_script"
+
+    export LOOP_AGENT="custom"
+    export LOOP_AGENT_CMD="$custom_script"
+    unset _PROJECT_FALLBACK
+
+    run loop_run_agent "do something" "$fake_worktree"
+    [ "$status" -eq 0 ]
+
+    local recorded_pwd
+    recorded_pwd="$(cat "$pwd_capture")"
+    [ "$recorded_pwd" = "$fake_worktree" ]
+
+    rm -rf "$fake_worktree"
+}
+
 @test "claude branch never passes --cwd flag (regression of LOOP-29 / LOOP-152)" {
     # Stub records full argv so we can assert no --cwd is passed.
     cat > "$STUB_DIR/claude" <<'STUB'
