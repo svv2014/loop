@@ -21,6 +21,8 @@ source "$LOOP_ROOT/lib/bounty.sh"
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/recovery.sh
 source "$LOOP_ROOT/lib/recovery.sh"
+# shellcheck source=../lib/failure_category.sh
+source "$LOOP_ROOT/lib/failure_category.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-merge-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [merge-handler] $*" | tee -a "$LOG_FILE"; }
@@ -82,6 +84,7 @@ esac
 # Dev-handler opens all PRs as drafts; promote to ready before merging.
 backend_pr_ready "$REPO" "$PR_NUM" 2>&1 | tee -a "$LOG_FILE" || true
 
+LOG_CAPTURE_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FILE"; then
     # Check if the failure was a conflict discovered at merge time.
     POST_STATE=$(backend_pr_view "$REPO" "$PR_NUM" --json mergeable,mergeStateStatus 2>/dev/null \
@@ -101,7 +104,9 @@ if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FIL
     # Non-conflict failure (e.g. required check missing, API flake). Don't
     # loop on this either — mark blocked so a human can look.
     log "ERROR: merge failed for non-conflict reason (state=$POST_STATE)"
-    bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="state=${POST_STATE}" || true
+    _merge_tail=$(tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
+    _fc=$(loop_failure_category "$_merge_tail") || _fc=unknown
+    bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="state=${POST_STATE}" failure_reason="$_fc" || true
     loop_notify "❌ [$SLUG] PR#$PR_NUM merge failed: merge command failed"
     backend_remove_label "$REPO" "$PR_NUM" qa-pass
     backend_add_label "$REPO" "$PR_NUM" blocked
