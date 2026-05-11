@@ -209,6 +209,53 @@ projects:
       auto_promote_on_ci: false   # disable reconciler auto-promote on green CI
 ```
 
+### Auto-rebase on base-move
+
+When Loop opens a PR (branch convention `feat/issue-N-*`) and the base branch
+advances so that the PR's `mergeStateStatus` becomes `DIRTY` or `mergeable`
+becomes `CONFLICTING`, the reconciler automatically attempts a rebase.
+
+**Clean rebase path:** the rebased branch is pushed with
+`--force-with-lease` (never plain `--force` — a concurrent developer push
+causes the push to be rejected rather than clobbered). Labels are NOT changed:
+CI re-runs naturally, and the green-CI sweep (Sweep 1) promotes the PR once
+checks pass.
+
+**Conflict path:** `git rebase --abort` is called. A diagnostic comment is
+posted on the PR listing each conflicted file and the most recent base commit
+that touched it:
+
+```
+Reconciler: auto-rebase onto `origin/<base>` failed with conflicts. Routing to `needs-rework`.
+
+Conflicted files:
+- `lib/runner.sh` — recent base commit: `abc1234 update runner fallback logic`
+- `scanner/reconciler.sh` — recent base commit: `def5678 add ci-red sweep`
+```
+
+`needs-rework` is applied to the PR; trigger labels (`needs-dev`, `in-dev`,
+`dev`, `in-progress`) are stripped from the linked issue so the dev agent
+handles the conflict on the next cycle. A `pr_rebase_conflict` event is
+emitted to loop-monitor (if `LOOP_MONITOR_URL` is set).
+
+**No-op conditions:**
+
+- The PR already carries `needs-rework`, `changes-requested`, or `blocked`.
+- A human reviewer has approved or requested changes on the PR.
+- `mergeStateStatus` is not `DIRTY` and `mergeable` is not `CONFLICTING`.
+
+**To opt out per project**, add `dev.auto_rebase_on_base_move: false` to the
+project entry in `config/projects.yaml` (mirrors the `AUTO_REBASE_ON_BASE_MOVE`
+env var):
+
+```yaml
+projects:
+  - slug: myapp
+    repo: owner/my-app
+    dev:
+      auto_rebase_on_base_move: false   # disable reconciler auto-rebase on base-move
+```
+
 ## Supported AI agents
 
 Set `LOOP_AGENT` in `loop.env`:

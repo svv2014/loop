@@ -2052,6 +2052,234 @@ print(json.dumps({'type':'pr_ci_passed','payload':{'repo':'${repo}','pr_number':
     done <<< "$loop_prs"
 }
 
+# Helper: post a JSON event to loop-monitor (fire-and-forget; non-fatal).
+# Usage: _loop_emit_event <event_type> <json_payload_string>
+_loop_emit_event() {
+    local event_type="$1" payload="$2"
+    local monitor_url="${LOOP_MONITOR_URL:-}"
+    [ -n "$monitor_url" ] || return 0
+    local body
+    body=$(python3 -c "
+import json, sys
+try:
+    p = json.loads(sys.argv[1])
+    print(json.dumps({'type': sys.argv[2], 'payload': p}))
+except Exception:
+    pass" "$payload" "$event_type" 2>/dev/null || echo "")
+    [ -n "$body" ] || return 0
+    curl -s -X POST "$monitor_url/events" \
+        -H 'Content-Type: application/json' \
+        -d "$body" >/dev/null 2>&1 || true
+}
+
+# _reconcile_rebase_one_pr <repo> <pr_num> <base> <head>
+#
+# Performs an isolated git rebase of <head> onto origin/<base> in a temp
+# worktree rooted under LOOP_ROOT. Prints conflicted file list to stdout
+# before returning 3 so the caller can assemble the diagnostic comment.
+#
+# Return codes:
+#   0 — clean rebase and force-with-lease push succeeded
+#   1 — fetch or worktree-add failed (transient; skip, no label mutation)
+#   2 — push --force-with-lease rejected (concurrent update; skip)
+#   3 — rebase conflict; stdout has newline-separated conflicted file paths
+#
+# NOTE: git worktree remove --force can fail when the worktree is still dirty
+# after rebase --abort (git refuses to remove a worktree with untracked files
+# in some versions). The trap falls back to rm -rf; git worktree prune on the
+# next reconciler tick will remove the stale entry from .git/worktrees.
+_reconcile_rebase_one_pr() {
+    local repo="$1" pr_num="$2" base="$3" head="$4"
+    local wt
+    wt=$(mktemp -d "/tmp/loop-rebase-${repo//\//-}-${pr_num}-XXXXXX")
+    # shellcheck disable=SC2064
+    trap "git -C '$LOOP_ROOT' worktree remove --force '$wt' 2>/dev/null || true; rm -rf '$wt'" RETURN
+    git -C "$LOOP_ROOT" fetch --quiet origin "$base" "$head" || return 1
+    git -C "$LOOP_ROOT" worktree add --quiet "$wt" "origin/$head" || return 1
+    if git -C "$wt" rebase --quiet "origin/$base"; then
+        git -C "$wt" push --force-with-lease origin "HEAD:$head" || return 2
+        return 0
+    else
+        local conflicted
+        conflicted=$(git -C "$wt" diff --name-only --diff-filter=U 2>/dev/null || echo "")
+        git -C "$wt" rebase --abort 2>/dev/null || true
+        printf '%s\n' "$conflicted"
+        return 3
+    fi
+}
+
+# --- Sweep: auto-rebase loop PRs when base branch has advanced ----------------
+# Scans open loop-opened PRs (feat/issue-N-*) whose mergeStateStatus is DIRTY
+# or mergeable is CONFLICTING. For each, attempts an isolated git rebase onto
+# origin/<base>. Clean rebases are pushed with --force-with-lease so CI
+# re-runs and Sweep 1 (reconcile_ci_green_prs) can promote them. Conflicting
+# rebases route the PR back to needs-rework with a diagnostic comment listing
+# each conflicted file and the most recent base commit that touched it.
+#
+# No-op conditions (checked before any git operation):
+#   - PR already carries needs-rework, changes-requested, or blocked
+#   - PR has at least one human review (APPROVED or CHANGES_REQUESTED)
+#   - AUTO_REBASE_ON_BASE_MOVE=false
+#
+# This sweep does NOT change labels on a clean rebase — CI re-running and
+# promotion are out-of-band consequences handled by other sweeps.
+#
+# Configurable env (all optional):
+#   AUTO_REBASE_ON_BASE_MOVE — set to "false" to disable per-project (default: true)
+#   LOOP_BRANCH_PREFIX       — branch prefix convention (default: feat/issue-)
+reconcile_pr_base_moved() {
+    local repo="$1" slug="${2:-}"
+    local branch_prefix="${LOOP_BRANCH_PREFIX:-feat/issue-}"
+
+    if [ "${AUTO_REBASE_ON_BASE_MOVE:-true}" = "false" ]; then
+        log "[$repo] base-move: disabled via AUTO_REBASE_ON_BASE_MOVE=false — skipping"
+        return 0
+    fi
+
+    log "[$repo] base-move: scanning loop-opened PRs for base divergence"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    # Filter to loop-opened PRs; skip those already in terminal rework states.
+    # Emits: pr_num TAB head_ref TAB issue_num TAB labels_csv TAB pr_body(400)
+    local loop_prs
+    loop_prs=$(PJSON="$prs_json" PREFIX="$branch_prefix" python3 - <<'PY'
+import json, os, re
+prs = json.loads(os.environ['PJSON'])
+prefix = os.environ['PREFIX']
+pat = re.compile(r'^' + re.escape(prefix) + r'(\d+)-')
+skip_set = {'needs-rework', 'changes-requested', 'blocked'}
+for pr in prs:
+    head = pr.get('headRefName', '')
+    m = pat.match(head)
+    if not m:
+        continue
+    issue_num = m.group(1)
+    lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
+    if skip_set & set(lbls):
+        continue
+    print(f"{pr['number']}\t{head}\t{issue_num}\t{','.join(lbls)}\t{(pr.get('body') or '')[:400]}")
+PY
+)
+
+    if [ -z "$loop_prs" ]; then
+        log "[$repo] base-move: no eligible loop-opened PRs"
+        return 0
+    fi
+
+    local pr_num head_ref issue_num labels_csv pr_body
+    while IFS=$'\t' read -r pr_num head_ref issue_num labels_csv pr_body; do
+        [ -z "$pr_num" ] && continue
+
+        # Query per-PR merge state and reviews in one backend call.
+        local pr_state
+        pr_state=$(backend_pr_view "$repo" "$pr_num" \
+            --json mergeStateStatus,mergeable,baseRefName,latestReviews \
+            2>/dev/null || echo "{}")
+
+        local merge_status mergeable base_ref review_count
+        merge_status=$(printf '%s' "$pr_state" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('mergeStateStatus',''))" \
+            2>/dev/null || echo "")
+        mergeable=$(printf '%s' "$pr_state" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('mergeable',''))" \
+            2>/dev/null || echo "")
+        base_ref=$(printf '%s' "$pr_state" | python3 -c \
+            "import json,sys; d=json.load(sys.stdin); print(d.get('baseRefName','main'))" \
+            2>/dev/null || echo "main")
+        review_count=$(printf '%s' "$pr_state" | python3 -c "
+import json, sys
+d = json.load(sys.stdin)
+reviews = d.get('latestReviews', []) or []
+human = [r for r in reviews if r.get('state') in ('APPROVED', 'CHANGES_REQUESTED')]
+print(len(human))" 2>/dev/null || echo "0")
+
+        # Skip unless base has moved (DIRTY or CONFLICTING merge state).
+        case "${merge_status}:${mergeable}" in
+            DIRTY:*|*:CONFLICTING) : ;;
+            *)
+                log "[$repo] base-move: PR#$pr_num mergeState=$merge_status mergeable=$mergeable — not diverged, skip"
+                continue
+                ;;
+        esac
+
+        # Skip if a human has reviewed — don't auto-modify a reviewed PR.
+        if [ "${review_count:-0}" -gt 0 ]; then
+            log "[$repo] base-move: PR#$pr_num has human review (count=$review_count) — skip"
+            continue
+        fi
+
+        log "[$repo] base-move: PR#$pr_num ($head_ref → origin/$base_ref) is diverged — attempting rebase"
+
+        if $DRY_RUN; then
+            log "[$repo] DRY_RUN: would rebase PR#$pr_num ($head_ref) onto origin/$base_ref"
+            continue
+        fi
+
+        local rebase_out rebase_ret
+        rebase_out=$(_reconcile_rebase_one_pr "$repo" "$pr_num" "$base_ref" "$head_ref") \
+            && rebase_ret=0 || rebase_ret=$?
+
+        case "$rebase_ret" in
+            0)
+                log "[$repo] rebased PR #$pr_num cleanly onto origin/$base_ref"
+                _loop_emit_event "pr_rebased" \
+                    "{\"repo\":\"$repo\",\"pr_num\":$pr_num,\"issue_num\":$issue_num,\"base\":\"$base_ref\",\"head\":\"$head_ref\"}" \
+                    || true
+                ;;
+            3)
+                local conflicted_files="$rebase_out"
+                log "[$repo] base-move: PR#$pr_num rebase conflict — routing to needs-rework"
+
+                # Build diagnostic comment with most recent base commit per file.
+                local comment_lines
+                comment_lines=$(
+                    printf 'Reconciler: auto-rebase onto `origin/%s` failed with conflicts. Routing to `needs-rework`.\n\nConflicted files:\n' "$base_ref"
+                    while IFS= read -r cfile; do
+                        [ -z "$cfile" ] && continue
+                        local recent
+                        recent=$(git -C "$LOOP_ROOT" log --pretty='%h %s' \
+                            "origin/$base_ref" -10 -- "$cfile" 2>/dev/null | head -1 || echo "")
+                        printf -- '- `%s` — recent base commit: `%s`\n' \
+                            "$cfile" "${recent:-(unknown)}"
+                    done <<< "$conflicted_files"
+                )
+                backend_comment_pr "$repo" "$pr_num" "$comment_lines" 2>/dev/null || true
+
+                # Resolve rework trigger label for this project's workflow.
+                local rework_label
+                rework_label=$(loop_stage_trigger "$slug" "rework" "pr" 2>/dev/null \
+                    || echo "needs-rework")
+                [ -n "$rework_label" ] || rework_label="needs-rework"
+
+                backend_add_label "$repo" "$pr_num" "$rework_label" \
+                    || log "[$repo] WARN: base-move: failed to add $rework_label to PR#$pr_num"
+
+                # Strip trigger labels from the parent issue.
+                local trig_label
+                for trig_label in needs-dev in-dev dev in-progress; do
+                    backend_remove_label "$repo" "$issue_num" "$trig_label" 2>/dev/null || true
+                done
+
+                # Emit conflict event.
+                local files_json
+                files_json=$(printf '%s\n' "$conflicted_files" | python3 -c \
+                    "import json,sys; files=[l for l in sys.stdin.read().splitlines() if l]; print(json.dumps(files))" \
+                    2>/dev/null || echo "[]")
+                _loop_emit_event "pr_rebase_conflict" \
+                    "{\"repo\":\"$repo\",\"pr_num\":$pr_num,\"issue_num\":$issue_num,\"conflicted_files\":$files_json}" \
+                    || true
+                ;;
+            1|2)
+                log "[$repo] base-move: PR#$pr_num transient git error (ret=$rebase_ret) — skipping, will retry next tick"
+                ;;
+        esac
+    done <<< "$loop_prs"
+
+    return 0
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -2074,6 +2302,7 @@ run_project() {
     reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_ci_red_prs "$REPO"
     reconcile_ci_green_prs "$REPO" "$slug"
+    reconcile_pr_base_moved "$REPO" "$slug"
     reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
     reconcile_stale_base "$REPO"
