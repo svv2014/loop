@@ -45,6 +45,12 @@ projects:
       # {project_root} is substituted at runtime. If absent, no post-implementation validation runs.
       validation_cmd: |
         cd {project_root} && make build
+      # Optional: cap on in-flight tickets per project across all pipeline
+      # stages (needs-po through qa-pass). `pipeline_slots: 1` is serial mode —
+      # the scanner refuses to emit fresh claims while a ticket is in flight.
+      # Downstream stages (review/qa/merge for existing work) still drain.
+      # Omit to disable the gate. See README → "Pipeline concurrency & priority".
+      # pipeline_slots: 1
 
     qa:
       # Optional: command run by QA handler to validate the PR branch.
