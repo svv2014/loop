@@ -28,9 +28,9 @@ context they need to fix their own failures rather than retry-burn.
   results. GitHub treats PRs as a kind of issue with shared number
   space; without the filter, a PR carrying \`needs-dev\` was emitted as
   a \`loop.dev_issue\` event with a PR-shaped payload (\`pr_number\` not
-  \`issue_number\`), boba-event's interpolator left \`{payload.issue_number}\`
+  \`issue_number\`), the event router's interpolator left \`{payload.issue_number}\`
   as a literal string, and dev-handler bailed on the resulting nonsense.
-  This single fix unblocked loop-monitor's entire pipeline (stalled 17 days).
+  This single fix unblocked the dependent project's entire pipeline (stalled 17 days).
 - **#243** po-handler belt-and-braces guard recognises \`needs-dev\` (was
   only checking the deprecated synonym). Eliminates a silent skip path.
 - **#239** \`_dedup_key\` portability: replace \`md5sum\` with a fallback
