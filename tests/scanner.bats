@@ -585,6 +585,63 @@ YAML
     fi
 }
 
+# Regression for #267 follow-up: a backlog of issues sitting at the
+# first-stage trigger (e.g. 6 tickets at `needs-po`) used to count against
+# the pipeline_slots gate, deadlocking the very stage that would drain
+# them. Fix: the first-stage trigger is excluded from in-flight counting.
+@test "pipeline_slots=1 + 6 needs-po tickets + 0 inflight: scanner emits ONE po claim (#267)" {
+    _write_fixture_config
+    export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
+
+    # 6 issues all sitting at needs-po (the first-stage trigger for
+    # proj-default). Before the fix these counted as in-flight=6 and the
+    # gate skipped all po claims. After the fix in-flight excludes the
+    # first-stage trigger and the gate lets one through.
+    local I1 I2 I3 I4 I5 I6
+    I1='{"number":1,"title":"a","url":"http://gh/1","labels":["needs-po"],"author":"bot"}'
+    I2='{"number":2,"title":"b","url":"http://gh/2","labels":["needs-po"],"author":"bot"}'
+    I3='{"number":3,"title":"c","url":"http://gh/3","labels":["needs-po"],"author":"bot"}'
+    I4='{"number":4,"title":"d","url":"http://gh/4","labels":["needs-po"],"author":"bot"}'
+    I5='{"number":5,"title":"e","url":"http://gh/5","labels":["needs-po"],"author":"bot"}'
+    I6='{"number":6,"title":"f","url":"http://gh/6","labels":["needs-po"],"author":"bot"}'
+
+    backend_list_issues_with_label() {
+        local _label="$2"
+        if [ "$_label" = "needs-po" ]; then
+            printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$I1" "$I2" "$I3" "$I4" "$I5" "$I6"
+        fi
+        return 0
+    }
+    backend_list_prs_with_label()  { return 0; }
+    backend_list_open_prs_raw()    { echo "[]"; }
+    backend_issue_has_any_label()  { return 1; }
+    backend_pr_has_any_label()     { return 1; }
+    backend_issue_unmet_deps()     { return 1; }
+    loop_load_backend()            { return 0; }
+    loop_load_project() {
+        REPO="owner/default-repo"
+        MAX_CONCURRENT_PRS=3
+        PIPELINE_SLOTS=1
+        BACKEND=github
+        WORKFLOW=default
+        ALLOWED_AUTHORS=""
+        LOOP_LABEL_OVERRIDES=""
+        return 0
+    }
+
+    local emit_log="$BATS_TMPDIR/emit-po-backlog.log"
+    rm -f "$emit_log"
+    emit() { echo "$1" >> "$emit_log"; return 0; }
+
+    scan_project "proj-default"
+
+    [ -f "$emit_log" ]
+    local lines
+    lines=$(wc -l < "$emit_log" | tr -d ' ')
+    [ "$lines" -eq 1 ]
+    grep -q '"type".*"loop\.po_review"' "$emit_log"
+}
+
 @test "emit: no dedup key file created when dedup_id is empty" {
     local dispatch_log="$BATS_TMPDIR/dispatch3.log"
     rm -f "$dispatch_log"
