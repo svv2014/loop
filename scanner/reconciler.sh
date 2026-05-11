@@ -2307,12 +2307,22 @@ reconcile_orphan_issues() {
     issues_json=$(gh issue list --repo "$repo" --state open --limit 200 \
         --json number,title,labels,author 2>/dev/null || echo "[]")
 
+    # Pre-fetch open PR bodies once so we can skip issues that already have an
+    # open PR claiming to close them. Without this guard, dev-handler's
+    # post-PR cleanup (removes `needs-dev` from the issue) leaves the issue
+    # with no pipeline label → this function re-labels it `needs-po` → PO
+    # runs again → dev opens another PR → reconcile_duplicate_prs closes the
+    # older one → infinite po → dev → po loop (svv2014/loop#312).
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo" 2>/dev/null || echo "[]")
+
     local orphans
-    orphans=$(ALLOWED="${ALLOWED_AUTHORS:-}" ISSUES="$issues_json" python3 - <<'PY'
-import json, os
+    orphans=$(ALLOWED="${ALLOWED_AUTHORS:-}" ISSUES="$issues_json" PRS="$prs_json" python3 - <<'PY'
+import json, os, re
 allowed_raw = os.environ.get('ALLOWED', '').strip()
 allowed = {a.strip() for a in allowed_raw.split(',') if a.strip()}
 issues = json.loads(os.environ.get('ISSUES') or '[]')
+prs = json.loads(os.environ.get('PRS') or '[]')
 
 TRIGGERS = {
     'needs-po', 'in-po', 'po-review',
@@ -2321,9 +2331,23 @@ TRIGGERS = {
 TERMINALS = {'needs-clarification', 'blocked', 'done'}
 SKIP_KIND = {'epic', 'tracker'}
 
+# Build the set of issue numbers that have at least one open PR closing them.
+_LINK_RE = re.compile(r'(?:clos(?:e|es|ed)|fix(?:|es|ed)|resolv(?:e|es|ed))\s+#(\d+)', re.I)
+linked = set()
+for pr in prs:
+    for n in _LINK_RE.findall(pr.get('body') or ''):
+        try:
+            linked.add(int(n))
+        except (TypeError, ValueError):
+            pass
+
 for it in issues:
     num = it.get('number')
     if num is None:
+        continue
+    if num in linked:
+        # An open PR already references this issue — pipeline is in flight,
+        # not orphaned. Skip.
         continue
     labels = {
         (l.get('name') if isinstance(l, dict) else l)

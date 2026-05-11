@@ -42,9 +42,10 @@ GHEOF
     chmod +x "$BATS_TMPDIR/bin/gh"
     export PATH="$BATS_TMPDIR/bin:$PATH"
 
-    backend_add_label() { echo "add_label $2 $3" >> "$OPS_LOG"; }
-    _loop_emit_event()  { echo "emit_event $1" >> "$OPS_LOG"; }
-    log()               { :; }
+    backend_add_label()         { echo "add_label $2 $3" >> "$OPS_LOG"; }
+    backend_list_open_prs_raw() { printf '%s\n' "${MOCK_PRS_JSON:-[]}"; }
+    _loop_emit_event()          { echo "emit_event $1" >> "$OPS_LOG"; }
+    log()                       { :; }
 }
 
 teardown() {
@@ -161,4 +162,69 @@ teardown() {
     [ "$status" -eq 0 ]
 
     [ ! -f "$OPS_LOG" ] || [ ! -s "$OPS_LOG" ] || ! grep -qE "add_label 77" "$OPS_LOG"
+}
+
+# ---------------------------------------------------------------------------
+# Regression for svv2014/loop#312: issues with an open PR closing them are not
+# orphans — re-labeling them needs-po triggers an infinite po → dev → po loop.
+# ---------------------------------------------------------------------------
+
+@test "reconcile_orphan_issues: issue with open PR closing it is skipped" {
+    export MOCK_ISSUES_JSON='[{
+        "number": 126,
+        "title": "Has an open PR linked to it",
+        "labels": [{"name": "p1-high"}, {"name": "bug"}],
+        "author": {"login": "alice"}
+    }]'
+    export MOCK_PRS_JSON='[{
+        "number": 200,
+        "body": "Closes #126\n\nFixes the leak.",
+        "createdAt": "2026-05-11T10:00:00Z",
+        "title": "[LM-126] fix"
+    }]'
+
+    run reconcile_orphan_issues "$REPO" "$SLUG"
+    [ "$status" -eq 0 ]
+
+    [ ! -f "$OPS_LOG" ] || [ ! -s "$OPS_LOG" ] || ! grep -qE "add_label 126" "$OPS_LOG"
+}
+
+@test "reconcile_orphan_issues: PR body uses Fixes #N instead of Closes — still skipped" {
+    export MOCK_ISSUES_JSON='[{
+        "number": 50,
+        "title": "Has an open PR via Fixes",
+        "labels": [{"name": "p2-medium"}],
+        "author": {"login": "alice"}
+    }]'
+    export MOCK_PRS_JSON='[{
+        "number": 201,
+        "body": "Fixes #50",
+        "createdAt": "2026-05-11T10:00:00Z",
+        "title": "[fix]"
+    }]'
+
+    run reconcile_orphan_issues "$REPO" "$SLUG"
+    [ "$status" -eq 0 ]
+
+    [ ! -f "$OPS_LOG" ] || [ ! -s "$OPS_LOG" ] || ! grep -qE "add_label 50" "$OPS_LOG"
+}
+
+@test "reconcile_orphan_issues: issue NOT referenced by any open PR is still labeled" {
+    export MOCK_ISSUES_JSON='[{
+        "number": 99,
+        "title": "No PR for this one",
+        "labels": [{"name": "p1-high"}],
+        "author": {"login": "alice"}
+    }]'
+    export MOCK_PRS_JSON='[{
+        "number": 202,
+        "body": "Closes #1000",
+        "createdAt": "2026-05-11T10:00:00Z",
+        "title": "unrelated PR"
+    }]'
+
+    run reconcile_orphan_issues "$REPO" "$SLUG"
+    [ "$status" -eq 0 ]
+
+    grep -q "add_label 99 needs-po" "$OPS_LOG"
 }
