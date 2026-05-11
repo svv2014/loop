@@ -187,6 +187,32 @@ SH
     [ "$received" = "$injection_prompt" ]
 }
 
+@test "custom agent: invoked inside the cwd passed to loop_run_agent" {
+    local fake_worktree
+    fake_worktree="$(mktemp -d)"
+    local pwd_file="$BATS_TMPDIR/custom_pwd"
+    local custom_script="$BATS_TMPDIR/pwd-recorder.sh"
+    cat > "$custom_script" <<SH
+#!/usr/bin/env bash
+pwd > "$pwd_file"
+exit 0
+SH
+    chmod +x "$custom_script"
+
+    export LOOP_AGENT="custom"
+    export LOOP_AGENT_CMD="$custom_script"
+    unset _PROJECT_FALLBACK
+
+    run loop_run_agent "do something" "$fake_worktree"
+    [ "$status" -eq 0 ]
+
+    local recorded
+    recorded="$(cat "$pwd_file")"
+    [ "$recorded" = "$fake_worktree" ]
+
+    rm -rf "$fake_worktree"
+}
+
 @test "claude branch never passes --cwd flag (regression of LOOP-29 / LOOP-152)" {
     # Stub records full argv so we can assert no --cwd is passed.
     cat > "$STUB_DIR/claude" <<'STUB'
