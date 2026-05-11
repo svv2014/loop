@@ -177,6 +177,38 @@ projects:
       auto_rework_on_ci: false   # disable reconciler auto-rework on red CI
 ```
 
+### Auto-promote on green CI
+
+When Loop opens a PR (branch convention `feat/issue-N-*`) and **all required**
+CI checks reach `SUCCESS`, the reconciler automatically promotes the PR from
+`needs-dev` to the project's review-stage trigger label (typically
+`needs-review`) so it enters the human-review phase without manual
+intervention. The reconciler is a no-op when:
+
+- The PR does not carry `needs-dev`.
+- The PR already carries `needs-review`, `changes-requested`, or `needs-rework`.
+- A human reviewer has left an `APPROVED`, `CHANGES_REQUESTED`, or `COMMENTED`
+  review (reviewers in `ALLOWED_AUTHORS` are excluded from this check).
+- Any required check is not yet `SUCCESS` (e.g. `PENDING`, `IN_PROGRESS`,
+  `EXPECTED`, `QUEUED`, or `FAILURE`).
+- No required checks are configured and the PR is not `MERGEABLE` (guard
+  against promoting unverified PRs in repos with no branch protection).
+
+A `pr_ci_passed` event is posted to loop-monitor (if `LOOP_MONITOR_URL` is
+set in `loop.env`) for observability.
+
+**To opt out per project**, set `AUTO_PROMOTE_ON_CI=false` in `loop.env`, or
+configure it in `config/projects.yaml` and ensure the env var is exported
+before the reconciler runs:
+
+```yaml
+projects:
+  - slug: myapp
+    repo: owner/my-app
+    dev:
+      auto_promote_on_ci: false   # disable reconciler auto-promote on green CI
+```
+
 ## Supported AI agents
 
 Set `LOOP_AGENT` in `loop.env`:
