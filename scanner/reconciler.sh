@@ -1870,6 +1870,185 @@ print(json.dumps({'type':'pr_ci_failed','payload':{'repo':'${repo}','pr_number':
     done <<< "$loop_prs"
 }
 
+# reconcile_ci_green_prs <repo> [slug]
+#
+# For each loop-opened PR (branch matches LOOP_BRANCH_PREFIX) whose required
+# CI checks are all SUCCESS and which still carries needs-dev, promote it to
+# the project's review-stage trigger label (default: needs-review) and emit
+# a pr_ci_passed event. This closes the "green CI but PR sits indefinitely"
+# gap without requiring a human to manually trigger review.
+#
+# No-op conditions (checked before any mutation):
+#   - PR already has needs-review, changes-requested, or needs-rework
+#   - PR does not have needs-dev
+#   - PR has at least one human review (APPROVED, CHANGES_REQUESTED, or COMMENTED)
+#     from an author not in ALLOWED_AUTHORS
+#   - Any required check is not SUCCESS (PENDING/IN_PROGRESS/EXPECTED/FAILURE etc.)
+#   - No required checks and PR is not MERGEABLE (guard for unconfigured repos)
+#   - AUTO_PROMOTE_ON_CI is set to "false"
+#
+# Configurable env (all optional):
+#   AUTO_PROMOTE_ON_CI     — set to "false" to disable per-project (default: true)
+#   LOOP_BRANCH_PREFIX     — branch prefix convention (default: feat/issue-)
+reconcile_ci_green_prs() {
+    local repo="$1"
+    local slug="${2:-}"
+    local branch_prefix="${LOOP_BRANCH_PREFIX:-feat/issue-}"
+
+    # Per-project opt-out via AUTO_PROMOTE_ON_CI=false (or dev.auto_promote_on_ci
+    # in projects.yaml set as an env var before calling this function).
+    if [ "${AUTO_PROMOTE_ON_CI:-true}" = "false" ]; then
+        log "[$repo] CI-promote: disabled via AUTO_PROMOTE_ON_CI=false — skipping"
+        return 0
+    fi
+
+    log "[$repo] CI-promote: scanning loop-opened PRs for green CI"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    # Filter to PRs whose head branch matches the loop convention.
+    local loop_prs
+    loop_prs=$(PJSON="$prs_json" PREFIX="$branch_prefix" python3 - <<'PY'
+import json, os, re
+prs = json.loads(os.environ['PJSON'])
+prefix = os.environ['PREFIX']
+pat = re.compile(r'^' + re.escape(prefix) + r'(\d+)-')
+for pr in prs:
+    head = pr.get('headRefName', '')
+    m = pat.match(head)
+    if not m:
+        continue
+    issue_num = m.group(1)
+    lbls = [l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])]
+    print(f"{pr['number']}\t{head}\t{issue_num}\t{','.join(lbls)}\t{(pr.get('body') or '')[:400]}")
+PY
+)
+
+    if [ -z "$loop_prs" ]; then
+        log "[$repo] CI-promote: no loop-opened PRs found"
+        return 0
+    fi
+
+    local pr_num head_ref issue_num labels_csv pr_body
+    while IFS=$'\t' read -r pr_num head_ref issue_num labels_csv pr_body; do
+        [ -z "$pr_num" ] && continue
+
+        # PR must have needs-dev to be a promotion candidate.
+        if ! echo "$labels_csv" | grep -q 'needs-dev'; then
+            log "[$repo] CI-promote: PR#$pr_num lacks needs-dev — skip"
+            continue
+        fi
+
+        # Skip if PR already has needs-review, changes-requested, or needs-rework.
+        if echo "$labels_csv" | grep -qE '(needs-review|changes-requested|needs-rework)'; then
+            log "[$repo] CI-promote: PR#$pr_num already has review/rework label — skip"
+            continue
+        fi
+
+        # Fetch PR details: CI status rollup, latest reviews, labels, mergeability.
+        local pr_detail
+        pr_detail=$(backend_pr_view "$repo" "$pr_num" \
+            --json statusCheckRollup,latestReviews,labels,mergeable \
+            2>/dev/null || echo "")
+
+        if [ -z "$pr_detail" ]; then
+            log "[$repo] CI-promote: PR#$pr_num — failed to fetch PR detail — skip"
+            continue
+        fi
+
+        # Evaluate CI checks and human reviews in one Python pass.
+        local promote_verdict
+        promote_verdict=$(DETAIL="$pr_detail" ALLOWED="${ALLOWED_AUTHORS:-}" python3 - <<'PY2'
+import json, os
+detail = json.loads(os.environ['DETAIL'])
+allowed = set(a.strip() for a in os.environ.get('ALLOWED', '').split(',') if a.strip())
+
+# Check latestReviews for human reviews (any non-bot reviewer).
+for review in detail.get('latestReviews', []):
+    state = review.get('state', '')
+    author_login = (review.get('author') or {}).get('login', '')
+    if state in ('APPROVED', 'CHANGES_REQUESTED', 'COMMENTED') and author_login not in allowed:
+        print('human_review')
+        raise SystemExit(0)
+
+# Evaluate statusCheckRollup.
+rollup = detail.get('statusCheckRollup', [])
+mergeable = detail.get('mergeable', '')
+
+if not rollup:
+    # No checks configured: promote only if GitHub considers the PR mergeable.
+    if mergeable == 'MERGEABLE':
+        print('all_green')
+    else:
+        print('no_checks_not_mergeable')
+    raise SystemExit(0)
+
+required_checks = [c for c in rollup if c.get('isRequired')]
+if not required_checks:
+    # Checks present but none marked required: be conservative, require mergeable.
+    if mergeable == 'MERGEABLE':
+        print('all_green')
+    else:
+        print('no_required')
+    raise SystemExit(0)
+
+for c in required_checks:
+    state = (c.get('state') or c.get('conclusion') or '').upper()
+    if state in ('FAILURE', 'FAILED', 'ERROR', 'TIMED_OUT', 'ACTION_REQUIRED'):
+        print('failure')
+        raise SystemExit(0)
+    if state != 'SUCCESS':
+        # PENDING, IN_PROGRESS, EXPECTED, QUEUED, NEUTRAL, SKIPPED, STALE, etc.
+        print('pending')
+        raise SystemExit(0)
+
+print('all_green')
+PY2
+)
+
+        if [ "$promote_verdict" != "all_green" ]; then
+            log "[$repo] CI-promote: PR#$pr_num — verdict=$promote_verdict — skip"
+            continue
+        fi
+
+        log "[$repo] CI-promote: PR#$pr_num (branch=$head_ref) all required CI green — promoting to review"
+        loop_notify "Loop reconciler: $repo — PR#$pr_num (${head_ref}) CI all green; promoting to review (issue #${issue_num})"
+
+        if $DRY_RUN; then
+            log "[$repo] DRY_RUN: would promote PR#$pr_num to review, issue #$issue_num"
+            continue
+        fi
+
+        # Resolve the review-stage trigger label for this project's active workflow.
+        local review_label
+        review_label=$(loop_stage_trigger "${slug:-}" "review" "pr" 2>/dev/null || echo "")
+        [ -z "$review_label" ] && review_label="needs-review"
+
+        # Transition: remove needs-dev, add review trigger label.
+        backend_remove_label "$repo" "$pr_num" needs-dev \
+            || log "[$repo] WARN: CI-promote: failed to remove needs-dev from PR#$pr_num"
+        backend_add_label "$repo" "$pr_num" "$review_label" \
+            || log "[$repo] WARN: CI-promote: failed to add $review_label to PR#$pr_num"
+
+        # Emit pr_ci_passed event to loop-monitor (fire-and-forget; non-fatal if absent).
+        local monitor_url="${LOOP_MONITOR_URL:-}"
+        if [ -n "$monitor_url" ]; then
+            local event_payload
+            event_payload=$(python3 -c "
+import json
+print(json.dumps({'type':'pr_ci_passed','payload':{'repo':'${repo}','pr_number':${pr_num},'issue_number':${issue_num},'branch':'${head_ref}'}}))" 2>/dev/null || echo "")
+            if [ -n "$event_payload" ]; then
+                curl -s -X POST "$monitor_url/events" \
+                    -H 'Content-Type: application/json' \
+                    -d "$event_payload" >/dev/null 2>&1 || true
+            fi
+        fi
+
+        log "[$repo] CI-promote: done — PR#$pr_num → $review_label, needs-dev removed"
+    done <<< "$loop_prs"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -1891,6 +2070,7 @@ run_project() {
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
     reconcile_ci_red_prs "$REPO"
+    reconcile_ci_green_prs "$REPO" "$slug"
     reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
     reconcile_stale_base "$REPO"
