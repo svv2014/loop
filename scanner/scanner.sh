@@ -248,6 +248,66 @@ author_is_allowed() {
     return 1
 }
 
+# _sort_rows_by_priority — read newline-delimited JSON rows from stdin,
+# write them back to stdout sorted by (priority-label, number ASC).
+# Priority order: p0-critical > p1-high > p2-medium > p3-low > unlabeled.
+# Tiebreaker: lower issue/PR number (proxy for older created_at, since GitHub
+# IDs are monotonic — and `created_at` requires an extra API field).
+_sort_rows_by_priority() {
+    python3 -c '
+import json, sys
+PRIORITY = {"p0-critical": 0, "p1-high": 1, "p2-medium": 2, "p3-low": 3}
+rows = []
+for line in sys.stdin:
+    line = line.rstrip("\n")
+    if not line:
+        continue
+    try:
+        obj = json.loads(line)
+    except Exception:
+        continue
+    labels = obj.get("labels") or []
+    p = min((PRIORITY[l] for l in labels if l in PRIORITY), default=4)
+    rows.append((p, obj.get("number", 0), line))
+rows.sort(key=lambda x: (x[0], x[1]))
+for _, _, line in rows:
+    print(line)
+'
+}
+
+# count_inflight_issues <slug> <repo>
+# Count distinct open issues that carry at least one pipeline label (workflow
+# issue or PR trigger labels, plus handler-set in-flight labels in-progress/blocked).
+# Used by the per-project `pipeline_slots` gate.
+count_inflight_issues() {
+    local slug="$1" repo="$2"
+    local labels
+    labels=$(
+        {
+            loop_polled_labels "$slug" issue 2>/dev/null
+            loop_polled_labels "$slug" pr 2>/dev/null
+            printf 'in-progress\nblocked\n'
+        } | awk 'NF && !seen[$0]++'
+    )
+    local seen_tmp
+    seen_tmp=$(mktemp)
+    local lbl
+    while IFS= read -r lbl; do
+        [ -z "$lbl" ] && continue
+        while IFS= read -r _r; do
+            [ -z "$_r" ] && continue
+            local _n
+            _n=$(printf '%s' "$_r" | python3 -c "import json,sys; print(json.load(sys.stdin).get('number',''))" 2>/dev/null)
+            [ -z "$_n" ] && continue
+            printf '%s\n' "$_n" >> "$seen_tmp"
+        done < <(backend_list_issues_with_label "$repo" "$lbl" 2>/dev/null || true)
+    done <<< "$labels"
+    local n
+    n=$(awk 'NF' "$seen_tmp" | sort -u | wc -l | tr -d ' ')
+    rm -f "$seen_tmp"
+    echo "${n:-0}"
+}
+
 # count_inflight_prs <slug> <repo>
 # Count open PRs that carry at least one pipeline label.
 # Pipeline labels are derived from the project's workflow PR trigger labels
@@ -350,7 +410,7 @@ _scan_issue_stage() {
         # handler ran in the last 30 min and is likely still in flight, so
         # it should consume a concurrency slot too.
         _emitted=$(( _emitted + 1 ))
-    done < <(backend_list_issues_with_label "$repo" "$trigger_label")
+    done < <(backend_list_issues_with_label "$repo" "$trigger_label" | _sort_rows_by_priority)
 }
 
 # _scan_dev_issue_stage — dev_issue with concurrent slot limiting, priority sort, dep gating.
@@ -382,26 +442,10 @@ _scan_dev_issue_stage() {
         fi
     done < <(backend_list_issues_with_label "$repo" "$trigger_label")
 
-    # Sort by (priority-label, issue_number) so high-priority issues fire first.
+    # Sort by (priority-label, number) so high-priority issues fire first.
     local _sorted_tmp
     _sorted_tmp=$(mktemp)
-    _ROWS_FILE="$_rows_tmp" python3 <<'PY' > "$_sorted_tmp"
-import json, sys, os
-PRIORITY = {'p0-critical': 0, 'p1-high': 1, 'p2-medium': 2, 'p3-low': 3}
-rows = []
-with open(os.environ['_ROWS_FILE']) as fh:
-    for line in fh:
-        line = line.rstrip('\n')
-        if not line:
-            continue
-        obj = json.loads(line)
-        labels = obj.get('labels', [])
-        p = min((PRIORITY[l] for l in labels if l in PRIORITY), default=4)
-        rows.append((p, obj['number'], line))
-rows.sort(key=lambda x: (x[0], x[1]))
-for _, _, line in rows:
-    print(line)
-PY
+    _sort_rows_by_priority < "$_rows_tmp" > "$_sorted_tmp"
     mv "$_sorted_tmp" "$_rows_tmp"
 
     local _emitted=0
@@ -483,7 +527,7 @@ _scan_pr_stage() {
               "$rework_context_key" "$rework_context_val")
         emit "$evt" "${event_type}:${slug}:${num}"
         _emitted=$(( _emitted + 1 ))
-    done < <(backend_list_prs_with_label "$repo" "$trigger_label")
+    done < <(backend_list_prs_with_label "$repo" "$trigger_label" | _sort_rows_by_priority)
 }
 
 scan_project() {
@@ -507,12 +551,35 @@ scan_project() {
     wf_name=$(loop_workflow_for_project "$slug")
     log "scan: $slug ($repo) workflow=$wf_name"
 
+    # Serial / N-slot gate: when `dev.pipeline_slots` is set in projects.yaml,
+    # block fresh claims (the workflow's first issue trigger) once the project
+    # has that many tickets in flight already. Downstream stages (review/qa/
+    # merge for already-claimed work) continue normally, so in-flight tickets
+    # keep flowing to completion.
+    local _first_issue_trigger=""
+    _first_issue_trigger=$(loop_polled_labels "$slug" issue 2>/dev/null | awk 'NF{print; exit}')
+    local _slots_gate_active=false
+    if [ -n "${PIPELINE_SLOTS:-}" ] && [ "$PIPELINE_SLOTS" -ge 1 ] 2>/dev/null; then
+        local _if_issues _if_prs _if_total
+        _if_issues=$(count_inflight_issues "$slug" "$repo")
+        _if_prs=$(count_inflight_prs "$slug" "$repo")
+        _if_total=$(( _if_issues + _if_prs ))
+        log "pipeline_slots=${PIPELINE_SLOTS} in-flight=${_if_total} (issues=${_if_issues} prs=${_if_prs})"
+        if [ "$_if_total" -ge "$PIPELINE_SLOTS" ]; then
+            _slots_gate_active=true
+            log "skip first-stage claims for $slug: ${_if_total}/${PIPELINE_SLOTS} tickets in flight"
+        fi
+    fi
+
     # Issue stages — iterated from the project's active workflow.
     while IFS= read -r trigger_label; do
         [ -z "$trigger_label" ] && continue
         local handler event_type
         handler=$(loop_handler_for_label "$slug" "$trigger_label" 2>/dev/null || true)
         [ -z "$handler" ] && continue
+        if $_slots_gate_active && [ "$trigger_label" = "$_first_issue_trigger" ]; then
+            continue
+        fi
         event_type=$(_handler_to_event_type "$handler")
         _scan_issue_stage "$slug" "$repo" "$trigger_label" "$handler" "$event_type"
     done < <(loop_polled_labels "$slug" issue)

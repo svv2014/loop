@@ -256,6 +256,50 @@ projects:
       auto_rebase_on_base_move: false   # disable reconciler auto-rebase on base-move
 ```
 
+## Pipeline concurrency & priority
+
+Loop's scanner picks issues to claim every 5 minutes. Two knobs control how
+it picks:
+
+**`dev.pipeline_slots`** (per-project, optional) — cap the number of
+in-flight tickets per project across *all* pipeline stages
+(`needs-po` through `needs-qa` / `qa-pass`). When the project already has
+that many tickets in flight, the scanner refuses to emit fresh claims at
+the first issue stage; downstream stages (review / qa / merge for existing
+work) keep flowing so in-flight tickets drain to completion.
+
+- `pipeline_slots: 1` → **serial mode** (recommended when you want to fully
+  finish one ticket before starting the next; useful for repos where mid-
+  flight rework is expensive or PO/dev failures tend to leave half-done state).
+- `pipeline_slots: N` (N ≥ 2) → cap concurrent tickets at N.
+- Omit to disable the gate (legacy behaviour: `dev.max_concurrent_prs`
+  is the only cap).
+
+```yaml
+projects:
+  - slug: myapp
+    repo: owner/my-app
+    dev:
+      pipeline_slots: 1   # serial: finish one before starting the next
+```
+
+**Priority-aware pick order.** Whenever multiple candidates carry a trigger
+label, the scanner orders them by priority label before claiming:
+
+> `p0-critical` → `p1-high` → `p2-medium` → `p3-low` → unlabeled
+
+Tiebreaker: lower issue/PR number (oldest first). This applies regardless
+of `pipeline_slots`, so multi-slot projects still drain `p1-high` work
+before `p3-low`.
+
+**Serial vs parallel — which to pick?**
+
+| Use serial (`pipeline_slots: 1`) | Use parallel (default / `max_concurrent_prs > 1`) |
+|---|---|
+| Solo project where context-switching is expensive | Big repo with many independent issues |
+| Recent failures left half-done tickets | Mature pipeline with reliable PO/dev/QA |
+| You want one ticket fully merged before the next starts | You want to maximise throughput per scan tick |
+
 ## Supported AI agents
 
 Set `LOOP_AGENT` in `loop.env`:

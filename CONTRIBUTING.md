@@ -56,6 +56,24 @@ safe. Then `needs-qa` triggers the build/test as normal.
 If you submit a fork PR and CI seems stuck, ping a maintainer to
 review for the `safe-to-test` label.
 
+## Pipeline pacing for contributors
+
+If you're working on scanner or workflow code, two knobs decide which
+tickets get picked each tick:
+
+- **`dev.pipeline_slots`** (in `config/projects.yaml`) — when set, the
+  scanner enforces a per-project cap on in-flight tickets across the whole
+  pipeline. `pipeline_slots: 1` is serial mode (one ticket at a time);
+  larger values cap concurrent work. The gate only suppresses fresh claims
+  at the first issue stage — downstream stages still flow.
+- **Priority-aware ordering** — candidates are sorted by priority label
+  (`p0-critical` → `p1-high` → `p2-medium` → `p3-low` → unlabeled, then by
+  number ascending) before the scanner picks. Applies to every stage.
+
+When adding a workflow stage or changing claim logic in `scanner/scanner.sh`,
+preserve both behaviours: respect `PIPELINE_SLOTS` for first-stage gates and
+keep the `_sort_rows_by_priority` pipe on every backend listing.
+
 ## Versioning
 
 Loop follows [SemVer](https://semver.org). Schema and env-var changes

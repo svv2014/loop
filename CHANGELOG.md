@@ -16,6 +16,9 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ### Changed
 - [LOOP-262] resolve rework trigger label per-project in pr-watchdog (#277)
+- [LOOP-267] scanner: new `dev.pipeline_slots` gate (serial mode) +
+  priority-aware pick order (`p0-critical` > `p1-high` > `p2-medium` >
+  `p3-low` > unlabeled, then by number ascending), applied at every stage
 ## [0.4.0] - 2026-05-10
 
 A 12-PR batch focused on making the autonomous pipeline self-correcting
