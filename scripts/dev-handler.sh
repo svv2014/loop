@@ -30,6 +30,8 @@ source "$LOOP_ROOT/lib/cli-hint.sh"
 source "$LOOP_ROOT/lib/worktree.sh"
 # shellcheck source=../lib/failure_classifier.sh
 source "$LOOP_ROOT/lib/failure_classifier.sh"
+# shellcheck source=../lib/failure_category.sh
+source "$LOOP_ROOT/lib/failure_category.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-handler.log"
 MAX_RETRIES=3
@@ -277,7 +279,8 @@ else
     if loop_is_missing_untracked_data "$_agent_tail"; then
         _missing_path=$(loop_extract_missing_path "$_agent_tail")
         log "dev agent failed for #$ISSUE_NUM — untracked-data dependency (${_missing_path:-?}); marking blocked without burning retry"
-        bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="untracked-data: ${_missing_path:-?}" || true
+        _failure_reason=$(loop_failure_category "$_agent_tail" 1)
+        bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="untracked-data: ${_missing_path:-?}" failure_reason="$_failure_reason" || true
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked
         _block_body=$(mktemp /tmp/loop-block-XXXXXX.md)
@@ -322,7 +325,8 @@ else
     # will see the cool-down and skip until the next-eligible time.
     loop_backoff_record_failure "$SLUG" "$ISSUE_NUM" dev "dev attempt ${n}/${MAX_RETRIES}" >/dev/null || true
     log "dev agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES); backoff next-eligible logged"
-    bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
+    _failure_reason=$(loop_failure_category "$_agent_tail" 1)
+    bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" failure_reason="$_failure_reason" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked
