@@ -49,15 +49,15 @@ teardown() {
     backend_remove_label "owner/test-repo" "1" "$_dev_trigger"
     backend_add_label    "owner/test-repo" "1" "in-progress"
 
-    # trigger label must be removed
-    grep -q "remove dev" "$ops_log"
+    # trigger label must be removed (default workflow uses needs-dev)
+    grep -q "remove needs-dev" "$ops_log"
     # in-progress must be added
     grep -q "add in-progress" "$ops_log"
     # trigger label must NOT be re-added (no dual state)
-    ! grep -q "add dev" "$ops_log"
+    ! grep -q "add needs-dev" "$ops_log"
     # remove must precede add
     local rm_line add_line
-    rm_line=$(grep -n "remove dev" "$ops_log" | cut -d: -f1)
+    rm_line=$(grep -n "remove needs-dev" "$ops_log" | cut -d: -f1)
     add_line=$(grep -n "add in-progress" "$ops_log" | cut -d: -f1)
     [ "$rm_line" -lt "$add_line" ]
 }
@@ -110,11 +110,12 @@ YAML
     backend_remove_label "owner/test-repo" "1" "$_po_trigger"
     backend_add_label    "owner/test-repo" "1" "in-progress"
 
-    grep -q "remove po-review" "$ops_log"
+    # default workflow po trigger is needs-po
+    grep -q "remove needs-po" "$ops_log"
     grep -q "add in-progress" "$ops_log"
-    ! grep -q "add po-review" "$ops_log"
+    ! grep -q "add needs-po" "$ops_log"
     local rm_line add_line
-    rm_line=$(grep -n "remove po-review" "$ops_log" | cut -d: -f1)
+    rm_line=$(grep -n "remove needs-po" "$ops_log" | cut -d: -f1)
     add_line=$(grep -n "add in-progress" "$ops_log" | cut -d: -f1)
     [ "$rm_line" -lt "$add_line" ]
 }
@@ -278,7 +279,8 @@ EOF
     _QA_LABEL=$(loop_label_for "test-proj" "needs-qa")
 
     [ "$_REVIEW_LABEL" = "needs-review" ]
-    [ "$_REWORK_LABEL" = "needs-rework" ]
+    # default workflow rework stage uses needs-dev as its trigger_label
+    [ "$_REWORK_LABEL" = "needs-dev" ]
     [ "$_QA_LABEL" = "needs-qa" ]
 
     local SLUG=test-proj REPO=owner/test-repo ISSUE_NUM=1
@@ -292,9 +294,9 @@ IMPORTANT: label '${_REVIEW_LABEL}' (or 'needs-clarification' if blocked).
 EOF
     )
 
-    # Default workflow: canonical names must appear in the prompt
+    # Default workflow: resolved trigger names must appear in the prompt
     [[ "$prompt" == *"needs-review"* ]]
-    [[ "$prompt" == *"needs-rework"* ]]
+    [[ "$prompt" == *"needs-dev"* ]]
     [[ "$prompt" == *"needs-qa"* ]]
     [[ "$prompt" != *"review-pending"* ]]
 }

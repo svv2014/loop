@@ -660,7 +660,7 @@ PY
         local repo_slug="${repo//\//-}"
         local sentinel="$cool_down_dir/${repo_slug}-${num}"
         if [ -f "$sentinel" ]; then
-            local mtime; mtime=$(stat -f %m "$sentinel" 2>/dev/null || stat -c %Y "$sentinel" 2>/dev/null || echo 0)
+            local mtime; mtime=$(stat -c %Y "$sentinel" 2>/dev/null || stat -f %m "$sentinel" 2>/dev/null || echo 0)
             local age=$(( now_epoch - mtime ))
             if [ "$age" -lt "$cool_down_seconds" ]; then
                 log "[$repo] LOST issue #$num — Signal cooled-down (last notified ${age}s ago)"
@@ -1597,7 +1597,7 @@ PY
         local now_epoch; now_epoch=$(date +%s)
 
         if [ -f "$sentinel" ]; then
-            local mtime; mtime=$(stat -f %m "$sentinel" 2>/dev/null || stat -c %Y "$sentinel" 2>/dev/null || echo 0)
+            local mtime; mtime=$(stat -c %Y "$sentinel" 2>/dev/null || stat -f %m "$sentinel" 2>/dev/null || echo 0)
             local age=$(( now_epoch - mtime ))
             if [ "$age" -lt "$cool_down_seconds" ]; then
                 log "[$repo] anomaly: #$num touches=$touches in ${window_hours}h — Signal cooled-down (${age}s ago)"
@@ -1705,7 +1705,7 @@ for c in data.get("comments", [])[-10:]:
         local repo_slug="${repo//\//-}"
         local sentinel="$state_dir/${repo_slug}-${num}"
         if [ -f "$sentinel" ]; then
-            local mtime; mtime=$(stat -f %m "$sentinel" 2>/dev/null || stat -c %Y "$sentinel" 2>/dev/null || echo 0)
+            local mtime; mtime=$(stat -c %Y "$sentinel" 2>/dev/null || stat -f %m "$sentinel" 2>/dev/null || echo 0)
             local age=$(( now_epoch - mtime ))
             if [ "$age" -lt "$cool_down_seconds" ]; then
                 log "[$repo] agent-distress: #$num matched '$matched' — Signal cooled-down (${age}s ago)"
