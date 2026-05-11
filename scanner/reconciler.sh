@@ -2366,6 +2366,177 @@ PY
     return 0
 }
 
+# --- Sweep: converge conflicting label sets to workflow-legal combinations ---
+# Stage handlers each touch a narrow set of labels and occasionally leave a
+# ticket in a workflow-illegal combination — e.g. a PR with both `qa-pass`
+# AND `needs-dev` (qa passed but the rework signal stayed on), or a PR with
+# `qa-fail` but no `needs-rework` (failed QA, no rework trigger). These
+# combinations confuse the next handler: sometimes the wrong role claims,
+# sometimes nothing claims and the ticket stalls.
+#
+# This sweep enforces per-stage exclusivity rules so the label state always
+# represents a single workflow stage.
+#
+# PR rules:
+#   qa-pass                    → strip needs-dev, needs-review, needs-rework,
+#                                changes-requested, qa-fail, in-review, in-rework
+#   qa-fail | changes-requested → ensure needs-rework; strip qa-pass, needs-review
+#   needs-review               → never co-exists with needs-dev / needs-rework /
+#                                changes-requested (prefer rework, drop needs-review)
+#   ready-for-qa               → strip needs-review, needs-dev
+#
+# Issue rules:
+#   needs-dev → strip needs-po, in-po, po-review, plan
+#   needs-po  → strip needs-dev, in-progress, dev
+#   blocked   → terminal — strip all trigger labels
+#
+# Opt-out:  LOOP_LABEL_CONVERGE=false
+# DRY_RUN honored (logs intended mutations, no API calls).
+reconcile_label_consistency() {
+    local repo="$1" slug="$2"
+
+    if [ "${LOOP_LABEL_CONVERGE:-true}" = "false" ]; then
+        return 0
+    fi
+
+    log "[$repo] label-state convergence sweep"
+
+    local prs_json issues_json
+    prs_json=$(backend_list_open_prs_raw "$repo" 2>/dev/null || echo "[]")
+    issues_json=$(gh issue list --repo "$repo" --state open --limit 200 \
+        --json number,labels 2>/dev/null || echo "[]")
+
+    local plan
+    plan=$(PRS="$prs_json" ISSUES="$issues_json" python3 - <<'PY'
+import json, os
+
+prs = json.loads(os.environ.get('PRS') or '[]')
+issues = json.loads(os.environ.get('ISSUES') or '[]')
+
+PR_TRIGGERS_ON_QA_PASS = [
+    'needs-dev', 'needs-review', 'needs-rework',
+    'changes-requested', 'qa-fail', 'in-review', 'in-rework',
+]
+ISSUE_TRIGGERS_BLOCKED = [
+    'needs-po', 'in-po', 'po-review', 'plan',
+    'needs-dev', 'in-progress', 'dev',
+    'needs-review', 'needs-rework', 'changes-requested',
+    'ready-for-qa', 'in-review', 'in-rework',
+]
+
+def names(item):
+    return {
+        (l.get('name') if isinstance(l, dict) else l)
+        for l in (item.get('labels') or [])
+    }
+
+def emit(kind, num, adds, removes):
+    if not adds and not removes:
+        return
+    # Use '-' as placeholder so bash read doesn't collapse empty tab fields
+    # (bash's read collapses consecutive whitespace-IFS delimiters).
+    print('\t'.join([
+        kind, str(num),
+        ','.join(sorted(adds)) or '-',
+        ','.join(sorted(removes)) or '-',
+    ]))
+
+for pr in prs:
+    num = pr.get('number')
+    if num is None:
+        continue
+    labels = names(pr)
+    adds, removes = set(), set()
+
+    if 'qa-pass' in labels:
+        for l in PR_TRIGGERS_ON_QA_PASS:
+            if l in labels:
+                removes.add(l)
+
+    rework_signal = ('qa-fail' in labels) or ('changes-requested' in labels)
+    if rework_signal:
+        if 'needs-rework' not in labels:
+            adds.add('needs-rework')
+        for l in ('qa-pass', 'needs-review'):
+            if l in labels:
+                removes.add(l)
+
+    # needs-review must not co-exist with dev/rework signals; prefer rework.
+    if 'needs-review' in labels and not rework_signal:
+        if labels & {'needs-dev', 'needs-rework', 'changes-requested'}:
+            removes.add('needs-review')
+
+    if 'ready-for-qa' in labels:
+        for l in ('needs-review', 'needs-dev'):
+            if l in labels:
+                removes.add(l)
+
+    # Don't add and remove the same label in the same pass.
+    removes -= adds
+    emit('pr', num, adds, removes)
+
+for it in issues:
+    num = it.get('number')
+    if num is None:
+        continue
+    labels = names(it)
+    adds, removes = set(), set()
+
+    if 'blocked' in labels:
+        for l in ISSUE_TRIGGERS_BLOCKED:
+            if l in labels:
+                removes.add(l)
+        emit('issue', num, adds, removes)
+        continue
+
+    if 'needs-dev' in labels:
+        for l in ('needs-po', 'in-po', 'po-review', 'plan'):
+            if l in labels:
+                removes.add(l)
+    if 'needs-po' in labels:
+        for l in ('needs-dev', 'in-progress', 'dev'):
+            if l in labels:
+                removes.add(l)
+
+    emit('issue', num, adds, removes)
+PY
+    )
+
+    if [ -z "$plan" ]; then
+        log "[$repo] label-state: no convergence actions needed"
+        return 0
+    fi
+
+    local kind num adds removes
+    while IFS=$'\t' read -r kind num adds removes; do
+        [ -z "$num" ] && continue
+        [ "$adds" = "-" ] && adds=""
+        [ "$removes" = "-" ] && removes=""
+        if $DRY_RUN; then
+            log "[$repo] DRY label-converge $kind#$num adds=[${adds}] removes=[${removes}]"
+            continue
+        fi
+        log "[$repo] label-converge $kind#$num adds=[${adds}] removes=[${removes}]"
+        local label
+        local IFS_ORIG="$IFS"
+        IFS=','
+        for label in $adds; do
+            [ -z "$label" ] && continue
+            backend_add_label "$repo" "$num" "$label" >/dev/null 2>&1 || true
+        done
+        for label in $removes; do
+            [ -z "$label" ] && continue
+            backend_remove_label "$repo" "$num" "$label" >/dev/null 2>&1 || true
+        done
+        IFS="$IFS_ORIG"
+        _loop_emit_event "label_state_converged" \
+            "{\"repo\":\"$repo\",\"slug\":\"$slug\",\"kind\":\"$kind\",\"number\":$num,\"added\":\"$adds\",\"removed\":\"$removes\"}" \
+            || true
+    done <<< "$plan"
+
+    return 0
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -2390,6 +2561,7 @@ run_project() {
     reconcile_ci_green_prs "$REPO" "$slug"
     reconcile_pr_base_moved "$REPO" "$slug"
     reconcile_orphan_issues "$REPO" "$slug"
+    reconcile_label_consistency "$REPO" "$slug"
     reconcile_dirty_rework_prs "$REPO"
     reconcile_conflict_blocked_prs "$REPO"
     reconcile_stale_base "$REPO"
