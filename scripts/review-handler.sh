@@ -94,6 +94,30 @@ retry_count() { [ -f "$RETRY_FILE" ] && cat "$RETRY_FILE" || echo 0; }
 retry_incr()  { local n; n=$(( $(retry_count) + 1 )); echo "$n" > "$RETRY_FILE"; echo "$n"; }
 retry_clear() { rm -f "$RETRY_FILE"; }
 
+# EXIT trap — installed after in-review is added so failures BEFORE that point
+# don't trigger noisy label churn. Guarantees the PR never stays in-review.
+_review_handler_cleanup() {
+    local rc=$?
+    # Only act if in-review is still set and no terminal decision label is present.
+    if backend_pr_has_any_label "$REPO" "$PR_NUM" \
+            "$LOOP_LABEL_IN_REVIEW" 2>/dev/null; then
+        if ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
+                "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
+                "$_REWORK_LABEL" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
+                "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
+                blocked 'done' 2>/dev/null; then
+            log "CLEANUP: PR #$PR_NUM still has in-review on exit (rc=$rc) — re-queuing as ${_REVIEW_LABEL}"
+            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_IN_REVIEW" 2>/dev/null || true
+            backend_add_label    "$REPO" "$PR_NUM" "$_REVIEW_LABEL" 2>/dev/null || true
+            backend_comment_pr "$REPO" "$PR_NUM" \
+                "Automated review aborted (exit=${rc}). Re-queued for review." \
+                2>/dev/null || true
+            loop_notify "⚠️ [$SLUG] PR#$PR_NUM review aborted (exit=$rc) — re-queued" || true
+        fi
+    fi
+    return $rc
+}
+
 retries=$(retry_count)
 if [ "$retries" -ge "$MAX_RETRIES" ]; then
     log "PR #$PR_NUM already failed review ${retries}x — labeling ${_REWORK_LABEL}"
@@ -112,6 +136,9 @@ loop_notify "▶️ [$SLUG] PR#$PR_NUM review starting"
 backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_REVIEW"
 backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING"
 backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_IN_REVIEW"
+# Install EXIT trap only after in-review is set — failures before this point
+# should not trigger the cleanup (PR never entered in-review state).
+trap '_review_handler_cleanup' EXIT
 
 _BACKEND_CLI_NOTE=$(backend_cli_note)
 

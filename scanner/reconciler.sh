@@ -2763,6 +2763,76 @@ PY
     return 0
 }
 
+# --- Check: stuck in-review PRs — strip and re-queue after configurable timeout
+# Any PR that has carried `in-review` for longer than STUCK_IN_REVIEW_MINUTES
+# (default 60) with no terminal decision label is assumed to have a dead handler
+# (crash, SIGKILL, reboot). Strip in-review and re-add needs-review so the
+# scanner picks it up on the next tick.
+STUCK_IN_REVIEW_MINUTES="${STUCK_IN_REVIEW_MINUTES:-60}"
+
+reconcile_stuck_in_review() {
+    local repo="$1"
+    log "[$repo] scanning for PRs stuck in-review (>${STUCK_IN_REVIEW_MINUTES}min)"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo") || prs_json="[]"
+
+    # Find PRs with in-review label. For each, get the label's applied timestamp
+    # via the PR timeline items, falling back to updatedAt when unavailable.
+    local stuck
+    stuck=$(PJSON="$prs_json" CUTOFF_MIN="$STUCK_IN_REVIEW_MINUTES" python3 - <<'PY'
+import json, os, datetime as dt
+
+prs = json.loads(os.environ['PJSON'])
+cutoff_min = float(os.environ['CUTOFF_MIN'])
+now = dt.datetime.now(dt.timezone.utc)
+
+TERMINAL = {"needs-qa", "ready-for-qa", "needs-rework", "needs-dev",
+            "changes-requested", "blocked", "done"}
+
+for pr in prs:
+    labels = {l['name'] if isinstance(l, dict) else l for l in pr.get('labels', [])}
+    if 'in-review' not in labels:
+        continue
+    # Already has a terminal decision label — the trap hasn't fired yet or
+    # cleanup is in progress; don't interfere.
+    if labels & TERMINAL:
+        continue
+    # Use updatedAt as age proxy (conservative — may underestimate how long
+    # in-review has been set, but avoids false positives from timeline absence).
+    up = pr.get('updatedAt', '')
+    if not up:
+        continue
+    try:
+        ts = dt.datetime.fromisoformat(up.replace('Z', '+00:00'))
+    except (ValueError, TypeError):
+        continue
+    age_min = (now - ts).total_seconds() / 60
+    if age_min >= cutoff_min:
+        print(f"{pr['number']}\t{int(age_min)}\t{pr.get('title','')[:60]}")
+PY
+)
+
+    if [ -z "$stuck" ]; then
+        log "[$repo] no stuck in-review PRs"
+        return 0
+    fi
+
+    while IFS=$'\t' read -r pr_num age title; do
+        [ -z "$pr_num" ] && continue
+        log "[$repo] STUCK-IN-REVIEW PR#$pr_num (${age}min): $title"
+        loop_notify "Loop reconciler: $repo — PR#$pr_num stuck in-review ${age}min; stripping → needs-review"
+        $DRY_RUN && continue
+        backend_remove_label "$repo" "$pr_num" in-review \
+            || log "[$repo] WARN: failed to remove in-review from PR#$pr_num"
+        backend_add_label "$repo" "$pr_num" needs-review \
+            || log "[$repo] WARN: failed to add needs-review to PR#$pr_num"
+        backend_comment_pr "$repo" "$pr_num" \
+            "Reconciler: PR was stuck in \`in-review\` for ${age} min with no outcome — stripping \`in-review\` and re-adding \`needs-review\` so the pipeline retries." \
+            2>/dev/null || true
+    done <<< "$stuck"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -2780,6 +2850,7 @@ run_project() {
     reconcile_obsolete_open_prs "$REPO"
     reconcile_orphaned_claims "$REPO"
     reconcile_stale_prs "$REPO"
+    reconcile_stuck_in_review "$REPO"
     reconcile_needs_clarification "$REPO"
     reconcile_unblock "$REPO"
     reconcile_orphaned_in_progress "$REPO" "$slug"
