@@ -23,6 +23,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 # shellcheck source=../lib/labels.sh
 source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
+# shellcheck source=../lib/progress.sh
+source "$LOOP_ROOT/lib/progress.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
@@ -282,7 +284,9 @@ TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
 
 _QA_LOG_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+progress_start qa
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    progress_stop
     log "qa agent finished for PR #$PR_NUM"
     loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
@@ -306,6 +310,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
         bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
     fi
 else
+    progress_stop
     _agent_tail=$(tail -n +"$((_QA_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
     log "qa agent failed for PR #$PR_NUM"
     _failure_reason=$(loop_failure_category "$_agent_tail" 1)

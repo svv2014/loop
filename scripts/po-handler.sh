@@ -26,6 +26,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/bounty.sh
 source "$LOOP_ROOT/lib/bounty.sh"
+# shellcheck source=../lib/progress.sh
+source "$LOOP_ROOT/lib/progress.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/redact.sh
@@ -146,6 +148,7 @@ _po_label_cleanup() {
     backend_add_label "$REPO" "$ISSUE_NUM" "$_po_trigger" 2>/dev/null || true
 }
 _po_exit_cleanup() {
+    progress_stop 2>/dev/null || true
     _po_label_cleanup
     rm -f "${_RUN_LOG:-}" 2>/dev/null || true
 }
@@ -504,7 +507,9 @@ ${redacted_trimmed}
 # `--model <id>`, scoped to this single call. Falls back to whatever the
 # orchestrator config says if the override is unset.
 export LOOP_AGENT_MODEL_OVERRIDE="${LOOP_PO_MODEL:-claude-opus-4-7}"
+progress_start po
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE" | tee "$_RUN_LOG" >/dev/null; then
+    progress_stop
     _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "po agent succeeded for #$ISSUE_NUM"
     bounty_report "po_done" model="${LOOP_PO_MODEL:-claude-opus-4-7}" role=po project="$SLUG" issue_num="$ISSUE_NUM" || true
@@ -519,6 +524,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE" | tee "$_RUN_
         backend_add_label "$REPO" "$ISSUE_NUM" "$_fallback_dev_label"
     fi
 else
+    progress_stop
     _agent_rc=$?
     _stderr_tail=$(tail -n 50 "$_RUN_LOG" 2>/dev/null || echo "")
     _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup

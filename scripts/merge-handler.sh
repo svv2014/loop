@@ -17,6 +17,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 # shellcheck source=../lib/labels.sh
 source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
+# shellcheck source=../lib/progress.sh
+source "$LOOP_ROOT/lib/progress.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/recovery.sh
@@ -85,7 +87,9 @@ esac
 backend_pr_ready "$REPO" "$PR_NUM" 2>&1 | tee -a "$LOG_FILE" || true
 
 _MERGE_LOG_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+progress_start merge
 if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FILE"; then
+    progress_stop
     # Check if the failure was a conflict discovered at merge time.
     POST_STATE=$(backend_pr_view "$REPO" "$PR_NUM" --json mergeable,mergeStateStatus 2>/dev/null \
         | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeable',''), d.get('mergeStateStatus',''))")
@@ -114,6 +118,7 @@ if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FIL
         "Merge failed (state: \`${POST_STATE}\`). Marked \`blocked\` — needs human eyes."
     exit 1
 fi
+progress_stop
 
 # ── Release-PR: tag + publish GitHub release ─────────────────────────────────
 # If this was a release PR, tag the merged commit and publish a GitHub release.
