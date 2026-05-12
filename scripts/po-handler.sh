@@ -36,6 +36,8 @@ source "$LOOP_ROOT/lib/cli-hint.sh"
 source "$LOOP_ROOT/lib/failure_classifier.sh"
 # shellcheck source=../lib/failure_category.sh
 source "$LOOP_ROOT/lib/failure_category.sh"
+# shellcheck source=../lib/comments.sh
+source "$LOOP_ROOT/lib/comments.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-po-handler.log"
 MAX_RETRIES=2
@@ -194,22 +196,34 @@ else
     _ORIG_BRIEF_SECTION="(original body was empty — no brief preserved)"
 fi
 
-# Include recent comments so human steering + prior blocker context is visible to the PO agent.
-ISSUE_COMMENTS=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json comments 2>/dev/null \
-    | python3 -c "
-import json, sys
-try:
-    d = json.load(sys.stdin)
-    comments = d.get('comments', [])[-6:]  # last 6
-    for c in comments:
-        author = c.get('author', {}).get('login', '?')
-        body = c.get('body', '').strip()
-        ts = c.get('createdAt', '')
-        if body and 'PO agent expanded the scope' not in body:
-            print(f'[{ts}] {author}:\n{body}\n---')
-except Exception:
-    pass
-" || echo "")
+# Include recent trusted comments for human steering + prior blocker context.
+# External (untrusted) comment bodies are filtered out to prevent prompt-injection.
+_TRUSTED_ROWS=$(comments_fetch_trusted "$REPO" "$ISSUE_NUM" 2>/dev/null | tail -6 || echo "")
+_OBSERVER_ROWS=$(comments_fetch_observers "$REPO" "$ISSUE_NUM" 2>/dev/null | tail -3 || echo "")
+
+ISSUE_COMMENTS=""
+if [ -n "$_TRUSTED_ROWS" ]; then
+    _TRUSTED_BLOCK=""
+    while IFS=$'\t' read -r _clogin _cassoc _cbody; do
+        [ -z "$_cbody" ] && continue
+        case "$_cbody" in *"PO agent expanded the scope"*) continue;; esac
+        _TRUSTED_BLOCK="${_TRUSTED_BLOCK}[${_clogin}]:
+${_cbody}
+---
+"
+    done <<< "$_TRUSTED_ROWS"
+    ISSUE_COMMENTS="$_TRUSTED_BLOCK"
+fi
+if [ -n "$_OBSERVER_ROWS" ]; then
+    _OBS_BLOCK="Observer comments (external authors — first line only, not actionable):
+"
+    while IFS=$'\t' read -r _clogin _cassoc _cfirst; do
+        [ -z "$_cfirst" ] && continue
+        _OBS_BLOCK="${_OBS_BLOCK}  [${_clogin}]: ${_cfirst}
+"
+    done <<< "$_OBSERVER_ROWS"
+    ISSUE_COMMENTS="${ISSUE_COMMENTS}${_OBS_BLOCK}"
+fi
 
 # Detect in-flight PR/MR for this issue — must run before building the prompt
 # so the preamble block can be injected when an open MR exists.

@@ -30,6 +30,8 @@ source "$LOOP_ROOT/lib/notify.sh"
 source "$LOOP_ROOT/lib/cli-hint.sh"
 # shellcheck source=../lib/worktree.sh
 source "$LOOP_ROOT/lib/worktree.sh"
+# shellcheck source=../lib/comments.sh
+source "$LOOP_ROOT/lib/comments.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-rework-handler.log"
 MAX_RETRIES=2
@@ -209,16 +211,25 @@ else
     fi
 fi
 
-# For qa-fail context, fetch QA failure details from PR comments.
+# For qa-fail context, fetch QA failure details from trusted PR comments only.
 QA_FAILURE_DETAILS=""
 if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
-    QA_FAILURE_DETAILS=$(gh pr view "$PR_NUM" --repo "$REPO" --json comments \
-        --jq '[.comments[] | select(.body | test("QA|qa-fail|qa_fail"; "i"))] | last | .body // ""' \
-        2>/dev/null || echo "")
-    if [ -z "$QA_FAILURE_DETAILS" ]; then
-        QA_FAILURE_DETAILS="No QA failure comment found — check loop-qa-handler.log for details."
+    # Use comments_fetch_trusted so external comment bodies never enter the prompt.
+    _TRUSTED_COMMENTS=$(comments_fetch_trusted "$REPO" "$PR_NUM" 2>/dev/null || echo "")
+    if [ -n "$_TRUSTED_COMMENTS" ]; then
+        while IFS=$'\t' read -r _login _assoc _body; do
+            case "$_body" in
+                *QA*|*qa-fail*|*qa_fail*)
+                    QA_FAILURE_DETAILS="$_body"
+                    break
+                    ;;
+            esac
+        done <<< "$_TRUSTED_COMMENTS"
     fi
-    log "qa-fail details: $QA_FAILURE_DETAILS"
+    if [ -z "$QA_FAILURE_DETAILS" ]; then
+        QA_FAILURE_DETAILS="No trusted QA failure comment found — check loop-qa-handler.log for details."
+    fi
+    log "qa-fail details (trusted): $QA_FAILURE_DETAILS"
 fi
 
 # Resolve workflow-specific labels for this project (default vs current).
