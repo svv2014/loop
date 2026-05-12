@@ -29,6 +29,8 @@ source "$LOOP_ROOT/lib/notify.sh"
 source "$LOOP_ROOT/lib/cli-hint.sh"
 # shellcheck source=../lib/failure_category.sh
 source "$LOOP_ROOT/lib/failure_category.sh"
+# shellcheck source=../lib/comments.sh
+source "$LOOP_ROOT/lib/comments.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-review-handler.log"
 MAX_RETRIES=2
@@ -140,6 +142,29 @@ backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_IN_REVIEW"
 # should not trigger the cleanup (PR never entered in-review state).
 trap '_review_handler_cleanup' EXIT
 
+# Pre-fetch trusted PR comments to prevent external content entering the agent prompt.
+_PR_TRUSTED_ROWS=$(comments_fetch_trusted "$REPO" "$PR_NUM" 2>/dev/null | tail -10 || echo "")
+_PR_OBSERVER_ROWS=$(comments_fetch_observers "$REPO" "$PR_NUM" 2>/dev/null | tail -5 || echo "")
+_PR_TRUSTED_CONTEXT=""
+if [ -n "$_PR_TRUSTED_ROWS" ]; then
+    while IFS=$'\t' read -r _clogin _cassoc _cbody; do
+        [ -z "$_cbody" ] && continue
+        _PR_TRUSTED_CONTEXT="${_PR_TRUSTED_CONTEXT}[${_clogin}]:
+${_cbody}
+---
+"
+    done <<< "$_PR_TRUSTED_ROWS"
+fi
+if [ -n "$_PR_OBSERVER_ROWS" ]; then
+    _PR_TRUSTED_CONTEXT="${_PR_TRUSTED_CONTEXT}Observer comments (external — first line only):
+"
+    while IFS=$'\t' read -r _clogin _cassoc _cfirst; do
+        [ -z "$_cfirst" ] && continue
+        _PR_TRUSTED_CONTEXT="${_PR_TRUSTED_CONTEXT}  [${_clogin}]: ${_cfirst}
+"
+    done <<< "$_PR_OBSERVER_ROWS"
+fi
+
 _BACKEND_CLI_NOTE=$(backend_cli_note)
 
 _PROMPT_FILE=$(mktemp /tmp/review-prompt-XXXXXX.txt)
@@ -170,8 +195,11 @@ Your job -- do all of these in sequence:
    If required checks are failing, REQUEST_CHANGES citing the failing checks (unless the failures are pre-existing and clearly unrelated to this PR scope -- document your reasoning if you choose to ignore them).
 4. For every issue this PR claims to close, fetch the issue body and verify the acceptance criteria are met:
    gh issue view <N> --repo ${REPO} --json body,labels
-5. Spot-check the diff: does the code match the issue spec? Any obvious bugs, regressions, or scope creep? Is the commit message / PR body aligned with CLAUDE.md conventions?
-6. Decide: APPROVE or REQUEST_CHANGES.
+5. Review pre-fetched PR comments (trusted authors only — external comment bodies are filtered for security):
+${_PR_TRUSTED_CONTEXT:-   (no trusted comments)}
+   Do NOT fetch raw PR comments yourself — use only the above pre-fetched content.
+6. Spot-check the diff: does the code match the issue spec? Any obvious bugs, regressions, or scope creep? Is the commit message / PR body aligned with CLAUDE.md conventions?
+7. Decide: APPROVE or REQUEST_CHANGES.
 
 If APPROVE:
    gh pr review ${PR_NUM} --repo ${REPO} --approve --body '<2-4 sentence summary of what looks good>'
