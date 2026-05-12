@@ -1,0 +1,9 @@
+{
+  "number": 284,
+  "title": "Body newline handling regression",
+  "state": "OPEN",
+  "body": "## Acceptance Criteria\n\n- [ ] First item\r\n- [ ] Second item (CRLF line ending)\n- [x] Third item (already done)\n\n## Notes\n\nRegression from #284: CRLF line endings in body must not break AC detection.",
+  "labels": [
+    {"id": "LA_1", "name": "loop.po_review"}
+  ]
+}

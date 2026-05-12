@@ -1,0 +1,9 @@
+{
+  "number": 55,
+  "title": "Add dark mode support",
+  "state": "OPEN",
+  "body": "## Objective\n\nAdd dark mode.\n\n## Acceptance Criteria\n\n- [ ] Toggle in settings\n- [ ] Persisted in localStorage\n\n## Out of scope\n\nSystem-level auto-detection.\n\n---\n\n## Original brief (preserved by PO)\n\nWe should have a dark mode option.",
+  "labels": [
+    {"id": "LA_1", "name": "loop.po_review"}
+  ]
+}
