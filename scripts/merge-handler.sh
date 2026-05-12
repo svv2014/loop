@@ -84,6 +84,23 @@ esac
 # Dev-handler opens all PRs as drafts; promote to ready before merging.
 backend_pr_ready "$REPO" "$PR_NUM" 2>&1 | tee -a "$LOG_FILE" || true
 
+# Fork-origin gate: refuse to auto-merge PRs from forks.
+# Derives base owner from $REPO (owner/name) and compares against
+# headRepositoryOwner returned by the GitHub API. On any ambiguity
+# (missing field, API error) we default to the safe path: treat as fork.
+BASE_OWNER="${REPO%%/*}"
+HEAD_OWNER=$(backend_pr_view "$REPO" "$PR_NUM" --json headRepositoryOwner 2>/dev/null \
+    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('headRepositoryOwner',{}).get('login',''))" 2>/dev/null || echo "")
+
+if [ -z "$HEAD_OWNER" ] || [ "$HEAD_OWNER" != "$BASE_OWNER" ]; then
+    log "PR #${PR_NUM} is from a fork (head owner='${HEAD_OWNER}', base owner='${BASE_OWNER}') — skipping auto-merge"
+    backend_add_label "$REPO" "$PR_NUM" needs-human-merge
+    backend_remove_label "$REPO" "$PR_NUM" qa-pass
+    backend_comment_pr "$REPO" "$PR_NUM" \
+        "Loop does not auto-merge PRs from forks for security reasons (fork tests + post-merge hooks can execute untrusted code). Labelled \`needs-human-merge\` — an operator must review and merge manually."
+    exit 0
+fi
+
 _MERGE_LOG_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FILE"; then
     # Check if the failure was a conflict discovered at merge time.
