@@ -1463,6 +1463,54 @@ PY
     done <<< "$stale"
 }
 
+# --- Check: qa-rework label drift — strip stale needs-qa from rework PRs ---
+# Belt-and-suspenders sweep: if a PR carries both needs-qa (or its deprecated
+# alias ready-for-qa) AND a rework trigger label (in-rework, needs-dev,
+# needs-rework, changes-requested), the producer already missed stripping
+# needs-qa. Remove it here so the scanner doesn't emit conflicting
+# pr_qa + dev_rework events on the next tick.
+reconcile_qa_rework_label_drift() {
+    local repo="$1"
+    log "[$repo] scanning for PRs with stale needs-qa + rework label"
+
+    local prs_json
+    prs_json=$(backend_list_open_prs_raw "$repo")
+
+    local hits
+    hits=$(PRS="$prs_json" python3 - <<'PY'
+import json, os
+QA_LABELS     = {"needs-qa", "ready-for-qa"}
+REWORK_LABELS = {"in-rework", "needs-dev", "needs-rework", "changes-requested"}
+prs = json.loads(os.environ["PRS"])
+for pr in prs:
+    labels = {l["name"] for l in pr.get("labels", [])}
+    qa_present     = labels & QA_LABELS
+    rework_present = labels & REWORK_LABELS
+    if qa_present and rework_present:
+        print("{}\t{}".format(pr["number"], ",".join(sorted(qa_present))))
+PY
+)
+
+    if [ -z "$hits" ]; then
+        log "[$repo] no qa-rework label drift found"
+        return 0
+    fi
+
+    local num stale_qa
+    while IFS=$'\t' read -r num stale_qa; do
+        [ -z "$num" ] && continue
+        log "[$repo] QA-REWORK-DRIFT PR#$num strip stale qa label(s): $stale_qa"
+        $DRY_RUN && continue
+        local label
+        local IFS_ORIG="$IFS"
+        IFS=','
+        for label in $stale_qa; do
+            backend_remove_label "$repo" "$num" "$label" >/dev/null 2>&1 || true
+        done
+        IFS="$IFS_ORIG"
+    done <<< "$hits"
+}
+
 # --- Check: PR label audit — strip issue-only labels from open PRs ---------
 # Pipeline-trigger labels (`needs-po`, `needs-dev`, plus deprecated aliases)
 # and taxonomy labels (`tracker`, `epic`, `needs-clarification`) belong on
@@ -2746,6 +2794,7 @@ run_project() {
     reconcile_stale_base "$REPO"
     reconcile_stale_blocked_issues "$REPO"
     reconcile_qa_failures "$REPO"
+    reconcile_qa_rework_label_drift "$REPO"
     reconcile_pr_label_audit "$REPO"
     reconcile_anomalies "$REPO"
     reconcile_agent_distress "$REPO"
