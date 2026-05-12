@@ -213,6 +213,74 @@ State: OPEN
 }
 
 # ---------------------------------------------------------------------------
+# dev-rework-handler qa-fail → rework transition (regression for loop#315)
+# ---------------------------------------------------------------------------
+
+@test "dev-rework-handler qa-fail→rework: needs-qa stripped alongside qa-fail, in-rework added" {
+    local ops_log="$BATS_TMPDIR/rework-qa-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label() { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()    { echo "add $3"    >> "$ops_log"; }
+
+    # Replicate the qa-fail → rework entry transition from dev-rework-handler.sh.
+    # REWORK_CONTEXT=qa-fail path: SOURCE_LABEL=qa-fail + strip needs-qa family.
+    local REWORK_CONTEXT="qa-fail"
+    local repo="owner/test-repo" pr_num="1"
+    local SOURCE_LABEL="qa-fail"
+
+    backend_remove_label "$repo" "$pr_num" "$SOURCE_LABEL"
+    if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
+        backend_remove_label "$repo" "$pr_num" needs-qa       2>/dev/null || true
+        backend_remove_label "$repo" "$pr_num" ready-for-qa   2>/dev/null || true
+        backend_remove_label "$repo" "$pr_num" qa-pass        2>/dev/null || true
+    fi
+    backend_add_label "$repo" "$pr_num" in-rework
+
+    # qa-fail must be removed
+    grep -q "remove qa-fail"   "$ops_log"
+    # needs-qa must be removed (the stale label that caused double-events)
+    grep -q "remove needs-qa"  "$ops_log"
+    # ready-for-qa (deprecated alias) must also be removed
+    grep -q "remove ready-for-qa" "$ops_log"
+    # in-rework must be added
+    grep -q "add in-rework"    "$ops_log"
+    # needs-qa must NOT be added (no re-introduction)
+    ! grep -q "add needs-qa"   "$ops_log"
+    # remove ops must all precede the add
+    local last_remove add_line
+    last_remove=$(grep -n "^remove " "$ops_log" | tail -1 | cut -d: -f1)
+    add_line=$(grep -n "^add " "$ops_log" | head -1 | cut -d: -f1)
+    [ "$last_remove" -lt "$add_line" ]
+}
+
+@test "dev-rework-handler non-qa-fail→rework: needs-qa NOT stripped (review REQUEST_CHANGES path)" {
+    local ops_log="$BATS_TMPDIR/rework-cr-ops.log"
+    rm -f "$ops_log"
+
+    backend_remove_label() { echo "remove $3" >> "$ops_log"; }
+    backend_add_label()    { echo "add $3"    >> "$ops_log"; }
+
+    # REWORK_CONTEXT empty (changes-requested path): only SOURCE_LABEL stripped
+    local REWORK_CONTEXT=""
+    local repo="owner/test-repo" pr_num="2"
+    local SOURCE_LABEL="changes-requested"
+
+    backend_remove_label "$repo" "$pr_num" "$SOURCE_LABEL"
+    if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
+        backend_remove_label "$repo" "$pr_num" needs-qa     2>/dev/null || true
+        backend_remove_label "$repo" "$pr_num" ready-for-qa 2>/dev/null || true
+        backend_remove_label "$repo" "$pr_num" qa-pass      2>/dev/null || true
+    fi
+    backend_add_label "$repo" "$pr_num" in-rework
+
+    grep -q  "remove changes-requested" "$ops_log"
+    grep -q  "add in-rework"            "$ops_log"
+    ! grep -q "remove needs-qa"         "$ops_log"
+    ! grep -q "remove ready-for-qa"     "$ops_log"
+}
+
+# ---------------------------------------------------------------------------
 # dev-handler prompt label resolution (current vs default workflow)
 # ---------------------------------------------------------------------------
 

@@ -161,6 +161,14 @@ loop_notify "▶️ [$SLUG] PR#$PR_NUM dev-rework starting"
 _update_issue_rework_count "$((retries + 1))"
 
 backend_remove_label "$REPO" "$PR_NUM" "$SOURCE_LABEL"
+# Strip stale needs-qa (and its deprecated alias / qa-pass) so the PR never
+# carries both needs-qa and a rework label simultaneously — which would make
+# the scanner emit conflicting pr_qa + dev_rework events on the next tick.
+if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA" 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_QA_PASS" 2>/dev/null || true
+fi
 backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK"
 
 PR_BRANCH=$(backend_pr_view "$REPO" "$PR_NUM" --json headRefName --jq .headRefName 2>/dev/null || echo "")
