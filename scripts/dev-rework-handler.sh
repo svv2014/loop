@@ -335,7 +335,60 @@ cleanup_worktree() {
     git -C "$ROOT" worktree prune 2>/dev/null || true
 }
 
-if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+_AGENT_RC=0
+if ! loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    _AGENT_RC=1
+fi
+
+# Post-agent DIRTY check: if the pre-agent rebase detected conflicts, verify
+# the agent actually resolved them.  One attempt only — if the branch is still
+# DIRTY against origin/<default_branch>, escalate immediately (blocked) rather
+# than retrying; retries cannot fix an unresolved merge conflict.
+_POST_DIRTY=false
+_POST_AGENT_CONFLICTS=""
+if [ -n "$REBASE_CONFLICTS" ]; then
+    git -C "$WORKTREE_ROOT" fetch origin "$DEFAULT_BRANCH" --quiet 2>&1 | tee -a "$LOG_FILE" || true
+    if ! git -C "$WORKTREE_ROOT" rebase "origin/$DEFAULT_BRANCH" 2>&1 | tee -a "$LOG_FILE"; then
+        _POST_DIRTY=true
+        _POST_AGENT_CONFLICTS=$(git -C "$WORKTREE_ROOT" diff --name-only --diff-filter=U 2>/dev/null \
+            | tr '\n' ' ')
+        _POST_AGENT_CONFLICTS="${_POST_AGENT_CONFLICTS% }"
+        git -C "$WORKTREE_ROOT" rebase --abort 2>/dev/null || true
+        log "post-agent rebase still conflicts: ${_POST_AGENT_CONFLICTS:-(unknown)}"
+    else
+        git -C "$WORKTREE_ROOT" push --force-with-lease origin "$PR_BRANCH" 2>&1 | tee -a "$LOG_FILE" \
+            || log "WARN: post-agent clean rebase push failed — continuing"
+        log "post-agent rebase clean — agent resolved conflicts, pushed $PR_BRANCH"
+    fi
+fi
+
+if [ "$_POST_DIRTY" = "true" ]; then
+    log "PR #$PR_NUM still DIRTY after agent — escalating as blocked"
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK" 2>/dev/null || true
+    backend_add_label "$REPO" "$PR_NUM" blocked 2>/dev/null || true
+    _BLOCK_MARKER="<!-- loop:rework_blocked -->"
+    _ALREADY_BLOCKED=$(gh pr view "$PR_NUM" --repo "$REPO" --json comments \
+        --jq "[.comments[] | select(.body | contains(\"${_BLOCK_MARKER}\"))] | length" \
+        2>/dev/null || echo "0")
+    if [ "${_ALREADY_BLOCKED:-0}" = "0" ]; then
+        _CONFLICT_DISPLAY=$(echo "${_POST_AGENT_CONFLICTS:-(unknown)}" | tr ' ' '\n')
+        _BLOCK_BODY=$(printf '%s\n%s\n\n```\n%s\n```' \
+            "$_BLOCK_MARKER" \
+            "Rework blocked: rebase conflict unresolved after agent attempt." \
+            "$_CONFLICT_DISPLAY")
+        if [ -n "$LINKED_ISSUE" ]; then
+            _BLOCK_BODY=$(printf '%s\nParent: #%s' "$_BLOCK_BODY" "$LINKED_ISSUE")
+        fi
+        gh pr comment "$PR_NUM" --repo "$REPO" --body "$_BLOCK_BODY" 2>/dev/null || true
+    fi
+    bounty_report "rework_blocked" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" \
+        pr_num="$PR_NUM" detail="rebase-conflict files=${_POST_AGENT_CONFLICTS}" || true
+    loop_notify "🚫 [$SLUG] PR#$PR_NUM rework blocked — rebase conflict unresolved"
+    cleanup_worktree
+    exit 0
+fi
+
+if [ "$_AGENT_RC" -eq 0 ]; then
     log "rework agent succeeded for PR #$PR_NUM"
     bounty_report "rework_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" pr_num="$PR_NUM" || true
     loop_notify "✅ [$SLUG] PR#$PR_NUM dev-rework done"
