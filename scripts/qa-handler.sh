@@ -29,6 +29,8 @@ source "$LOOP_ROOT/lib/notify.sh"
 source "$LOOP_ROOT/lib/cli-hint.sh"
 # shellcheck source=../lib/failure_category.sh
 source "$LOOP_ROOT/lib/failure_category.sh"
+# shellcheck source=../lib/qa-baseline.sh
+source "$LOOP_ROOT/lib/qa-baseline.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-qa-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [qa-handler] $*" | tee -a "$LOG_FILE"; }
@@ -89,6 +91,63 @@ loop_notify "▶️ [$SLUG] PR#$PR_NUM qa starting"
 
 _BACKEND_CLI_NOTE=$(backend_cli_note)
 _VALIDATION_CMD="${QA_VALIDATION_CMD:-}"
+
+# --- Diff-aware baseline (Option B) ---
+# Compute or load a cached TAP baseline from origin/<DEFAULT_BRANCH>.
+# Produces a list of pre-existing failures that should not trigger qa-fail.
+# Skipped when: LOOP_QA_DIFF_AWARE=0, no validation_cmd, or baseline run fails.
+_BASELINE_PRE_EXISTING=""
+_BASELINE_FALLBACK_NOTE=""
+_BASELINE_DIFF_AWARE="${LOOP_QA_DIFF_AWARE:-1}"
+
+if [ "$_BASELINE_DIFF_AWARE" != "0" ] && [ -n "$_VALIDATION_CMD" ]; then
+    log "qa-baseline: resolving baseline SHA for $REPO ($DEFAULT_BRANCH)"
+    _BASELINE_SHA=$(qa_baseline_resolve_sha "$REPO" "$DEFAULT_BRANCH" 2>/dev/null || true)
+
+    if [ -n "$_BASELINE_SHA" ]; then
+        log "qa-baseline: baseline SHA=${_BASELINE_SHA:0:12}"
+        _BASELINE_CACHE=$(qa_baseline_run_or_load \
+            "$SLUG" "$_BASELINE_SHA" "$ROOT" "$DEFAULT_BRANCH" "$_VALIDATION_CMD" 2>/dev/null || true)
+
+        if [ -n "$_BASELINE_CACHE" ] && [ -f "$_BASELINE_CACHE" ]; then
+            _BASELINE_PRE_EXISTING=$(qa_baseline_parse_failing "$_BASELINE_CACHE" 2>/dev/null || true)
+            log "qa-baseline: cache=${_BASELINE_CACHE} pre-existing=$(echo "$_BASELINE_PRE_EXISTING" | grep -c . || echo 0)"
+        else
+            log "qa-baseline: WARN — could not produce baseline; falling back to strict mode"
+            _BASELINE_FALLBACK_NOTE="⚠️ Baseline run failed — falling back to strict pass/fail (all failures count)."
+        fi
+    else
+        log "qa-baseline: WARN — could not resolve baseline SHA; falling back to strict mode"
+        _BASELINE_FALLBACK_NOTE="⚠️ Could not resolve baseline SHA — falling back to strict pass/fail (all failures count)."
+    fi
+fi
+
+# Build Phase 4 instructions (diff-aware vs strict).
+_PHASE4_INSTRUCTIONS=$(
+if [ -z "$_VALIDATION_CMD" ]; then
+    printf '   (no validation_cmd configured for this project — Phase 4 skipped)'
+elif [ -n "$_BASELINE_FALLBACK_NOTE" ]; then
+    printf '%s\n\nRun the validation command:\n   cd %s && %s\n\nIf validation_cmd fails → verdict is qa-fail (cite the failure output).' \
+        "$_BASELINE_FALLBACK_NOTE" "${ROOT}" "$_VALIDATION_CMD"
+elif [ "$_BASELINE_DIFF_AWARE" = "0" ] || { [ -z "$_BASELINE_PRE_EXISTING" ] && [ -z "$_BASELINE_SHA" ]; }; then
+    printf 'Run the validation command:\n   cd %s && %s\n\nIf validation_cmd fails → verdict is qa-fail (cite the failure output).' \
+        "${ROOT}" "$_VALIDATION_CMD"
+else
+    # Build the pre-existing failures list for the prompt.
+    _PE_LIST=$([ -n "$_BASELINE_PRE_EXISTING" ] && printf '%s' "$_BASELINE_PRE_EXISTING" | sed 's/^/  - /' || echo '  (none)')
+    printf 'Run the validation command with TAP output:\n   cd %s && %s\n\nThe following tests were already failing on origin/%s (baseline SHA %s).\nThey are PRE-EXISTING — do NOT count them as failures in your verdict:\n%s\n\nClassify each "not ok" line from the TAP output:\n- Name matches a pre-existing entry → PRE-EXISTING (log, do not fail)\n- Name does NOT match any pre-existing entry → NEW FAILURE → verdict is qa-fail\n- A pre-existing entry now shows "ok" → FIXED in this PR (note it)\n\nIf there are zero new failures → verdict is qa-pass (even if pre-existing failures remain).\nIf there are one or more new failures → verdict is qa-fail.' \
+        "${ROOT}" "$_VALIDATION_CMD" "$DEFAULT_BRANCH" "${_BASELINE_SHA:0:12}" "$_PE_LIST"
+fi
+)
+
+# Build Phase 4 comment section header for the structured QA comment template.
+_PHASE4_COMMENT_TEMPLATE=$(
+if [ -n "$_BASELINE_PRE_EXISTING" ] && [ "$_BASELINE_DIFF_AWARE" != "0" ] && [ -z "$_BASELINE_FALLBACK_NOTE" ]; then
+    printf '**Phase 4: validation_cmd (diff-aware)**\n- New failures: <count> — <names or "none">\n- Pre-existing failures (ignored): <count> — <names or "none">\n- Fixed in this PR: <count> — <names or "none">'
+else
+    printf '**Phase 4: validation_cmd**\n- `<cmd>` → ✓ pass'
+fi
+)
 
 _PROMPT_FILE=$(mktemp /tmp/qa-prompt-XXXXXX.txt)
 cat > "$_PROMPT_FILE" <<EOF
@@ -171,10 +230,7 @@ If no test coverage exists for a touched file, note it and skip.
 
 ## Phase 4 — Final regression guard
 
-Run the validation command:
-$([ -n "$_VALIDATION_CMD" ] && printf '   cd %s && %s' "${ROOT}" "$_VALIDATION_CMD" || printf '   (no validation_cmd configured for this project — Phase 4 skipped)')
-
-If validation_cmd fails → verdict is qa-fail (cite the validation failure output).
+${_PHASE4_INSTRUCTIONS}
 
 ---
 
@@ -199,8 +255,7 @@ After all phases, post a structured comment on the PR using this template:
 - \`lib/foo.sh\` → ran \`tests/foo.bats\` (12 tests, ✓ pass)
 - \`lib/bar.sh\` → no existing test coverage, skipped
 
-**Phase 4: validation_cmd**
-- \`<cmd>\` → ✓ pass
+${_PHASE4_COMMENT_TEMPLATE}
 
 **Verdict:** <qa-pass or qa-fail — reason>
 \`\`\`
