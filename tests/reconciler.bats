@@ -12,7 +12,7 @@ setup() {
     export LOOP_ROOT="$REPO_ROOT"
     export LOOP_WORKFLOW_DIR="$REPO_ROOT/config/workflows"
 
-    # Minimal project config so loop_label_for resolves to "dev".
+    # Minimal project config so loop_label_for resolves to "needs-dev".
     cat > "$BATS_TMPDIR/fixture.yaml" <<'YAML'
 version: 1
 projects:
@@ -108,8 +108,8 @@ teardown() {
     # blocked must be removed.
     grep -q "remove_label 10 blocked" "$OPS_LOG"
 
-    # trigger label (dev) must be added.
-    grep -q "add_label 10 dev" "$OPS_LOG"
+    # trigger label (needs-dev in default workflow) must be added.
+    grep -q "add_label 10 needs-dev" "$OPS_LOG"
 
     # comment must be posted on the issue.
     grep -q "comment_issue 10" "$OPS_LOG"
@@ -130,8 +130,8 @@ teardown() {
     [ "$status" -eq 0 ]
 
     local rm_line add_line
-    rm_line=$(grep -n "remove_label 20 blocked" "$OPS_LOG" | cut -d: -f1)
-    add_line=$(grep -n "add_label 20 dev"       "$OPS_LOG" | cut -d: -f1)
+    rm_line=$(grep -n "remove_label 20 blocked"   "$OPS_LOG" | cut -d: -f1)
+    add_line=$(grep -n "add_label 20 needs-dev"   "$OPS_LOG" | cut -d: -f1)
     [ "$rm_line" -lt "$add_line" ]
 }
 
@@ -237,7 +237,7 @@ print(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
     run recovery_check_stuck_labels "test-proj"
     [ "$status" -eq 0 ]
     grep -q "remove_label 42 in-progress" "$BATS_TMPDIR/ops.log"
-    grep -q "add_label 42 dev"            "$BATS_TMPDIR/ops.log"
+    grep -q "add_label 42 needs-dev"      "$BATS_TMPDIR/ops.log"
 }
 
 @test "recovery_check_stuck_labels: skips issue with live handler lock" {
@@ -279,7 +279,8 @@ print(t.strftime('%Y-%m-%dT%H:%M:%SZ'))
     run recovery_check_stuck_labels "test-proj"
     [ "$status" -eq 0 ]
     grep -q "remove_label 55 in-rework"   "$BATS_TMPDIR/ops.log"
-    grep -q "add_label 55 needs-rework"   "$BATS_TMPDIR/ops.log"
+    # rework stage trigger in default workflow is needs-dev
+    grep -q "add_label 55 needs-dev"      "$BATS_TMPDIR/ops.log"
 }
 
 @test "recovery_check_stuck_labels: dry-run suppresses label mutations" {

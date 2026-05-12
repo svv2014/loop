@@ -239,9 +239,11 @@ recovery_check_stuck_labels() {
         op_label="${op_entry%%:*}"
         trigger_canon="${op_entry#*:}"
 
-        # Resolve the project-specific label name for both labels
+        # Operational labels (in-progress, in-rework, in-review) are set
+        # verbatim by handlers — do not translate them via loop_label_for.
+        # Only the trigger to restore needs project-specific resolution.
         local actual_op actual_trigger
-        actual_op=$(loop_label_for "$slug" "$op_label" 2>/dev/null || echo "$op_label")
+        actual_op="$op_label"
         actual_trigger=$(loop_label_for "$slug" "$trigger_canon" 2>/dev/null || echo "$trigger_canon")
 
         # Fetch issues with this operational label

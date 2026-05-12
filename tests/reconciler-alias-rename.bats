@@ -31,6 +31,20 @@ setup() {
         local var="MOCK_ISSUES_${lbl//-/_}"
         eval "echo \"\${$var:-[]}\""
     }
+    # _reconcile_label_renames calls backend_list_issues_with_label and
+    # backend_list_prs_with_label (NDJSON: one object per line).
+    # Both must filter by the requested label so canonical tickets are untouched.
+    backend_list_issues_with_label() {
+        local _repo="$1" lbl="$2"
+        local var="MOCK_ISSUES_${lbl//-/_}"
+        local arr; eval "arr=\"\${$var:-[]}\""
+        echo "$arr" | jq -c '.[]' 2>/dev/null || true
+    }
+    backend_list_prs_with_label() {
+        local _repo="$1" lbl="$2"
+        echo "${MOCK_PRS_JSON:-[]}" | \
+            jq -c --arg lbl "$lbl" '.[] | select(.labels[] | .name == $lbl)' 2>/dev/null || true
+    }
     backend_add_label()    { echo "add_label $2 $3"    >> "$OPS_LOG"; }
     backend_remove_label() { echo "remove_label $2 $3" >> "$OPS_LOG"; }
     log() { :; }

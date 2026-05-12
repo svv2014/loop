@@ -657,3 +657,29 @@ YAML
     after_count=$(find "$DEDUP_DIR" -type f | wc -l)
     [ "$before_count" -eq "$after_count" ]
 }
+
+# ---------------------------------------------------------------------------
+# acquire_lock — atomic noclobber locking
+# ---------------------------------------------------------------------------
+
+# Verify that a second scanner invocation exits immediately (without emitting)
+# when the lock file already holds a live PID.
+# Strategy: invoke scanner.sh --dry-run with a pre-written lock file whose PID
+# is our current test process ($$) — guaranteed alive. The scanner must detect
+# the live holder and exit 0 without printing any "DRY-RUN emit:" lines.
+@test "acquire_lock: exits 0 without dispatching when live PID holds the lock" {
+    local lock_file="/tmp/loop-scanner.lock"
+    # Write our own PID as the holder — it is guaranteed to be alive.
+    echo "$$" > "$lock_file"
+
+    # Run the full scanner script in --dry-run mode. It should detect the live
+    # PID and exit 0 without emitting anything.
+    run "$REPO_ROOT/scanner/scanner.sh" --dry-run
+
+    # Always clean up the lock file we created.
+    rm -f "$lock_file"
+
+    [ "$status" -eq 0 ]
+    # Confirm no events were dispatched.
+    [[ "$output" != *"DRY-RUN emit:"* ]]
+}

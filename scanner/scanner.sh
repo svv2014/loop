@@ -114,16 +114,27 @@ _budget_exceeded() {
 }
 
 acquire_lock() {
-    if [ -f "$LOCK_FILE" ]; then
-        local pid
-        pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
-        if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-            log "Already running (PID $pid). Exiting."
-            exit 0
-        fi
+    # Atomic create — POSIX noclobber fails if the file already exists.
+    if ( set -o noclobber; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
+        trap 'rm -f "$LOCK_FILE"' EXIT
+        return 0
     fi
-    echo $$ > "$LOCK_FILE"
-    trap 'rm -f "$LOCK_FILE"' EXIT
+    # File already exists — check if the holder is still alive.
+    local pid
+    pid=$(cat "$LOCK_FILE" 2>/dev/null || echo "")
+    if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
+        log "Already running (PID $pid). Exiting."
+        exit 0
+    fi
+    # Stale lock — holder PID is dead; remove and retry once.
+    rm -f "$LOCK_FILE"
+    if ( set -o noclobber; echo "$$" > "$LOCK_FILE" ) 2>/dev/null; then
+        trap 'rm -f "$LOCK_FILE"' EXIT
+        return 0
+    fi
+    # Another process won the race on the retry — exit cleanly.
+    log "Lock unavailable after stale-PID recovery. Exiting."
+    exit 0
 }
 
 # Dedup cache — prevent emitting the same event every tick.
