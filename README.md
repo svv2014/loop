@@ -340,6 +340,60 @@ Each convergence emits a `label_state_converged` event to loop-monitor (if
 sweep. The check honours `DRY_RUN` (logs intended mutations, makes no API
 calls).
 
+## Stage labels (`loop:stage:*`)
+
+Every open issue carries a single `loop:stage:<name>` label that names its
+current pipeline stage.  The reconciler derives and maintains this label
+automatically — no handler needs to set it.
+
+### Stage namespace
+
+| Stage label          | Meaning                        | Primary trigger label |
+|----------------------|--------------------------------|-----------------------|
+| `loop:stage:po`      | PO triage queue                | `needs-po`            |
+| `loop:stage:dev`     | Development queue              | `needs-dev`           |
+| `loop:stage:review`  | Waiting for human review       | `needs-review`        |
+| `loop:stage:qa`      | QA / build gate                | `needs-qa`            |
+| `loop:stage:merge`   | Approved, ready to merge       | `qa-pass`             |
+| `loop:stage:blocked` | Blocked / needs clarification  | `blocked`             |
+| `loop:stage:done`    | Merged / closed                | —                     |
+
+The stage label is a **derived, read-only** marker.  Trigger labels remain
+the scanner's dispatch mechanism — the `loop:stage:*` label exists purely so
+tooling can answer "what stage is this ticket in?" with a single label lookup.
+
+### Reconciler behaviour
+
+Each reconciler tick runs `reconcile_stage_labels`, which:
+
+1. **No stage label** → derives the correct stage from the trigger labels
+   present and adds `loop:stage:<name>`.
+2. **Stage label disagrees with trigger labels** → the stage label wins;
+   reconciler reapplies the canonical trigger label for that stage and
+   removes any contradicting trigger labels.
+3. **Multiple stage labels** → removes extras, keeps the one that matches
+   the highest-priority trigger label (merge > qa > review > dev > po).
+4. **No trigger labels** → leaves the ticket alone (no stage label
+   invented); the existing lost-issue path surfaces it.
+
+### Bootstrap / backfill
+
+To apply stage labels to all existing open tickets in a project:
+
+```bash
+# Dry-run first (default):
+scripts/backfill-stage-labels.sh --slug <slug>
+
+# Apply for real:
+scripts/backfill-stage-labels.sh --slug <slug> --apply
+
+# All projects:
+scripts/backfill-stage-labels.sh --apply
+```
+
+The script is idempotent — a second pass makes zero changes when all labels
+are already correct.
+
 ## Pipeline concurrency & priority
 
 Loop's scanner picks issues to claim every 5 minutes. Two knobs control how
