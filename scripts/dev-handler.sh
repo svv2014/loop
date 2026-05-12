@@ -22,6 +22,8 @@ source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/handler_guard.sh
 source "$LOOP_ROOT/lib/handler_guard.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
+# shellcheck source=../lib/progress.sh
+source "$LOOP_ROOT/lib/progress.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
@@ -116,6 +118,7 @@ backend_add_label "$REPO" "$ISSUE_NUM" in-progress
 # scanner re-queues it on the next tick rather than leaving it stuck in-progress.
 _IN_PROGRESS_CLAIMED=1
 _dev_label_cleanup() {
+    progress_stop 2>/dev/null || true
     [ "${_IN_PROGRESS_CLAIMED:-0}" = "1" ] || return 0
     log "EXIT trap: clearing orphaned in-progress on #$ISSUE_NUM — restoring to dev"
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress 2>/dev/null || true
@@ -217,7 +220,9 @@ cleanup_worktree() {
 }
 
 LOG_CAPTURE_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+progress_start dev
 if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    progress_stop
     _IN_PROGRESS_CLAIMED=0  # disarm trap — success path handles cleanup
     log "dev agent succeeded for #$ISSUE_NUM"
     bounty_report "dev_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" || true
@@ -266,6 +271,7 @@ if matches:
     fi
     cleanup_worktree
 else
+    progress_stop
     _IN_PROGRESS_CLAIMED=0  # disarm trap — failure path handles cleanup
 
     # Capture the agent output tail so we can classify the failure.

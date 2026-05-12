@@ -24,6 +24,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 # shellcheck source=../lib/labels.sh
 source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
+# shellcheck source=../lib/progress.sh
+source "$LOOP_ROOT/lib/progress.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
@@ -347,9 +349,11 @@ cleanup_worktree() {
 }
 
 _AGENT_RC=0
+progress_start dev_rework
 if ! loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     _AGENT_RC=1
 fi
+progress_stop
 
 # Post-agent DIRTY check: if the pre-agent rebase detected conflicts, verify
 # the agent actually resolved them.  One attempt only — if the branch is still

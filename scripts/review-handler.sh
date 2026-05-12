@@ -23,6 +23,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 # shellcheck source=../lib/labels.sh
 source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
+# shellcheck source=../lib/progress.sh
+source "$LOOP_ROOT/lib/progress.sh"
 # shellcheck source=../lib/notify.sh
 source "$LOOP_ROOT/lib/notify.sh"
 # shellcheck source=../lib/cli-hint.sh
@@ -99,6 +101,7 @@ retry_clear() { rm -f "$RETRY_FILE"; }
 # EXIT trap — installed after in-review is added so failures BEFORE that point
 # don't trigger noisy label churn. Guarantees the PR never stays in-review.
 _review_handler_cleanup() {
+    progress_stop 2>/dev/null || true
     local rc=$?
     # Only act if in-review is still set and no terminal decision label is present.
     if backend_pr_has_any_label "$REPO" "$PR_NUM" \
@@ -222,7 +225,9 @@ TASK_PROMPT=$(cat "$_PROMPT_FILE")
 rm -f "$_PROMPT_FILE"
 
 _REVIEW_LOG_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+progress_start review
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
+    progress_stop
     log "review agent finished for PR #$PR_NUM"
     bounty_report "review_done" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" || true
     loop_notify "✅ [$SLUG] PR#$PR_NUM review done"
@@ -261,6 +266,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
         backend_add_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"
     fi
 else
+    progress_stop
     _agent_tail=$(tail -n +"$((_REVIEW_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
     n=$(retry_incr)
     log "review agent failed for PR #$PR_NUM (attempt $n/$MAX_RETRIES)"
