@@ -36,6 +36,8 @@ source "$LOOP_ROOT/lib/labels.sh"
 source "$LOOP_ROOT/lib/recovery.sh"
 # shellcheck source=../lib/author_gate.sh
 source "$LOOP_ROOT/lib/author_gate.sh"
+# shellcheck source=../lib/stage.sh
+source "$LOOP_ROOT/lib/stage.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-reconciler.log"
 LOCK_FILE="/tmp/loop-reconciler.lock"
@@ -2833,6 +2835,181 @@ PY
     done <<< "$stuck"
 }
 
+# --- Check: loop:stage:* label reconciliation --------------------------------
+# Ensures every open issue carries exactly one loop:stage:<name> label that
+# reflects the highest-priority trigger label currently set on the ticket.
+#
+# Three repair cases:
+#   (a) No stage label → derive from trigger labels and add it.
+#   (b) Stage label present but wrong trigger labels → reapply correct trigger,
+#       remove contradicting trigger labels (stage label is the source of truth).
+#   (c) Multiple stage labels → keep the one matching the highest-priority
+#       trigger label and remove the rest.
+#
+# If no trigger labels are present on an open issue, the function leaves the
+# ticket alone (no stage label is invented).  The reconciler's existing
+# anomaly / lost-issue paths surface those.
+#
+# DRY_RUN is honoured.  Uses add-then-remove ordering (#198) for atomicity.
+reconcile_stage_labels() {
+    local repo="$1" slug="$2"
+    log "[$repo] stage-label sync"
+
+    loop_ensure_stage_labels_exist "$repo"
+
+    local issues_json
+    issues_json=$(gh issue list --repo "$repo" --state open --limit 200 \
+        --json number,labels 2>/dev/null || echo "[]")
+
+    local plan
+    plan=$(ISSUES="$issues_json" SLUG="$slug" python3 - <<'PY'
+import json, os
+
+issues  = json.loads(os.environ.get('ISSUES') or '[]')
+STAGE_PREFIX = 'loop:stage:'
+
+for it in issues:
+    num    = it.get('number')
+    labels = {
+        (l.get('name') if isinstance(l, dict) else l)
+        for l in (it.get('labels') or [])
+    }
+    stage_labels = {l for l in labels if l.startswith(STAGE_PREFIX)}
+    trigger_labels = labels - stage_labels
+
+    # Represent trigger labels as comma-separated for shell
+    trig_csv = ','.join(sorted(trigger_labels))
+    stage_csv = ','.join(sorted(stage_labels))
+
+    # Emit: number TAB trigger_csv TAB stage_csv
+    print(f"{num}\t{trig_csv}\t{stage_csv}")
+PY
+)
+
+    [ -z "$plan" ] && return 0
+
+    while IFS=$'\t' read -r num trig_csv stage_csv; do
+        [ -z "$num" ] && continue
+
+        # Derive the correct stage from the current trigger labels.
+        local correct_stage
+        correct_stage=$(loop_stage_for_labels "$slug" "$trig_csv")
+
+        # Parse existing stage labels into an array-like string.
+        local existing_stage_label=""
+        local extra_stage_labels=""
+        if [ -n "$stage_csv" ]; then
+            # Find first stage label and any extras.
+            local first=true
+            local s
+            local IFS_SAVE="$IFS"
+            IFS=','
+            for s in $stage_csv; do
+                [ -z "$s" ] && continue
+                if $first; then
+                    existing_stage_label="$s"
+                    first=false
+                else
+                    extra_stage_labels="${extra_stage_labels} ${s}"
+                fi
+            done
+            IFS="$IFS_SAVE"
+        fi
+
+        # No stage label and no triggers → nothing to invent; skip.
+        if [ -z "$correct_stage" ] && [ -z "$stage_csv" ]; then
+            continue
+        fi
+
+        # Stage label wins when present.  Determine the authoritative stage:
+        #   - If a stage label exists, it is the authority.
+        #   - Otherwise, derive from trigger labels (correct_stage).
+        local auth_stage
+        if [ -n "$existing_stage_label" ]; then
+            auth_stage="${existing_stage_label#loop:stage:}"
+        else
+            auth_stage="$correct_stage"
+        fi
+        local auth_label="loop:stage:${auth_stage}"
+        local auth_trigger
+        auth_trigger=$(loop_trigger_label_for_stage "$slug" "$auth_stage" 2>/dev/null || echo "")
+
+        # Remove extra stage labels first (keep auth_label).
+        if [ -n "$extra_stage_labels" ]; then
+            local s
+            for s in $extra_stage_labels; do
+                [ -z "$s" ] && continue
+                log "[$repo] issue #$num: remove extra stage label $s"
+                $DRY_RUN && continue
+                backend_remove_label "$repo" "$num" "$s" >/dev/null 2>&1 || true
+            done
+        fi
+
+        # Case (a): no stage label → add the derived one.
+        if [ -z "$stage_csv" ]; then
+            log "[$repo] issue #$num: add missing $auth_label"
+            $DRY_RUN && continue
+            backend_add_label "$repo" "$num" "$auth_label" >/dev/null 2>&1 || true
+            continue
+        fi
+
+        # Cases (b) and (c): stage label present.
+        # Ensure the correct trigger label for the authoritative stage is present.
+        # Remove contradicting trigger labels (workflow triggers that don't match).
+        local needs_trigger_fix=false
+        if [ -n "$auth_trigger" ]; then
+            case ",$trig_csv," in
+                *",${auth_trigger},"*) : ;;  # already present
+                *) needs_trigger_fix=true ;;
+            esac
+        fi
+
+        # Also check for contradicting workflow trigger labels.
+        local has_stray_triggers=false
+        if [ -n "$trig_csv" ]; then
+            local t
+            local IFS_SAVE="$IFS"
+            IFS=','
+            for t in $trig_csv; do
+                [ -z "$t" ] && continue
+                [ "$t" = "$auth_trigger" ] && continue
+                if loop_label_is_trigger "$slug" issue "$t" || loop_label_is_trigger "$slug" pr "$t"; then
+                    has_stray_triggers=true
+                    break
+                fi
+            done
+            IFS="$IFS_SAVE"
+        fi
+
+        if ! $needs_trigger_fix && ! $has_stray_triggers; then
+            continue  # All consistent — nothing to do.
+        fi
+
+        log "[$repo] issue #$num: stage=$auth_stage trigger_fix=$needs_trigger_fix stray=$has_stray_triggers (triggers: $trig_csv)"
+        $DRY_RUN && continue
+
+        # Add-before-remove (#198): add correct trigger first.
+        if $needs_trigger_fix && [ -n "$auth_trigger" ]; then
+            backend_add_label "$repo" "$num" "$auth_trigger" >/dev/null 2>&1 || true
+        fi
+        # Remove stray trigger labels.
+        if $has_stray_triggers; then
+            local t
+            local IFS_SAVE="$IFS"
+            IFS=','
+            for t in $trig_csv; do
+                [ -z "$t" ] && continue
+                [ "$t" = "$auth_trigger" ] && continue
+                if loop_label_is_trigger "$slug" issue "$t" || loop_label_is_trigger "$slug" pr "$t"; then
+                    backend_remove_label "$repo" "$num" "$t" >/dev/null 2>&1 || true
+                fi
+            done
+            IFS="$IFS_SAVE"
+        fi
+
+    done <<< "$plan"
+}
+
 run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
@@ -2871,6 +3048,7 @@ run_project() {
     reconcile_agent_distress "$REPO"
     reconcile_author_gated "$slug" "$REPO"
     reconcile_closed_issue_labels "$REPO"
+    reconcile_stage_labels "$REPO" "$slug"
     recovery_check_dependencies "$slug"
     reconcile_worktrees "$slug" "$REPO"
     recovery_check_stuck_labels "$slug"
