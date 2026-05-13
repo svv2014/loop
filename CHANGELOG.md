@@ -24,6 +24,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-304] document reconciler opt-out flags in loop.env.example (#343)
 - [LOOP-310] add diagnostic context to *_failed and qa_fail bounty events (#350)
 - [LOOP-324] guard against dangerous patterns in validation_cmd (#351)
+- [LOOP-311] fix merge-handler diagnostic: capture rc, retry on transient failure (#352)
 ## [0.4.0] - 2026-05-10
 
 A 12-PR batch focused on making the autonomous pipeline self-correcting
