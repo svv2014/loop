@@ -515,6 +515,71 @@ Exit codes: `0` = all OK, `2` = any DEGRADED, `1` = any FAIL.
 > files, agent CLI availability, and `gh` auth. `scripts/status.sh` is the
 > runtime variant that checks live pipeline state.
 
+## Recovery
+
+When a ticket ends up in a confused label state (mis-labelled after a partial
+mass-merge, stuck handler left a bad label, etc.) use `scripts/loop-recover.sh`
+to roll it back to a specific pipeline stage without hand-editing labels.
+
+### Usage
+
+```bash
+scripts/loop-recover.sh <issue-or-pr-number> [--slug <slug>] [--to-stage <stage>] [--dry-run]
+```
+
+| Flag | Description |
+|---|---|
+| `<number>` | Issue or PR number to recover |
+| `--slug <slug>` | Project slug from `config/projects.yaml` (required when multiple projects are configured) |
+| `--to-stage <stage>` | Force the ticket to a specific stage: `po`, `dev`, `review`, `qa`, or `merge` |
+| `--dry-run` | Print planned label add/remove and comment without mutating GitHub |
+
+### Auto-detection (without `--to-stage`)
+
+Without `--to-stage`, the script reads the event log at `$LOOP_MONITOR_LOG`
+(defaults to `$LOOP_LOG_DIR/loop-monitor-events.jsonl`), finds the most
+recent `*_done` event for the ticket, and computes the stage to restore:
+
+| Last event | Restored stage | Label applied |
+|---|---|---|
+| `po_done` | `dev` | `needs-dev` |
+| `dev_done` | `review` | `needs-review` |
+| `review_done` | `qa` | `needs-qa` |
+| `qa_done` | `merge` | `qa-pass` |
+
+If no matching event exists, the script exits with a message asking you to
+use `--to-stage` explicitly.
+
+Set `LOOP_MONITOR_LOG` in `loop.env` to the path where your loop-monitor
+instance (or a log shipper) writes its JSONL event stream.
+
+### Examples
+
+```bash
+# Preview what would happen without changing anything:
+scripts/loop-recover.sh 123 --slug myapp --dry-run
+
+# Auto-detect last known-good stage and restore:
+scripts/loop-recover.sh 123 --slug myapp
+
+# Force ticket #456 to the qa stage regardless of event history:
+scripts/loop-recover.sh 456 --slug myapp --to-stage qa
+
+# Single-project setup — slug auto-detected:
+scripts/loop-recover.sh 78 --to-stage dev
+```
+
+### Behaviour
+
+- Removes all pipeline-stage labels from the ticket, then adds the target
+  stage's trigger label.
+- Posts a comment explaining the rollback (target stage, reason,
+  operator-invoked).
+- **Idempotent:** running the same command twice produces the same end state
+  and posts at most one new comment per run (skipped when the last comment
+  already contains the recovery marker).
+- Labels only — no branch state, commits, or PRs are modified.
+
 ## Development
 
 ```bash
