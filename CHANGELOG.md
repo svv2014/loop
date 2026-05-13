@@ -19,6 +19,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-267] scanner: new `dev.pipeline_slots` gate (serial mode) +
   priority-aware pick order (`p0-critical` > `p1-high` > `p2-medium` >
   `p3-low` > unlabeled, then by number ascending), applied at every stage
+- [LOOP-302] eliminate N+1 gh API calls in loop_gh_issues_with_label (#341)
 ## [0.4.0] - 2026-05-10
 
 A 12-PR batch focused on making the autonomous pipeline self-correcting
