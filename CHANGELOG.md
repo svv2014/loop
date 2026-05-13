@@ -25,6 +25,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-310] add diagnostic context to *_failed and qa_fail bounty events (#350)
 - [LOOP-324] guard against dangerous patterns in validation_cmd (#351)
 - [LOOP-311] fix merge-handler diagnostic: capture rc, retry on transient failure (#352)
+- [LOOP-334] add SQLite jobs schema and lib/jobs.sh primitives (#353)
 ## [0.4.0] - 2026-05-10
 
 A 12-PR batch focused on making the autonomous pipeline self-correcting
