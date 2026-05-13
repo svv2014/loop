@@ -3,6 +3,10 @@ name: Auto-label external PRs
 # Auto-labels PRs opened by non-operator accounts so the autonomous pipeline
 # treats them under the operator-review gate. The reviewer flow (loop's
 # review-handler) runs automatically; the operator decides on merge.
+#
+# Comment-on-open posts only on the FIRST open. Reopens still re-apply
+# labels (idempotent) but skip the welcome comment so operator-driven
+# reopens don't leave a redundant bot greeting after a human reply.
 
 on:
   pull_request_target:
@@ -27,13 +31,15 @@ jobs:
               issue_number: pr.number,
               labels: ['external-pr', 'needs-review'],
             });
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.number,
-              body: [
-                "Thanks for the contribution.",
-                "",
-                "This PR has been labeled `external-pr` + `needs-review`. The autonomous review pipeline will read the diff and post a verdict comment automatically. After that, the operator (the single maintainer account this project is gated to) reviews the verdict and your diff, and merges manually if everything looks good.",
-              ].join("\n"),
-            });
+            if (context.payload.action === 'opened') {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: pr.number,
+                body: [
+                  "Thanks for the contribution.",
+                  "",
+                  "This PR has been labeled `external-pr` + `needs-review`. The autonomous review pipeline will read the diff and post a verdict comment automatically. After that, the operator (the single maintainer account this project is gated to) reviews the verdict and your diff, and merges manually if everything looks good.",
+                ].join("\n"),
+              });
+            }
