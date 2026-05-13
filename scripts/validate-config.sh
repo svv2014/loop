@@ -143,6 +143,37 @@ for idx, p in enumerate(projects):
             f"resolved to: {substituted}"
         )
 
+    # Security lint: dangerous patterns in validation_cmd
+    import re as _re
+    DANGEROUS_PATTERNS = [
+        (r'\bcurl\b',          'curl'),
+        (r'\bwget\b',          'wget'),
+        (r'\beval\b',          'eval'),
+        (r'base64\s+(-d|--decode)', 'base64 -d / --decode'),
+        (r'\bnc\s+-l\b',       'nc -l'),
+        (r'/dev/tcp',          '/dev/tcp'),
+        (r'/dev/udp',          '/dev/udp'),
+        (r'\bbash\s+-i\b',     'bash -i'),
+        (r'\bsh\s+-i\b',       'sh -i'),
+    ]
+    qa_cfg = p.get("qa") or {}
+    opt_out = qa_cfg.get("validation_cmd_security_opt_out", False)
+    validation_cmd = qa_cfg.get("validation_cmd") or ""
+    if validation_cmd:
+        if opt_out:
+            warnings.append(
+                f"{loc} (slug={slug!r}): security lint skipped for 'qa.validation_cmd' "
+                f"(qa.validation_cmd_security_opt_out=true)"
+            )
+        else:
+            for pattern, label in DANGEROUS_PATTERNS:
+                if _re.search(pattern, validation_cmd):
+                    errors.append(
+                        f"{loc} (slug={slug!r}): SECURITY: dangerous pattern "
+                        f"'{label}' found in qa.validation_cmd: {validation_cmd!r} — "
+                        f"set qa.validation_cmd_security_opt_out: true to suppress if intentional"
+                    )
+
 # Print results
 for w in warnings:
     print(f"[validate] WARN:  {w}", file=sys.stderr)
