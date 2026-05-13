@@ -1,0 +1,39 @@
+name: Auto-label external PRs
+
+# Auto-labels PRs opened by non-operator accounts so the autonomous pipeline
+# treats them under the operator-review gate. The reviewer flow (loop's
+# review-handler) runs automatically; the operator decides on merge.
+
+on:
+  pull_request_target:
+    types: [opened, reopened]
+
+permissions:
+  pull-requests: write
+  issues: write
+
+jobs:
+  label:
+    if: github.event.pull_request.user.login != 'svv2014'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@v7
+        with:
+          script: |
+            const pr = context.payload.pull_request;
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              labels: ['external-pr', 'needs-review'],
+            });
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.number,
+              body: [
+                "Thanks for the contribution.",
+                "",
+                "This PR has been labeled `external-pr` + `needs-review`. The autonomous review pipeline will read the diff and post a verdict comment automatically. After that, the operator (the single maintainer account this project is gated to) reviews the verdict and your diff, and merges manually if everything looks good.",
+              ].join("\n"),
+            });
