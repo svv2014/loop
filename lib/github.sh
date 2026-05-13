@@ -3,20 +3,30 @@
 
 set -euo pipefail
 
-# loop_issue_parent_epic <repo> <number>
-# Parses the issue body for an epic reference (case-insensitive, first match):
+# _loop_parse_parent_epic_body <body>
+# Parses a body string for an epic reference (case-insensitive, first match):
 #   "Epic: #NNN" | "Child of #NNN" | "Parent: #NNN" | "Part of #NNN"
 # Prints the epic issue number, or 9999999 when none is found.
-loop_issue_parent_epic() {
-    local repo="$1" number="$2"
-    local body match
-    body=$(gh issue view "$number" --repo "$repo" --json body --jq '.body' 2>/dev/null) || { echo 9999999; return; }
+# Pure text-in / number-out — no API calls.
+_loop_parse_parent_epic_body() {
+    local body="$1"
+    local match
     [ -z "$body" ] || [ "$body" = "null" ] && { echo 9999999; return; }
     match=$(printf '%s' "$body" \
         | grep -ioE '(epic[[:space:]]*:|child of|parent[[:space:]]*:|part of)[[:space:]]*#([0-9]+)' \
         | head -1 \
         | grep -oE '[0-9]+$') || true
     printf '%s\n' "${match:-9999999}"
+}
+
+# loop_issue_parent_epic <repo> <number>
+# Fetches the issue body and delegates to _loop_parse_parent_epic_body.
+# Kept for external callers; loop_gh_issues_with_label uses the cached body.
+loop_issue_parent_epic() {
+    local repo="$1" number="$2"
+    local body
+    body=$(gh issue view "$number" --repo "$repo" --json body --jq '.body' 2>/dev/null) || { echo 9999999; return; }
+    _loop_parse_parent_epic_body "$body"
 }
 
 # loop_gh_issues_with_label <repo> <label>
@@ -38,14 +48,18 @@ loop_gh_issues_with_label() {
     # stage trigger label gets emitted as an issue event with a PR-shaped
     # payload (pr_number, no issue_number) — breaks downstream interpolation
     # and dispatches dev-handler against a PR. Filter to true issues by URL.
+    #
+    # body is fetched in the same bulk call so that _loop_parse_parent_epic_body
+    # can extract the epic sort key without any per-issue gh API calls.
     gh issue list --repo "$repo" --label "$label" --state open \
-        --json number,title,url,labels,author \
+        --json number,title,url,labels,author,body \
         --jq '
           map(select(.url | contains("/issues/")))
           | map(
               ([.labels[].name]) as $L |
               {
                 number, title, url, labels: $L, author: .author.login,
+                _body: (.body // ""),
                 _p: (
                   if   ($L | index("p0-critical")) then 0
                   elif ($L | index("p1-high"))     then 1
@@ -63,11 +77,12 @@ loop_gh_issues_with_label() {
     fi
 
     while IFS= read -r obj; do
-        local num _p _b epic clean
+        local num _p _b body epic clean
         num=$(printf '%s' "$obj" | jq -r '.number')
         _p=$(printf '%s'  "$obj" | jq -r '._p')
         _b=$(printf '%s'  "$obj" | jq -r '._b')
-        epic=$(loop_issue_parent_epic "$repo" "$num")
+        body=$(printf '%s' "$obj" | jq -r '._body // ""')
+        epic=$(_loop_parse_parent_epic_body "$body")
         clean=$(printf '%s' "$obj" | jq -c '{number, title, url, labels, author}')
         printf '%07d %d %d %07d %s\n' "$epic" "$_p" "$_b" "$num" "$clean" >>"$sort_tmp"
     done <"$raw_tmp"
