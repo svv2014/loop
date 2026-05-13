@@ -1,0 +1,10 @@
+{
+  "number": 42,
+  "title": "Add rate-limit retry to gh API calls",
+  "state": "OPEN",
+  "body": "## Objective\n\nGH API calls occasionally hit 429. We should retry with backoff.\n\n## Acceptance Criteria\n\n- [ ] Retry up to 3 times on 429\n- [ ] Exponential backoff starting at 1s\n- [x] Log each retry attempt\n\n## Out of scope\n\nRetrying on 5xx errors.",
+  "labels": [
+    {"id": "LA_1", "name": "dev"},
+    {"id": "LA_2", "name": "in-progress"}
+  ]
+}

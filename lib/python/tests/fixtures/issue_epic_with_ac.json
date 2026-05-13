@@ -1,0 +1,10 @@
+{
+  "number": 100,
+  "title": "Migrate all handlers to Python",
+  "state": "OPEN",
+  "body": "## Objective\n\nFull Python migration of all bash handlers.\n\n## Acceptance Criteria\n\n- [ ] po-handler uses Python module\n- [ ] dev-handler uses Python module\n- [ ] qa-handler uses Python module\n\n## Notes\n\nPhased approach: po first.",
+  "labels": [
+    {"id": "LA_1", "name": "epic"},
+    {"id": "LA_2", "name": "loop.po_review"}
+  ]
+}

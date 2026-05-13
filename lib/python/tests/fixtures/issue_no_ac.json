@@ -1,0 +1,9 @@
+{
+  "number": 7,
+  "title": "fix the bug",
+  "state": "OPEN",
+  "body": "Something is broken, please fix it.",
+  "labels": [
+    {"id": "LA_1", "name": "loop.po_review"}
+  ]
+}

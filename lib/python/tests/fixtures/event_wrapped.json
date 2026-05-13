@@ -1,0 +1,9 @@
+{
+  "type": "loop.po_review",
+  "payload": {
+    "slug": "myproject",
+    "issue_number": 42,
+    "issue_title": "Add rate-limit retry",
+    "issue_url": "https://github.com/org/repo/issues/42"
+  }
+}

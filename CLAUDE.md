@@ -35,6 +35,9 @@ scripts/po-handler.sh       # Handles loop.po_review (PO expansion)
 scripts/dev-rework-handler.sh  # Handles loop.dev_rework (changes-requested / qa-fail)
 templates/CLAUDE.md.template   # Template for per-project CLAUDE.md files
 templates/launchd/          # macOS plist templates for scanner + reconciler
+lib/python/                 # Standalone Python modules for handler logic (Phase A migration)
+lib/python/po_handler.py    # Pure parse/decision logic extracted from po-handler.sh
+lib/python/tests/           # pytest unit tests + fixture JSON for lib/python modules
 ```
 
 ## Development Commands
@@ -73,7 +76,7 @@ tail -f ~/.loop/logs/loop-dev-handler.log
 - **No hardcoded paths:** use `$LOOP_ROOT`, `$ROOT`, `$HOME` — never literal `/Users/...` paths
 - **No personal identifiers** in committed files (CI grep enforces this)
 - Each handler sources `lib/env.sh`, `lib/config.sh`, `lib/backends/backend.sh` — maintain this pattern
-- Python snippets are inlined via heredoc (`<<'PY'`) — do not introduce `.py` source files
+- Python snippets are inlined via heredoc (`<<'PY'`) — do not introduce `.py` source files **except** under `lib/python/`, which hosts standalone testable modules (see Phase A migration plan; `po_handler.py` is the first module)
 - `loop.env` is never committed (`.gitignore`); `loop.env.example` is the canonical reference
 
 ## QA Process

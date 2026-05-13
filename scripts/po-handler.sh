@@ -52,20 +52,9 @@ log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [po-handler] $*" | tee -a "$LOG_FIL
 # `## Acceptance Criteria` section with at least one `- [ ]`/`- [x]` checkbox
 # item between the heading and the next `## ` heading (or EOF). Returns 1
 # otherwise. Callers must check the exit code, not stdout.
+# Decision logic lives in lib/python/po_handler.py (has-complete-ac subcommand).
 _po_has_complete_ac() {
-    BODY="${1:-}" python3 <<'PY'
-import os, re, sys
-body = os.environ.get('BODY', '')
-m = re.search(r'(?im)^##\s+Acceptance(?:\s+Criteria)?\s*$', body)
-if not m:
-    sys.exit(1)
-rest = body[m.end():]
-nxt = re.search(r'(?m)^##\s+\S', rest)
-section = rest[:nxt.start()] if nxt else rest
-if re.search(r'(?m)^\s*-\s*\[[ xX]\]', section):
-    sys.exit(0)
-sys.exit(1)
-PY
+    printf '%s' "${1:-}" | PYTHONPATH="$LOOP_ROOT" python3 -m lib.python.po_handler has-complete-ac
 }
 
 SLUG="${LOOP_SLUG:-}"
@@ -79,10 +68,12 @@ if [ -z "$SLUG" ] || [ -z "$ISSUE_NUM" ]; then
         EVENT_JSON=$(cat)
     fi
     if [ -n "$EVENT_JSON" ]; then
-        SLUG=$(echo "$EVENT_JSON"        | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('payload',d).get('slug',''))")
-        ISSUE_NUM=$(echo "$EVENT_JSON"   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('payload',d).get('issue_number',''))")
-        ISSUE_TITLE=$(echo "$EVENT_JSON" | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('payload',d).get('issue_title',''))")
-        ISSUE_URL=$(echo "$EVENT_JSON"   | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('payload',d).get('issue_url',''))")
+        # Parse via Python module (lib/python/po_handler.py parse-event).
+        _parsed=$(printf '%s' "$EVENT_JSON" | PYTHONPATH="$LOOP_ROOT" python3 -m lib.python.po_handler parse-event)
+        SLUG=$(printf '%s' "$_parsed"        | python3 -c "import json,sys; print(json.load(sys.stdin)['slug'])")
+        ISSUE_NUM=$(printf '%s' "$_parsed"   | python3 -c "import json,sys; print(json.load(sys.stdin)['issue_number'])")
+        ISSUE_TITLE=$(printf '%s' "$_parsed" | python3 -c "import json,sys; print(json.load(sys.stdin)['issue_title'])")
+        ISSUE_URL=$(printf '%s' "$_parsed"   | python3 -c "import json,sys; print(json.load(sys.stdin)['issue_url'])")
     fi
 fi
 
@@ -178,13 +169,8 @@ fi
 
 # Extract the true original body — strips any existing ## Original brief section
 # so re-triaging an already-expanded issue doesn't nest markers.
-_ORIGINAL_BRIEF=$(BODY="$ISSUE_BODY" python3 -c "
-import os, re
-body = os.environ.get('BODY', '').strip()
-# Strip existing marker and everything after it
-body = re.split(r'(?m)^---\s*\n##\s+Original brief', body)[0].rstrip()
-print(body)
-")
+# Decision logic lives in lib/python/po_handler.py (extract-brief subcommand).
+_ORIGINAL_BRIEF=$(printf '%s' "$ISSUE_BODY" | PYTHONPATH="$LOOP_ROOT" python3 -m lib.python.po_handler extract-brief)
 
 if [ -n "$_ORIGINAL_BRIEF" ]; then
     _ORIG_BRIEF_SECTION="After writing the full spec body above to /tmp/po-${ISSUE_NUM}-body.md, append the following to the file:
