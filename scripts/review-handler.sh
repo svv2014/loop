@@ -134,9 +134,15 @@ if [ "$retries" -ge "$MAX_RETRIES" ]; then
     exit 0
 fi
 
-log "review: slug=$SLUG repo=$REPO pr=#$PR_NUM attempt=$((retries + 1))/$MAX_RETRIES"
+# External PR detection — set once, used at decision time below.
+_IS_EXTERNAL_PR=false
+if backend_pr_has_any_label "$REPO" "$PR_NUM" "$LOOP_LABEL_EXTERNAL_PR" 2>/dev/null; then
+    _IS_EXTERNAL_PR=true
+fi
+
+log "review: slug=$SLUG repo=$REPO pr=#$PR_NUM attempt=$((retries + 1))/$MAX_RETRIES external=$_IS_EXTERNAL_PR"
 bounty_report "review_start" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" || true
-loop_notify "▶️ [$SLUG] PR#$PR_NUM review starting"
+loop_notify "▶️ [$SLUG] PR#$PR_NUM review starting${_IS_EXTERNAL_PR:+ (external)}"
 
 backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_REVIEW"
 backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING"
@@ -242,12 +248,34 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     case "$_decision" in
         CHANGES_REQUESTED)
             backend_remove_label "$REPO" "$PR_NUM" in-review
-            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" 2>/dev/null || true
-            backend_add_label    "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+            if [ "$_IS_EXTERNAL_PR" = "true" ]; then
+                # External PR rework path: don't auto-loop. Halt at terminal state and
+                # let the operator decide whether to engage with the contributor.
+                # Also strip any needs-qa/needs-dev/rework labels the agent may have applied.
+                backend_remove_label "$REPO" "$PR_NUM" \
+                    "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
+                    "$_REWORK_LABEL" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
+                    "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" 2>/dev/null || true
+                backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_EXTERNAL_REVIEW_FAIL"
+                loop_notify "🔴 [$SLUG] external PR#$PR_NUM review: changes requested — needs operator decision"
+            else
+                backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" 2>/dev/null || true
+                backend_add_label    "$REPO" "$PR_NUM" "$_REWORK_LABEL"
+            fi
             ;;
         APPROVED)
-            # APPROVED path is unchanged — the agent applies needs-qa itself.
             backend_remove_label "$REPO" "$PR_NUM" in-review
+            if [ "$_IS_EXTERNAL_PR" = "true" ]; then
+                # External PR approve path: halt at external-review-pass for operator
+                # merge decision. Do NOT progress to needs-qa — QA would execute the
+                # external contributor's code (validation_cmd) in the operator's shell.
+                # If the agent applied needs-qa, strip it.
+                backend_remove_label "$REPO" "$PR_NUM" \
+                    "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" 2>/dev/null || true
+                backend_add_label "$REPO" "$PR_NUM" "$LOOP_LABEL_EXTERNAL_REVIEW_PASS"
+                loop_notify "🟢 [$SLUG] external PR#$PR_NUM review: approved — ready for operator merge"
+            fi
+            # For internal PRs, APPROVED path is unchanged — the agent applies needs-qa itself.
             ;;
         *)
             # Empty / REVIEW_REQUIRED / COMMENTED — fall through to belt-and-braces.
@@ -257,7 +285,8 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
 
     # Belt-and-braces: if agent forgot to apply a decision label, default to rework
     # (workflow-resolved) so the PR doesn't silently disappear from the pipeline.
-    if ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
+    # Skip for external PRs — they don't auto-rework. Operator handles it.
+    if [ "$_IS_EXTERNAL_PR" != "true" ] && ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
             "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
             "$_REWORK_LABEL" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
             blocked 'done'; then
