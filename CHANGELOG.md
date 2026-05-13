@@ -13,6 +13,16 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+### Fixed
+- [#354] Reconciler dup-PR keep selection now prefers operator-authored
+  PRs (in `ALLOWED_AUTHORS`) over bot-authored PRs, with oldest-wins as
+  the tiebreaker within the same trust tier. External-contributor PRs
+  (not in `ALLOWED_AUTHORS`, not a bot) are SKIPPED from dedup entirely
+  — the reconciler will never auto-close an external contribution.
+  Previously the highest PR number won unconditionally, which destroyed
+  operator-in-flight work whenever a newer agent-authored duplicate
+  appeared. **p0-critical**.
+
 ### Added
 - External-PR review-only path: PRs carrying the `external-pr` label go
   through review-handler and halt at `external-review-pass` /
