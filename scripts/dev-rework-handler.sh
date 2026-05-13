@@ -349,11 +349,13 @@ cleanup_worktree() {
 }
 
 _AGENT_RC=0
+_REWORK_LOG_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
 progress_start dev_rework
 if ! loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     _AGENT_RC=1
 fi
 progress_stop
+_rework_tail=$(tail -n +"$((_REWORK_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
 
 # Post-agent DIRTY check: if the pre-agent rebase detected conflicts, verify
 # the agent actually resolved them.  One attempt only — if the branch is still
@@ -396,8 +398,9 @@ if [ "$_POST_DIRTY" = "true" ]; then
         fi
         gh pr comment "$PR_NUM" --repo "$REPO" --body "$_BLOCK_BODY" 2>/dev/null || true
     fi
+    _rework_blocked_diag="$(bounty_truncate_detail "$_rework_tail")"
     bounty_report "rework_blocked" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" \
-        pr_num="$PR_NUM" detail="rebase-conflict files=${_POST_AGENT_CONFLICTS}" || true
+        pr_num="$PR_NUM" detail="${_rework_blocked_diag:+${_rework_blocked_diag} | }rebase-conflict files=${_POST_AGENT_CONFLICTS}" || true
     loop_notify "🚫 [$SLUG] PR#$PR_NUM rework blocked — rebase conflict unresolved"
     cleanup_worktree
     exit 0
@@ -425,7 +428,10 @@ if [ "$_AGENT_RC" -eq 0 ]; then
 else
     n=$(retry_incr)
     log "rework agent failed for PR #$PR_NUM (attempt $n/$MAX_RETRIES)"
-    bounty_report "rework_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" pr_num="$PR_NUM" detail="attempt ${n}/${MAX_RETRIES}" || true
+    # Best-effort: surface unmet AC checkboxes from reviewer feedback in the rework log.
+    _unmet_ac=$(printf '%s' "$_rework_tail" | grep -E '^\s*- \[ \]' | head -3 | tr '\n' ' ' 2>/dev/null || true)
+    _rework_failed_diag="$(bounty_truncate_detail "${_unmet_ac:-$_rework_tail}")"
+    bounty_report "rework_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" pr_num="$PR_NUM" detail="${_rework_failed_diag:+${_rework_failed_diag} | }attempt ${n}/${MAX_RETRIES}" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_IN_REWORK"
         if [ -n "$LINKED_ISSUE" ] && ! _is_senior_escalated; then

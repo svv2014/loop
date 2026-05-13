@@ -276,6 +276,7 @@ else
 
     # Capture the agent output tail so we can classify the failure.
     _agent_tail=$(tail -n +"$((LOG_CAPTURE_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
+    _dev_diag="$(bounty_truncate_detail "$_agent_tail")"
 
     # Fail-fast on untracked-data dependencies — when the worker complains
     # about a missing file that looks like gitignored runtime data (ML
@@ -286,7 +287,7 @@ else
         _missing_path=$(loop_extract_missing_path "$_agent_tail")
         log "dev agent failed for #$ISSUE_NUM — untracked-data dependency (${_missing_path:-?}); marking blocked without burning retry"
         _failure_reason=$(loop_failure_category "$_agent_tail" 1)
-        bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="untracked-data: ${_missing_path:-?}" failure_reason="$_failure_reason" || true
+        bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="${_dev_diag:+${_dev_diag} | }untracked-data: ${_missing_path:-?}" failure_reason="$_failure_reason" || true
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked
         _block_body=$(mktemp /tmp/loop-block-XXXXXX.md)
@@ -332,7 +333,7 @@ else
     loop_backoff_record_failure "$SLUG" "$ISSUE_NUM" dev "dev attempt ${n}/${MAX_RETRIES}" >/dev/null || true
     log "dev agent failed for #$ISSUE_NUM (attempt $n/$MAX_RETRIES); backoff next-eligible logged"
     _failure_reason=$(loop_failure_category "$_agent_tail" 1)
-    bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="attempt ${n}/${MAX_RETRIES}" failure_reason="$_failure_reason" || true
+    bounty_report "dev_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="${_dev_diag:+${_dev_diag} | }attempt ${n}/${MAX_RETRIES}" failure_reason="$_failure_reason" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
         backend_add_label "$REPO" "$ISSUE_NUM" blocked

@@ -288,6 +288,8 @@ progress_start qa
 if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     progress_stop
     log "qa agent finished for PR #$PR_NUM"
+    _qa_agent_tail=$(tail -n +"$((_QA_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
+    _qa_diag="$(bounty_truncate_detail "$_qa_agent_tail")"
     loop_notify "✅ [$SLUG] PR#$PR_NUM qa done"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"
@@ -296,7 +298,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     if backend_pr_has_any_label "$REPO" "$PR_NUM" qa-pass "$_QA_PASS_LABEL"; then
         bounty_report "qa_pass" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
     else
-        bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
+        bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" detail="${_qa_diag:+${_qa_diag} | }outcome=qa-fail" || true
     fi
 
     # Belt-and-braces: if agent forgot to apply a decision label, default to qa-failed.
@@ -307,14 +309,15 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
         backend_comment_pr "$REPO" "$PR_NUM" \
             "QA agent ran but did not apply a decision label. Defaulting to ${_QA_FAIL_LABEL}. Operator: see ${LOG_FILE} for the agent transcript." \
             2>/dev/null || true
-        bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" || true
+        bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" detail="${_qa_diag:+${_qa_diag} | }outcome=no-decision-label" || true
     fi
 else
     progress_stop
     _agent_tail=$(tail -n +"$((_QA_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
     log "qa agent failed for PR #$PR_NUM"
     _failure_reason=$(loop_failure_category "$_agent_tail" 1)
-    bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" failure_reason="$_failure_reason" || true
+    _qa_fail_diag="$(bounty_truncate_detail "$_agent_tail")"
+    bounty_report "qa_fail" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" detail="${_qa_fail_diag:+${_qa_fail_diag} | }agent-error" failure_reason="$_failure_reason" || true
     loop_notify "❌ [$SLUG] PR#$PR_NUM qa failed: agent error"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA"
     backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA"

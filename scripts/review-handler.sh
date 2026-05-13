@@ -271,7 +271,10 @@ else
     n=$(retry_incr)
     log "review agent failed for PR #$PR_NUM (attempt $n/$MAX_RETRIES)"
     _failure_reason=$(loop_failure_category "$_agent_tail" 1)
-    bounty_report "review_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" detail="attempt ${n}/${MAX_RETRIES}" failure_reason="$_failure_reason" || true
+    # Best-effort: surface unmet AC checkboxes from the reviewer log if present.
+    _unmet_ac=$(printf '%s' "$_agent_tail" | grep -E '^\s*- \[ \]' | head -3 | tr '\n' ' ' 2>/dev/null || true)
+    _review_diag="$(bounty_truncate_detail "${_unmet_ac:-$_agent_tail}")"
+    bounty_report "review_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=reviewer project="$SLUG" pr_num="$PR_NUM" detail="${_review_diag:+${_review_diag} | }attempt ${n}/${MAX_RETRIES}" failure_reason="$_failure_reason" || true
     if [ "$n" -ge "$MAX_RETRIES" ]; then
         backend_remove_label "$REPO" "$PR_NUM" in-review
         backend_remove_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"

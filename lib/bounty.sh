@@ -42,6 +42,21 @@ _bounty_loop_id() {
     printf '%s-%s' "$host" "${root_hash:-00000000}"
 }
 
+# bounty_truncate_detail <text>
+# Normalise <text> for use as a bounty detail value:
+#   newlines → spaces, whitespace collapsed, hard-cut at 200 chars.
+# Returns empty string on empty input.
+# Usage: detail="$(bounty_truncate_detail "$raw") | attempt N/M"
+bounty_truncate_detail() {
+    local raw="${1:-}"
+    [ -z "$raw" ] && return 0
+    printf '%s' "$raw" \
+        | tr '\n\r\t' '   ' \
+        | tr -s ' ' \
+        | sed 's/^ *//;s/ *$//' \
+        | cut -c1-200
+}
+
 # bounty_report <event> [key=value ...]
 # Keys: agent model role project issue_num pr_num detail
 # Example: bounty_report "dev_start" role=dev model=sonnet project=myapp issue_num=42
