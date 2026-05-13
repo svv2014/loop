@@ -148,11 +148,15 @@ print(prs[0]['number'] if prs else '')
 
 # backend_list_open_prs_raw <repo>
 # Returns a raw JSON array of open PRs with fields:
-# number, body, createdAt, headRefName, title, labels, updatedAt
+# number, body, createdAt, headRefName, title, labels, updatedAt, author
+# `author` is flattened to the bare login string (gh returns it as a nested
+# object by default; we project the login so downstream callers can use
+# `pr["author"]` as a string).
 backend_list_open_prs_raw() {
     local repo="$1"
     gh pr list --repo "$repo" --state open --limit 100 \
-        --json number,body,createdAt,headRefName,title,labels,updatedAt \
+        --json number,body,createdAt,headRefName,title,labels,updatedAt,author \
+        --jq 'map({number, body, createdAt, headRefName, title, labels, updatedAt, author: (.author.login // "")})' \
         2>/dev/null || echo "[]"
 }
 

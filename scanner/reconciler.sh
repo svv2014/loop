@@ -108,23 +108,59 @@ reconcile_duplicate_prs() {
     prs_json=$(backend_list_open_prs_raw "$repo")
 
     # Build map: issue_num -> [pr_num,pr_num,...]
-    local map; map=$(PRS="$prs_json" python3 - <<'PY'
+    # Selection rule (operator-preference): when multiple PRs close the same
+    # issue, prefer operator-authored over bot-authored. Within the same
+    # trust tier, the older PR wins so in-flight work is preserved instead
+    # of destroyed. External-contributor PRs (author NOT in ALLOWED_AUTHORS,
+    # not a bot) are EXCLUDED from dedup-close — the reconciler must not
+    # auto-close external contributions; the operator decides.
+    local map; map=$(PRS="$prs_json" ALLOWED="${ALLOWED_AUTHORS:-}" python3 - <<'PY'
 import json, re, os
+
 prs = json.loads(os.environ['PRS'])
+allowed = {a.strip() for a in os.environ.get('ALLOWED', '').replace(',', ' ').split() if a.strip()}
+
+def tier(pr):
+    """Lower tier = higher priority to KEEP. 0=operator, 1=bot, 2=external."""
+    author = pr.get('author', '') or ''
+    if not allowed or author in allowed:
+        # Empty allow-list disables gating — treat all authors as tier 0.
+        return 0
+    if author.endswith('[bot]'):
+        return 1
+    return 2
+
 m = {}
 pat = re.compile(r'(?:clos(?:e|es|ed)|fix(?:|es|ed)|resolv(?:e|es|ed))\s+#(\d+)', re.I)
 for pr in prs:
     seen = set()
     for n in pat.findall(pr.get('body') or ''):
-        if n in seen: continue
+        if n in seen:
+            continue
         seen.add(n)
-        m.setdefault(n, []).append({'pr': pr['number'], 'createdAt': pr['createdAt'], 'title': pr['title']})
+        m.setdefault(n, []).append({
+            'pr': pr['number'],
+            'createdAt': pr.get('createdAt', ''),
+            'title': pr.get('title', ''),
+            'author': pr.get('author', '') or '',
+            'tier': tier(pr),
+        })
+
 for issue, plist in m.items():
-    if len(plist) <= 1: continue
-    plist.sort(key=lambda x: x['pr'], reverse=True)
+    if len(plist) <= 1:
+        continue
+
+    # Skip dedup entirely if any participant is an external contributor.
+    # Operator must triage; the reconciler must not auto-close external PRs.
+    if any(p['tier'] == 2 for p in plist):
+        continue
+
+    # Sort: lower tier first (operator > bot), then older PR first so
+    # in-flight operator work is preserved over newer bot-authored dupes.
+    plist.sort(key=lambda x: (x['tier'], x['pr']))
     keep = plist[0]
     for dup in plist[1:]:
-        print(f"{issue}\t{keep['pr']}\t{dup['pr']}\t{dup['title'][:60]}")
+        print(f"{issue}\t{keep['pr']}\t{dup['pr']}\t{dup['title'][:60]}\t{keep['author']}\t{dup['author']}")
 PY
 )
 
@@ -133,10 +169,10 @@ PY
         return 0
     fi
 
-    while IFS=$'\t' read -r issue keep dup title; do
+    while IFS=$'\t' read -r issue keep dup title keep_author dup_author; do
         [ -z "$issue" ] && continue
-        log "[$repo] DUP issue #$issue: keep PR#$keep, close PR#$dup ($title)"
-        loop_notify "Loop reconciler: $repo — closing duplicate PR#$dup (issue #$issue); keeping PR#$keep"
+        log "[$repo] DUP issue #$issue: keep PR#$keep (author=$keep_author), close PR#$dup (author=$dup_author) — $title"
+        loop_notify "Loop reconciler: $repo — closing duplicate PR#$dup (author $dup_author) for issue #$issue; keeping PR#$keep (author $keep_author)"
         $DRY_RUN && continue
         backend_comment_pr "$repo" "$dup" \
             "Closed by Loop reconciler — duplicate of #$keep (both close issue #$issue)."
