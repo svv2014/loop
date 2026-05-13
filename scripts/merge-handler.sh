@@ -127,7 +127,8 @@ if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FIL
     log "ERROR: merge failed for non-conflict reason (state=$POST_STATE)"
     _merge_tail=$(tail -n +"$((_MERGE_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
     _failure_reason=$(loop_failure_category "$_merge_tail" 1)
-    bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="state=${POST_STATE}" failure_reason="$_failure_reason" || true
+    _merge_diag="$(bounty_truncate_detail "$_merge_tail")"
+    bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="${_merge_diag:+${_merge_diag} | }state=${POST_STATE}" failure_reason="$_failure_reason" || true
     loop_notify "❌ [$SLUG] PR#$PR_NUM merge failed: merge command failed"
     backend_remove_label "$REPO" "$PR_NUM" qa-pass
     backend_add_label "$REPO" "$PR_NUM" blocked
