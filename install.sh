@@ -69,6 +69,17 @@ bootstrap_check_tools() {
         echo "  [ok]   python3 + pyyaml"
     fi
 
+    if ! command -v sqlite3 >/dev/null 2>&1; then
+        echo "  [fail] 'sqlite3' not found — install it:" >&2
+        echo "           macOS:  brew install sqlite" >&2
+        echo "           Debian/Ubuntu: apt install sqlite3" >&2
+        ok=false
+    else
+        local sqlite_version
+        sqlite_version=$(sqlite3 --version 2>/dev/null | awk '{print $1}')
+        echo "  [ok]   sqlite3 $sqlite_version (need >= 3.35.0 for RETURNING)"
+    fi
+
     local agent_found=false
     local _agent
     for _agent in claude codex gemini aider; do
