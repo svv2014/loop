@@ -13,6 +13,13 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+### Added
+- External-PR review-only path: PRs carrying the `external-pr` label go
+  through review-handler and halt at `external-review-pass` /
+  `external-review-fail` (new canonical labels) for operator decision.
+  QA and merge stages do not fire — protects the operator from executing
+  untrusted contributor code via `validation_cmd`. Notifications fire on
+  both terminal states.
 
 ### Changed
 - [LOOP-262] resolve rework trigger label per-project in pr-watchdog (#277)

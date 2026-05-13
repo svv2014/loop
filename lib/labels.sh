@@ -48,6 +48,13 @@ LOOP_CANONICAL_LABELS=(
     qa-fail
     blocked
     "done"
+    # External-PR review-only path. PRs carrying `external-pr` (set by the
+    # repo's auto-label GitHub Action) go through review-handler and then
+    # halt at one of these terminal-ish states for operator decision. They
+    # do NOT progress to needs-qa/merge automatically.
+    external-pr
+    external-review-pass
+    external-review-fail
 )
 
 # Convenience scalars — handlers reference these instead of string literals.
@@ -62,6 +69,9 @@ LOOP_LABEL_QA_PASS=qa-pass
 LOOP_LABEL_QA_FAIL=qa-fail
 LOOP_LABEL_BLOCKED=blocked
 LOOP_LABEL_DONE="done"
+LOOP_LABEL_EXTERNAL_PR=external-pr
+LOOP_LABEL_EXTERNAL_REVIEW_PASS=external-review-pass
+LOOP_LABEL_EXTERNAL_REVIEW_FAIL=external-review-fail
 
 # Deprecated label aliases — names still used by older workflows / GitHub
 # repos / PR bodies. Each maps to its canonical replacement. Handlers may
