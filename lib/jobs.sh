@@ -96,6 +96,7 @@ jobs_claim() {
     db=$(jobs_db_path)
 
     sqlite3 "$db" <<SQL
+.timeout 5000
 BEGIN IMMEDIATE;
 UPDATE jobs
    SET status='in_flight',
