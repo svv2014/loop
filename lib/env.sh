@@ -35,18 +35,3 @@ export HOME="${HOME:-$(eval echo "~$(whoami)")}"
 
 # Ensure log dir exists
 mkdir -p "$LOOP_LOG_DIR"
-
-# Helper: run orchestrator (or fallback to claude directly)
-loop_run_orchestrator() {
-    local prompt="$1"
-    local cwd="${2:-$(pwd)}"
-
-    if [ -n "$LOOP_ORCHESTRATOR" ] && [ -x "$LOOP_ORCHESTRATOR" ]; then
-        "$LOOP_ORCHESTRATOR" "$prompt" --cwd "$cwd"
-    else
-        # Direct claude invocation (works for anyone with Claude CLI)
-        claude -p --model sonnet --output-format text \
-            --dangerously-skip-permissions \
-            "$prompt"
-    fi
-}
