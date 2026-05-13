@@ -104,9 +104,11 @@ if [ -z "$HEAD_OWNER" ] || [ "$HEAD_OWNER" != "$BASE_OWNER" ]; then
 fi
 
 _MERGE_LOG_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+_merge_rc=0
 progress_start merge
-if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FILE"; then
-    progress_stop
+backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FILE" || _merge_rc="${PIPESTATUS[0]}"
+progress_stop
+if [ "${_merge_rc}" -ne 0 ]; then
     # Check if the failure was a conflict discovered at merge time.
     POST_STATE=$(backend_pr_view "$REPO" "$PR_NUM" --json mergeable,mergeStateStatus 2>/dev/null \
         | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeable',''), d.get('mergeStateStatus',''))")
@@ -122,21 +124,37 @@ if ! backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FIL
             ;;
     esac
 
-    # Non-conflict failure (e.g. required check missing, API flake). Don't
-    # loop on this either — mark blocked so a human can look.
-    log "ERROR: merge failed for non-conflict reason (state=$POST_STATE)"
-    _merge_tail=$(tail -n +"$((_MERGE_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
-    _failure_reason=$(loop_failure_category "$_merge_tail" 1)
-    _merge_diag="$(bounty_truncate_detail "$_merge_tail")"
-    bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="${_merge_diag:+${_merge_diag} | }state=${POST_STATE}" failure_reason="$_failure_reason" || true
-    loop_notify "❌ [$SLUG] PR#$PR_NUM merge failed: merge command failed"
-    backend_remove_label "$REPO" "$PR_NUM" qa-pass
-    backend_add_label "$REPO" "$PR_NUM" blocked
-    backend_comment_pr "$REPO" "$PR_NUM" \
-        "Merge failed (state: \`${POST_STATE}\`). Marked \`blocked\` — needs human eyes."
-    exit 1
+    # Retry once on non-conflict failures where the PR is still in a mergeable
+    # state (e.g. transient gh CLI flake, required-check race).
+    case "$POST_STATE" in
+        *MERGEABLE*CLEAN*|*MERGEABLE*UNSTABLE*)
+            log "merge retry 1/1 (rc=${_merge_rc} state=${POST_STATE})"
+            sleep 3
+            _MERGE_LOG_START=$(wc -l < "$LOG_FILE" 2>/dev/null || echo 0)
+            _merge_rc=0
+            backend_merge_pr "$REPO" "$PR_NUM" "$STRATEGY_FLAG" 2>&1 | tee -a "$LOG_FILE" || _merge_rc="${PIPESTATUS[0]}"
+            if [ "${_merge_rc}" -eq 0 ]; then
+                log "merge retry succeeded for PR #${PR_NUM}"
+            fi
+            ;;
+    esac
+
+    if [ "${_merge_rc}" -ne 0 ]; then
+        # Non-conflict failure — capture actionable detail before marking blocked.
+        log "ERROR: merge failed for non-conflict reason (state=${POST_STATE} rc=${_merge_rc})"
+        _merge_tail=$(tail -n +"$((_MERGE_LOG_START + 1))" "$LOG_FILE" 2>/dev/null | tail -200)
+        _failure_reason=$(loop_failure_category "$_merge_tail" "${_merge_rc}")
+        _merge_diag="$(bounty_truncate_detail "$_merge_tail")"
+        _detail_diag="${_merge_diag:-rc=${_merge_rc}}"
+        bounty_report "merge_failed" model="${LOOP_AGENT_MODEL:-sonnet}" role=merge project="$SLUG" pr_num="$PR_NUM" detail="${_detail_diag} | state=${POST_STATE}" failure_reason="$_failure_reason" || true
+        loop_notify "❌ [$SLUG] PR#$PR_NUM merge failed: merge command failed"
+        backend_remove_label "$REPO" "$PR_NUM" qa-pass
+        backend_add_label "$REPO" "$PR_NUM" blocked
+        backend_comment_pr "$REPO" "$PR_NUM" \
+            "Merge failed (state: \`${POST_STATE}\`). Marked \`blocked\` — needs human eyes."
+        exit 1
+    fi
 fi
-progress_stop
 
 # ── Release-PR: tag + publish GitHub release ─────────────────────────────────
 # If this was a release PR, tag the merged commit and publish a GitHub release.
