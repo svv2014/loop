@@ -22,6 +22,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 - [LOOP-302] eliminate N+1 gh API calls in loop_gh_issues_with_label (#341)
 - [LOOP-303] remove dead loop_run_orchestrator function from lib/env.sh (#342)
 - [LOOP-304] document reconciler opt-out flags in loop.env.example (#343)
+- [LOOP-310] add diagnostic context to *_failed and qa_fail bounty events (#350)
 ## [0.4.0] - 2026-05-10
 
 A 12-PR batch focused on making the autonomous pipeline self-correcting
