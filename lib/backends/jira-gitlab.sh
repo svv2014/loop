@@ -138,10 +138,10 @@ _state_to_jira_transition() {
 # Issue/ticket interface (overrides GitLab stubs)
 # ---------------------------------------------------------------------------
 
-# backend_add_label <repo> <key> <label>
+# _backend_add_label_impl <repo> <key> <label>
 # Maps Loop label additions to Jira status transitions.
 # <key> is the Jira issue key, e.g. PROJ-42.
-backend_add_label() {
+_backend_add_label_impl() {
     local _repo="$1" key="$2" label="$3"
     local transition
     transition=$(_state_to_jira_transition "$label")
@@ -158,9 +158,9 @@ backend_add_label() {
     esac
 }
 
-# backend_remove_label <repo> <key> <label>
+# _backend_remove_label_impl <repo> <key> <label>
 # Removing a label has no direct Jira equivalent — no-op.
-backend_remove_label() {
+_backend_remove_label_impl() {
     return 0
 }
 

@@ -78,3 +78,39 @@ loop_notify_human_required_clear() {
     rm -f "${LOOP_LOG_DIR:-${HOME}/.loop/logs}/notified/${slug}-${number}-${label}" 2>/dev/null || true
     return 0
 }
+
+# loop_audit_event <event_type> <json_payload>
+# Posts a structured audit event to loop-monitor. Best-effort — never aborts caller.
+# BOUNTY_URL and BOUNTY_TIMEOUT are inherited from lib/bounty.sh when both are sourced.
+loop_audit_event() {
+    local _url="${BOUNTY_URL:-http://127.0.0.1:18792}"
+    local _timeout="${BOUNTY_TIMEOUT:-3}"
+    local _event="${1:-unknown}"
+    local _payload_str
+    _payload_str="${2:-}"
+    [ -z "$_payload_str" ] && _payload_str="{}"
+
+    local body
+    body=$(
+        _LAE_EVENT="$_event" _LAE_PAYLOAD="$_payload_str" \
+        python3 - <<'PY'
+import json, os, datetime
+payload_str = os.environ.get("_LAE_PAYLOAD", "{}")
+try:
+    payload_obj = json.loads(payload_str)
+except Exception:
+    payload_obj = {}
+d = {
+    "event": os.environ.get("_LAE_EVENT", "unknown"),
+    "payload": payload_obj,
+    "timestamp": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+}
+print(json.dumps(d))
+PY
+    ) 2>/dev/null || true
+
+    [ -z "$body" ] && return 0
+
+    curl -sf --max-time "$_timeout" -X POST -H "Content-Type: application/json" \
+        -d "$body" "${_url}/api/report" >/dev/null 2>&1 || true
+}

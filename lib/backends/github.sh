@@ -32,12 +32,12 @@ backend_list_prs_with_label() {
     loop_gh_prs_with_label "$repo" "$label"
 }
 
-backend_add_label() {
+_backend_add_label_impl() {
     local repo="$1" number="$2" label="$3"
     loop_add_label "$repo" "$number" "$label"
 }
 
-backend_remove_label() {
+_backend_remove_label_impl() {
     # Accepts one or more labels and removes each. Previously the function
     # silently dropped args beyond the 3rd, which caused several callers
     # in review-handler / dev-handler / qa-handler to fail silently when
