@@ -73,12 +73,12 @@ actual work.
 
 | Handler | Trigger | What it does |
 |---|---|---|
-| `po-handler.sh` | `po-review` on issue | Expands rough idea into structured spec; relabels for dev |
-| `dev-handler.sh` | `dev` (or workflow-equivalent) on issue | Implements in worktree, opens PR, labels `needs-review` |
-| `review-handler.sh` | `needs-review` on PR | AI reviewer reads diff, approves or requests changes |
-| `dev-rework-handler.sh` | `needs-rework` or `qa-fail` on PR | Re-runs dev agent with rework context |
-| `qa-handler.sh` | `needs-qa` on PR | Four-phase smart QA: AC verification, targeted test creation, module regression, `validation_cmd`; posts structured `### QA verification` comment; applies `qa-pass` or `qa-fail` |
-| `merge-handler.sh` | `qa-pass` on PR | Squash-merges, closes linked issue, records bounty; if PR carries `release-pr` label, tags the merged commit and publishes a GitHub release |
+| `po-handler.sh` | `loop:action:po` on issue | Expands rough idea into structured spec; relabels for dev |
+| `dev-handler.sh` | `loop:action:dev` on issue | Implements in worktree, opens PR, labels `loop:action:review` |
+| `review-handler.sh` | `loop:action:review` on PR | AI reviewer reads diff, approves or requests changes |
+| `dev-rework-handler.sh` | `loop:action:dev` or `loop:result:qa-fail` on PR | Re-runs dev agent with rework context |
+| `qa-handler.sh` | `loop:action:qa` on PR | Four-phase smart QA: AC verification, targeted test creation, module regression, `validation_cmd`; posts structured `### QA verification` comment; applies `loop:result:qa-pass` or `loop:result:qa-fail` |
+| `merge-handler.sh` | `loop:result:qa-pass` on PR | Squash-merges, closes linked issue, records bounty; if PR carries `release-pr` label, tags the merged commit and publishes a GitHub release |
 
 Each handler also has a short-name alias (`builder.sh`, `planner.sh`,
 `reviewer.sh`, `reviser.sh`, `tester.sh`, `merger.sh`) that is a thin
@@ -99,7 +99,7 @@ doesn't self-correct. Two distinct classes of check:
 
 **Mutating checks** (corroboration-gated, never speculative):
 - Required-label bootstrap — creates any missing canonical Loop labels
-  on the repo (`needs-po`, `needs-dev`, `needs-review`, `needs-qa`, etc.)
+  on the repo (`loop:action:po`, `loop:action:dev`, `loop:action:review`, `loop:action:qa`, etc.)
 - Synonym + alias renames — rewrites deprecated label names to the
   workflow's live trigger labels. Workflow-aware (won't strip a label
   that IS a trigger for the project; won't apply one that isn't).
@@ -179,12 +179,12 @@ read per project.
                                                  Time →
 operator
   │
-  └─ labels issue #42 "dev"   ····························
+  └─ labels issue #42 "loop:action:dev"   ····················
                                                             │
   scanner (next tick, ≤5 min)   ◀──────────────────────────┤
   │                                                         │
   ├─ load workflow for project ··                           │
-  ├─ poll issues with trigger_label="dev"                  │
+  ├─ poll issues with trigger_label="loop:action:dev"      │
   └─ emit loop.dev_issue PR#42                              │
                                                             │
   dev-handler.sh                ◀──────────────────────────┤
@@ -194,8 +194,8 @@ operator
   ├─ invoke $LOOP_AGENT with issue body + CLAUDE.md ·······│
   │                                                         │ (agent
   ├─ agent commits, opens PR #100                           │  thinks
-  ├─ relabel issue #42 in-progress→done                     │  ~5 min)
-  ├─ label PR #100 needs-review                             │
+  ├─ relabel issue #42 loop:active:dev→loop:result:done     │  ~5 min)
+  ├─ label PR #100 loop:action:review                       │
   ├─ bounty_report dev_done                                 │
   └─ release lock                                           │
                                                             │
@@ -207,10 +207,10 @@ operator
   │                                                         │
   ├─ invoke agent with diff + acceptance criteria           │
   ├─ agent says APPROVE                                     │
-  ├─ relabel PR #100 needs-review→needs-qa                  │
+  ├─ relabel PR #100 loop:action:review→loop:action:qa      │
   └─ bounty_report review_done                              │
                                                             │
-  ... (qa-handler runs validation_cmd, on pass labels qa-pass)
+  ... (qa-handler runs validation_cmd, on pass labels loop:result:qa-pass)
                                                             │
   merge-handler.sh               ◀──────────────────────────┤
   │                                                         │

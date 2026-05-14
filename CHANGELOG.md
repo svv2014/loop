@@ -13,6 +13,17 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+### Changed
+
+- **Label namespace migration** (#344, #345). All Loop-owned pipeline state
+  labels are now canonical under `loop:*`: `loop:action:*` for operator-set
+  queue triggers, `loop:active:*` for agent-set claim labels, `loop:result:*`
+  for outcome labels, and `loop:stage:*` for reconciler-derived stage markers
+  (unchanged). Legacy names (`needs-po`, `needs-dev`, `needs-review`,
+  `needs-qa`, `qa-pass`, `qa-fail`, and all prior aliases) remain fully
+  functional via the alias map in `lib/labels.sh` — the reconciler rewrites
+  them on its next sweep with no manual migration required.
+
 ## [0.5.0] - 2026-05-14
 
 A security + self-convergence batch. The pipeline now (a) refuses to

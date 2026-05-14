@@ -11,9 +11,9 @@ This dir contains starter workflows. Operators can author their own.
 
 | File | Ships? | Purpose |
 |---|---|---|
-| `default.yaml` | Yes | Recommended for new repos. Clean canonical labels: `plan` / `needs-review` / `needs-qa` / `qa-pass` / `qa-fail`. |
-| `minimal.yaml` | Yes | Two-stage pipeline (`plan → merge`). No review, no QA. Solo prototypes only. |
-| `docs-only.yaml` | Yes | Three-stage pipeline (`plan → review → merge`). No QA. For documentation and content-only PRs. |
+| `default.yaml` | Yes | Recommended for new repos. Entry: `loop:action:po` / `loop:action:dev` / `loop:action:review` / `loop:action:qa` / `loop:result:qa-pass`. |
+| `minimal.yaml` | Yes | Two-stage pipeline (`loop:action:dev → merge`). No review, no QA. Solo prototypes only. |
+| `docs-only.yaml` | Yes | Three-stage pipeline (`loop:action:dev → review → merge`). No QA. For documentation and content-only PRs. |
 | `current.yaml` | **No — gitignored** | Operator-local legacy-vocabulary mirror. Not committed to this repo. See [Operator-local workflows](#operator-local-workflows) and [docs/migration-from-asdlc.md](../../docs/migration-from-asdlc.md). |
 
 ## Schema (v1)
@@ -26,33 +26,33 @@ description: |                # free-text; surfaces in `loop --workflows`
 
 # Polled on issues
 issue_stages:
-  - id: plan                  # stable identifier within the workflow
-    trigger_label: plan       # label that, when applied, fires this stage
-    handler: dev-handler      # base name of scripts/<handler>.sh
-    on_done: needs-review     # label applied to PR (or issue) on success
-    on_failed_after_max: blocked
-    on_blocked: blocked       # only meaningful on po stage
+  - id: dev                       # stable identifier within the workflow
+    trigger_label: loop:action:dev # label that, when applied, fires this stage
+    handler: dev-handler           # base name of scripts/<handler>.sh
+    on_done: loop:action:review    # label applied to PR (or issue) on success
+    on_failed_after_max: loop:result:blocked
+    on_blocked: loop:result:blocked    # only meaningful on po stage
     on_clarification: needs-clarification   # only meaningful on po stage
 
 # Polled on PRs
 pr_stages:
   - id: review
-    trigger_label: needs-review
+    trigger_label: loop:action:review
     handler: review-handler
     decisions:                # used by stages with binary outcomes
-      approve: needs-qa
-      reject: needs-rework
+      approve: loop:action:qa
+      reject: loop:action:dev
 
   - id: qa
-    trigger_label: needs-qa
+    trigger_label: loop:action:qa
     handler: qa-handler
-    on_pass: qa-pass
-    on_fail: qa-fail
+    on_pass: loop:result:qa-pass
+    on_fail: loop:result:qa-fail
 
   - id: merge
-    trigger_label: qa-pass
+    trigger_label: loop:result:qa-pass
     handler: merge-handler
-    on_done: done
+    on_done: loop:result:done
 ```
 
 ### Required fields
@@ -71,11 +71,11 @@ which may not match your project's label vocabulary.
 
 | Stage ID | Used by | Fallback label if absent |
 |---|---|---|
-| `po` | po-handler (trigger strip) | `po-review` |
-| `dev` | dev-handler (trigger strip) | `plan` |
-| `review` | dev-handler, dev-rework-handler | `review-pending` |
-| `rework` | review-handler (reject path) | `changes-requested` |
-| `qa` | review-handler (approve path) | `ready-for-qa` |
+| `po` | po-handler (trigger strip) | `loop:action:po` |
+| `dev` | dev-handler (trigger strip) | `loop:action:dev` |
+| `review` | dev-handler, dev-rework-handler | `loop:action:review` |
+| `rework` | review-handler (reject path) | `loop:action:dev` |
+| `qa` | review-handler (approve path) | `loop:action:qa` |
 
 Custom workflows that rename a stage must either keep one of these `id` values or
 add a matching `labels:` override in `config/projects.yaml` so the fallback
@@ -106,11 +106,11 @@ state machine and fails CI when it finds either of these gaps:
   `on_pass`, `on_fail`, `on_blocked`, `on_clarification`,
   `on_failed_after_max`, or one of `decisions.*`) but no stage triggers
   on. Tickets reaching that label sit forever because no handler claims
-  them. (Terminals `done`, `blocked`, `needs-clarification` are valid
+  them. (Terminals `loop:result:done`, `loop:result:blocked`, `needs-clarification` are valid
   sinks and ignored.)
 - **Orphan trigger** — a `trigger_label` that no handler in the same
   workflow ever produces, *unless* it is the workflow's entry point
-  (the first issue stage's trigger, e.g. `needs-po` or `needs-dev`).
+  (the first issue stage's trigger, e.g. `loop:action:po` or `loop:action:dev`).
 
 ```bash
 ./scripts/lint-workflow.sh                          # audit every file
@@ -125,62 +125,68 @@ This check runs in CI on every PR. See the
 These are the canonical label names used in `default.yaml`. Projects may
 override any of them via the `labels:` map in `config/projects.yaml`.
 
+All Loop-owned labels use the `loop:*` namespace (see
+[docs/labels.md](../../docs/labels.md) for the full taxonomy).
+
 **Issue labels** (drive `issue_stages`):
 
 | Label | Role |
 |---|---|
-| `po-review` | PO expansion stage — turns a rough idea into a spec |
-| `plan` | Dev implementation stage |
-| `blocked` | Terminal: issue cannot proceed; human attention required |
+| `loop:action:po` | PO expansion stage — turns a rough idea into a spec |
+| `loop:action:dev` | Dev implementation stage |
+| `loop:result:blocked` | Terminal: issue cannot proceed; human attention required |
 | `needs-clarification` | Terminal: issue body is ambiguous; awaiting author reply |
 
 **PR labels** (drive `pr_stages`):
 
 | Label | Role |
 |---|---|
-| `needs-review` | Code review stage |
-| `needs-rework` | Sent back to dev after review rejection |
-| `needs-qa` | QA / automated test stage |
-| `qa-pass` | QA passed; triggers merge |
-| `qa-fail` | QA failed; triggers rework or close |
-| `done` | Terminal: PR merged and issue closed |
+| `loop:action:review` | Code review stage |
+| `loop:action:dev` | Sent back to dev after review rejection (rework) |
+| `loop:action:qa` | QA / automated test stage |
+| `loop:result:qa-pass` | QA passed; triggers merge |
+| `loop:result:qa-fail` | QA failed; triggers rework or close |
+| `loop:result:done` | Terminal: PR merged and issue closed |
 
 **Terminal labels** (valid transition targets, never trigger a stage):
-`done`, `blocked`, `needs-clarification`, `qa-fail`
+`loop:result:done`, `loop:result:blocked`, `needs-clarification`, `loop:result:qa-fail`
 
 ## `current` workflow label vocabulary
 
-`current.yaml` is the operator-local legacy-vocabulary mirror. It uses a
-different set of label names from `default.yaml` to preserve in-flight
-labels on repos that were already running under the original svv2014 label
-scheme before Loop's `default` workflow was introduced.
+`current.yaml` is the operator-local legacy-vocabulary mirror. It uses
+pre-namespace label names from earlier Loop releases. All of those names are
+now deprecated aliases — the reconciler rewrites them to canonical `loop:*`
+names on its next sweep. New repos should use `default.yaml`.
 
-**Pipeline flow:**
+**Pipeline flow (legacy names):**
 
 ```
 po-review (issue) → dev (issue) → review-pending (PR) → ready-for-qa (PR)
     → qa-pass / qa-fail (PR) → merge → done
 ```
 
+All of these are deprecated aliases; see [docs/labels.md](../../docs/labels.md)
+for the canonical `loop:*` equivalents.
+
 **Issue labels:**
 
-| Label | Role |
-|---|---|
-| `po-review` | PO expansion stage (same as `default`) |
-| `dev` | Dev implementation stage (`plan` in `default`) |
-| `blocked` | Terminal: issue cannot proceed |
-| `needs-clarification` | Terminal: awaiting author reply |
+| Label | Canonical equivalent | Role |
+|---|---|---|
+| `po-review` | `loop:action:po` | PO expansion stage |
+| `dev` | `loop:action:dev` | Dev implementation stage |
+| `blocked` | `loop:result:blocked` | Terminal: issue cannot proceed |
+| `needs-clarification` | — (unchanged) | Terminal: awaiting author reply |
 
 **PR labels:**
 
-| Label | Role |
-|---|---|
-| `review-pending` | Code review stage (`needs-review` in `default`) |
-| `changes-requested` | Sent back to dev after review rejection (`needs-rework` in `default`) |
-| `ready-for-qa` | QA / automated test stage (`needs-qa` in `default`) |
-| `qa-pass` | QA passed; triggers merge (same as `default`) |
-| `qa-fail` | QA failed; triggers rework or close (same as `default`) |
-| `done` | Terminal: PR merged and issue closed (same as `default`) |
+| Label | Canonical equivalent | Role |
+|---|---|---|
+| `review-pending` | `loop:action:review` | Code review stage |
+| `changes-requested` | `loop:action:dev` | Sent back to dev after review rejection |
+| `ready-for-qa` | `loop:action:qa` | QA / automated test stage |
+| `qa-pass` | `loop:result:qa-pass` | QA passed; triggers merge |
+| `qa-fail` | `loop:result:qa-fail` | QA failed; triggers rework or close |
+| `done` | `loop:result:done` | Terminal: PR merged and issue closed |
 
 See [docs/migration-from-asdlc.md](../../docs/migration-from-asdlc.md) for a full
 side-by-side mapping and instructions for creating your own `current.yaml`.
@@ -198,46 +204,46 @@ Notation: `LABEL --(stage.field)--> LABEL`. Terminal states (`done`,
 
 ### `default`
 
-Entry: `needs-po` (set externally when a new issue is filed).
+Entry: `loop:action:po` (set externally when a new issue is filed).
 
 ```
-needs-po       --(po.on_done)-->            needs-dev (issue)
-needs-po       --(po.on_blocked)-->         blocked
-needs-po       --(po.on_clarification)-->   needs-clarification
-needs-dev      --(dev.on_done)-->           needs-review
-needs-dev      --(dev.on_failed_after_max)--> blocked
-needs-review   --(review.approve)-->        needs-qa
-needs-review   --(review.reject)-->         needs-dev      (PR rework)
-needs-dev (PR) --(rework.on_done)-->        needs-review
-needs-dev (PR) --(rework.on_failed_after_max)--> blocked
-needs-qa       --(qa.on_pass)-->            qa-pass
-needs-qa       --(qa.on_fail)-->            qa-fail
-qa-pass        --(merge.on_done)-->         done
-qa-fail        --(qa-rework.on_done)-->     needs-review
-qa-fail        --(qa-rework.on_failed_after_max)--> blocked
+loop:action:po       --(po.on_done)-->            loop:action:dev (issue)
+loop:action:po       --(po.on_blocked)-->         loop:result:blocked
+loop:action:po       --(po.on_clarification)-->   needs-clarification
+loop:action:dev      --(dev.on_done)-->           loop:action:review
+loop:action:dev      --(dev.on_failed_after_max)--> loop:result:blocked
+loop:action:review   --(review.approve)-->        loop:action:qa
+loop:action:review   --(review.reject)-->         loop:action:dev      (PR rework)
+loop:action:dev (PR) --(rework.on_done)-->        loop:action:review
+loop:action:dev (PR) --(rework.on_failed_after_max)--> loop:result:blocked
+loop:action:qa       --(qa.on_pass)-->            loop:result:qa-pass
+loop:action:qa       --(qa.on_fail)-->            loop:result:qa-fail
+loop:result:qa-pass  --(merge.on_done)-->         loop:result:done
+loop:result:qa-fail  --(qa-rework.on_done)-->     loop:action:review
+loop:result:qa-fail  --(qa-rework.on_failed_after_max)--> loop:result:blocked
 ```
 
 Every produced label is either a trigger or a terminal. No dead-ends.
 
 ### `current` (operator-local, gitignored)
 
-Entry: `po-review`.
+Entry: `po-review` (deprecated alias for `loop:action:po`).
 
 ```
-po-review        --(po.on_done)-->            dev
-po-review        --(po.on_blocked)-->         blocked
+po-review        --(po.on_done)-->            dev                 (→ loop:action:dev)
+po-review        --(po.on_blocked)-->         blocked             (→ loop:result:blocked)
 po-review        --(po.on_clarification)-->   needs-clarification
-dev              --(dev.on_done)-->           review-pending
-dev              --(dev.on_failed_after_max)--> blocked
-review-pending   --(review.approve)-->        ready-for-qa
-review-pending   --(review.reject)-->         changes-requested
-changes-requested --(rework.on_done)-->       review-pending
-changes-requested --(rework.on_failed_after_max)--> blocked
-ready-for-qa     --(qa.on_pass)-->            qa-pass
-ready-for-qa     --(qa.on_fail)-->            qa-fail
-qa-pass          --(merge.on_done)-->         done
-qa-fail          --(qa-rework.on_done)-->     review-pending
-qa-fail          --(qa-rework.on_failed_after_max)--> blocked
+dev              --(dev.on_done)-->           review-pending      (→ loop:action:review)
+dev              --(dev.on_failed_after_max)--> blocked           (→ loop:result:blocked)
+review-pending   --(review.approve)-->        ready-for-qa        (→ loop:action:qa)
+review-pending   --(review.reject)-->         changes-requested   (→ loop:action:dev)
+changes-requested --(rework.on_done)-->       review-pending      (→ loop:action:review)
+changes-requested --(rework.on_failed_after_max)--> blocked       (→ loop:result:blocked)
+ready-for-qa     --(qa.on_pass)-->            qa-pass             (→ loop:result:qa-pass)
+ready-for-qa     --(qa.on_fail)-->            qa-fail             (→ loop:result:qa-fail)
+qa-pass          --(merge.on_done)-->         done                (→ loop:result:done)
+qa-fail          --(qa-rework.on_done)-->     review-pending      (→ loop:action:review)
+qa-fail          --(qa-rework.on_failed_after_max)--> blocked     (→ loop:result:blocked)
 ```
 
 The `qa-rework` stage was added to close the `qa-fail` dead-end found
@@ -246,29 +252,29 @@ claim and the PR stalled.
 
 ### `docs-only`
 
-Entry: `needs-dev`.
+Entry: `loop:action:dev`.
 
 ```
-needs-dev      --(dev.on_done)-->           needs-review
-needs-dev      --(dev.on_failed_after_max)--> blocked
-needs-review   --(review.approve)-->        qa-pass
-needs-review   --(review.reject)-->         needs-dev    (PR rework)
-needs-dev (PR) --(rework.on_done)-->        needs-review
-needs-dev (PR) --(rework.on_failed_after_max)--> blocked
-qa-pass        --(merge.on_done)-->         done
+loop:action:dev      --(dev.on_done)-->           loop:action:review
+loop:action:dev      --(dev.on_failed_after_max)--> loop:result:blocked
+loop:action:review   --(review.approve)-->        loop:result:qa-pass
+loop:action:review   --(review.reject)-->         loop:action:dev    (PR rework)
+loop:action:dev (PR) --(rework.on_done)-->        loop:action:review
+loop:action:dev (PR) --(rework.on_failed_after_max)--> loop:result:blocked
+loop:result:qa-pass  --(merge.on_done)-->         loop:result:done
 ```
 
-No QA stage; `qa-pass` is the "approved, ready to merge" signal. No
-dead-ends.
+No QA stage; `loop:result:qa-pass` is the "approved, ready to merge" signal.
+No dead-ends.
 
 ### `minimal`
 
-Entry: `needs-dev`.
+Entry: `loop:action:dev`.
 
 ```
-needs-dev --(dev.on_done)-->               needs-qa
-needs-dev --(dev.on_failed_after_max)-->   blocked
-needs-qa  --(merge.on_done)-->             done
+loop:action:dev --(dev.on_done)-->               loop:action:qa
+loop:action:dev --(dev.on_failed_after_max)-->   loop:result:blocked
+loop:action:qa  --(merge.on_done)-->             loop:result:done
 ```
 
 No review or QA stage. No dead-ends.
@@ -282,10 +288,10 @@ projects:
   - name: My App
     slug: myapp
     repo: owner/my-app
-    workflow: default                # which workflow file to use
-    labels:                          # OPTIONAL — overrides for this repo
-      plan: dev                      # this repo uses 'dev' instead of 'plan'
-      qa-pass: approved              # different name for the merge gate
+    workflow: default                      # which workflow file to use
+    labels:                                # OPTIONAL — overrides for this repo
+      loop:action:dev: dev                 # this repo uses 'dev' instead of canonical
+      loop:result:qa-pass: approved        # different name for the merge gate
 ```
 
 Overrides are sparse: include only the labels whose names differ from
@@ -303,7 +309,7 @@ translation transparently.
 
 Possible custom workflow shapes:
 
-- **Strict**: add a `spec-validator` stage between `qa-pass` and `merge`
+- **Strict**: add a `spec-validator` stage between `loop:result:qa-pass` and `merge`
   (planned: see roadmap)
 - **Docs-only**: drop the `qa` stage; merge after review
 - **Compliance**: add a `security-audit` stage with required human
