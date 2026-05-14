@@ -167,6 +167,13 @@ label-state pipeline.
 - **Reconciler matches `fix/issue-*`, `chore/issue-*`, `docs/issue-*`**
   in addition to `feat/issue-*` (#380, LOOP-379). Root cause of 13
   stuck loop-monitor PRs left unrebased after a base-branch move.
+- **Strip `pr_body` from CI-rework + base-move sweep emitters** (#383,
+  LOOP-382). #284 fixed this in CI-promote; the other two sweeps
+  still emitted `pr_body[:400]` and PR-body newlines were breaking
+  the downstream `while read` loop (each markdown bullet became a
+  fake PR number). Drop the unused field from emitter + receiver in
+  both. Regression: PR #297 on svv2014/loop-monitor was skipped on
+  the next reconciler tick after creation due to this bug.
 - **Strip private-project leaks** from issue templates and `lib/runner.sh`
   comment (#378). `ISSUE_TEMPLATE/config.yml` points at this repo's
   Discussions; `runner.sh` no longer references an internal
