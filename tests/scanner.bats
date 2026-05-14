@@ -683,3 +683,55 @@ YAML
     # Confirm no events were dispatched.
     [[ "$output" != *"DRY-RUN emit:"* ]]
 }
+
+# ---------------------------------------------------------------------------
+# _scan_has_open_pr_for_issue — dup-PR guard helper (PR #364 / issue #362)
+# ---------------------------------------------------------------------------
+
+@test "_scan_has_open_pr_for_issue: returns PR number when body has 'Closes #N'" {
+    export GH_MOCK_OUTPUT='[{"number":42,"body":"Closes #99\nSome details"}]'
+    export GH_MOCK_EXIT=0
+    run _scan_has_open_pr_for_issue "owner/repo" "99"
+    [ "$status" -eq 0 ]
+    [ "$output" = "42" ]
+}
+
+@test "_scan_has_open_pr_for_issue: case-insensitive — 'fixes #N' matches" {
+    export GH_MOCK_OUTPUT='[{"number":7,"body":"fixes #5 bug in auth"}]'
+    export GH_MOCK_EXIT=0
+    run _scan_has_open_pr_for_issue "owner/repo" "5"
+    [ "$status" -eq 0 ]
+    [ "$output" = "7" ]
+}
+
+@test "_scan_has_open_pr_for_issue: case-insensitive — 'Resolves #N' matches" {
+    export GH_MOCK_OUTPUT='[{"number":15,"body":"Resolves #10"}]'
+    export GH_MOCK_EXIT=0
+    run _scan_has_open_pr_for_issue "owner/repo" "10"
+    [ "$status" -eq 0 ]
+    [ "$output" = "15" ]
+}
+
+@test "_scan_has_open_pr_for_issue: no false positive — 'Closes #123' does NOT match issue #12" {
+    export GH_MOCK_OUTPUT='[{"number":50,"body":"Closes #123"}]'
+    export GH_MOCK_EXIT=0
+    run _scan_has_open_pr_for_issue "owner/repo" "12"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "_scan_has_open_pr_for_issue: returns nothing and exits 1 when no PR body matches" {
+    export GH_MOCK_OUTPUT='[{"number":3,"body":"No closing reference here"}]'
+    export GH_MOCK_EXIT=0
+    run _scan_has_open_pr_for_issue "owner/repo" "99"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}
+
+@test "_scan_has_open_pr_for_issue: fails open when gh exits non-zero" {
+    export GH_MOCK_OUTPUT=""
+    export GH_MOCK_EXIT=1
+    run _scan_has_open_pr_for_issue "owner/repo" "99"
+    [ "$status" -ne 0 ]
+    [ -z "$output" ]
+}

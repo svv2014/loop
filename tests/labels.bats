@@ -7,25 +7,28 @@ setup() {
     source "$REPO_ROOT/lib/labels.sh"
 }
 
-@test "canonical set has the expected 11 names" {
-    [ "${#LOOP_CANONICAL_LABELS[@]}" -eq 11 ]
-    local expected="needs-po in-po needs-dev in-dev needs-review in-review needs-qa qa-pass qa-fail blocked done"
+@test "canonical set has the expected 14 names" {
+    [ "${#LOOP_CANONICAL_LABELS[@]}" -eq 14 ]
+    local expected="needs-po in-po needs-dev in-dev needs-review in-review needs-qa qa-pass qa-fail blocked done external-pr external-review-pass external-review-fail"
     local actual="${LOOP_CANONICAL_LABELS[*]}"
     [ "$actual" = "$expected" ]
 }
 
 @test "convenience scalars match the canonical names" {
-    [ "$LOOP_LABEL_NEEDS_PO"     = "needs-po" ]
-    [ "$LOOP_LABEL_IN_PO"        = "in-po" ]
-    [ "$LOOP_LABEL_NEEDS_DEV"    = "needs-dev" ]
-    [ "$LOOP_LABEL_IN_DEV"       = "in-dev" ]
-    [ "$LOOP_LABEL_NEEDS_REVIEW" = "needs-review" ]
-    [ "$LOOP_LABEL_IN_REVIEW"    = "in-review" ]
-    [ "$LOOP_LABEL_NEEDS_QA"     = "needs-qa" ]
-    [ "$LOOP_LABEL_QA_PASS"      = "qa-pass" ]
-    [ "$LOOP_LABEL_QA_FAIL"      = "qa-fail" ]
-    [ "$LOOP_LABEL_BLOCKED"      = "blocked" ]
-    [ "$LOOP_LABEL_DONE"         = "done" ]
+    [ "$LOOP_LABEL_NEEDS_PO"              = "needs-po" ]
+    [ "$LOOP_LABEL_IN_PO"                 = "in-po" ]
+    [ "$LOOP_LABEL_NEEDS_DEV"             = "needs-dev" ]
+    [ "$LOOP_LABEL_IN_DEV"                = "in-dev" ]
+    [ "$LOOP_LABEL_NEEDS_REVIEW"          = "needs-review" ]
+    [ "$LOOP_LABEL_IN_REVIEW"             = "in-review" ]
+    [ "$LOOP_LABEL_NEEDS_QA"              = "needs-qa" ]
+    [ "$LOOP_LABEL_QA_PASS"               = "qa-pass" ]
+    [ "$LOOP_LABEL_QA_FAIL"               = "qa-fail" ]
+    [ "$LOOP_LABEL_BLOCKED"               = "blocked" ]
+    [ "$LOOP_LABEL_DONE"                  = "done" ]
+    [ "$LOOP_LABEL_EXTERNAL_PR"           = "external-pr" ]
+    [ "$LOOP_LABEL_EXTERNAL_REVIEW_PASS"  = "external-review-pass" ]
+    [ "$LOOP_LABEL_EXTERNAL_REVIEW_FAIL"  = "external-review-fail" ]
 }
 
 @test "every deprecated alias resolves to a canonical label" {
@@ -97,5 +100,5 @@ setup() {
 @test "lib/labels.sh is idempotent when re-sourced" {
     source "$REPO_ROOT/lib/labels.sh"
     source "$REPO_ROOT/lib/labels.sh"
-    [ "${#LOOP_CANONICAL_LABELS[@]}" -eq 11 ]
+    [ "${#LOOP_CANONICAL_LABELS[@]}" -eq 14 ]
 }
