@@ -4,6 +4,11 @@ For the full threat model and trust boundaries, see
 [`docs/security-model.md`](./security-model.md). This file documents
 narrow security-relevant operator contracts.
 
+Prompt-injection defenses, including the trusted comment gate and CI-log
+surface caveat, are covered in the
+[`Prompt injection`](./security-model.md#prompt-injection) section of the
+security model.
+
 ## `operator-approved` label — per-ticket override of the author allow-list
 
 When `ALLOWED_AUTHORS` is configured for a project, the scanner silently
