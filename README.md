@@ -477,7 +477,8 @@ accordingly:
   `require code-owner approval` on `main` so even the operator's own
   PRs need a CODEOWNERS-listed reviewer.
 
-See [`docs/security-model.md`](docs/security-model.md).
+See [`docs/security-model.md`](docs/security-model.md) for the full
+security model, including prompt injection defenses and trust boundaries.
 
 ## Status check
 
