@@ -25,6 +25,8 @@ source "$LOOP_ROOT/lib/notify.sh"
 source "$LOOP_ROOT/lib/recovery.sh"
 # shellcheck source=../lib/failure_category.sh
 source "$LOOP_ROOT/lib/failure_category.sh"
+# shellcheck source=../lib/jobs.sh
+source "$LOOP_ROOT/lib/jobs.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-merge-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [merge-handler] $*" | tee -a "$LOG_FILE"; }
@@ -44,16 +46,48 @@ if [ -z "$SLUG" ] || [ -z "$PR_NUM" ]; then
     fi
 fi
 
+# Jobs-table claim — attempt to pull work from the DB before falling back to
+# the event-payload PR number.  If a row is claimed its issue_or_pr overrides
+# PR_NUM; otherwise the legacy label-driven path proceeds unchanged.
+_JOBS_CLAIMED_ID=""
+if [ -n "$SLUG" ]; then
+    jobs_init_schema 2>/dev/null || true
+    _candidate=$(jobs_claim "$SLUG" "merge" 2>/dev/null || true)
+    if [ -n "$_candidate" ]; then
+        _JOBS_CLAIMED_ID="$_candidate"
+        _jobs_pr=$(sqlite3 "$(jobs_db_path)" \
+            "SELECT issue_or_pr FROM jobs WHERE id=${_JOBS_CLAIMED_ID};" 2>/dev/null || true)
+        if [ -n "$_jobs_pr" ]; then
+            PR_NUM="$_jobs_pr"
+            log "claimed job id=${_JOBS_CLAIMED_ID} pr_num=${PR_NUM} from jobs table"
+        fi
+    fi
+fi
+
 [ -n "$SLUG" ] && [ -n "$PR_NUM" ] \
     || { log "ERROR: missing slug or pr_number"; exit 2; }
 
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
+# Combined EXIT handler: release advisory lock + jobs_complete/fail depending on exit code.
+_merge_handler_cleanup() {
+    local _rc=$?
+    loop_release_lock "$SLUG" || true
+    if [ -n "$_JOBS_CLAIMED_ID" ]; then
+        if [ "$_rc" -eq 0 ]; then
+            jobs_complete "$_JOBS_CLAIMED_ID" || true
+        else
+            jobs_fail "$_JOBS_CLAIMED_ID" "handler exited rc=${_rc}" || true
+        fi
+    fi
+}
+
 # Per-project lock — only one Loop handler at a time per repo.
 source "$LOOP_ROOT/lib/lock.sh"
 loop_acquire_lock "$SLUG" || { log "ERROR: couldn't acquire lock for $SLUG within 1hr — exiting"; exit 1; }
 log "acquired project lock for $SLUG"
+trap '_merge_handler_cleanup' EXIT INT TERM
 
 STRATEGY_FLAG="--squash"
 case "${MERGE_STRATEGY:-squash}" in
