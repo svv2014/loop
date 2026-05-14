@@ -58,13 +58,13 @@ bounty_truncate_detail() {
 }
 
 # bounty_report <event> [key=value ...]
-# Keys: agent model role project issue_num pr_num detail
+# Keys: agent model role project issue_num pr_num detail duration_seconds
 # Example: bounty_report "dev_start" role=dev model=sonnet project=myapp issue_num=42
 bounty_report() {
     local event="${1:-unknown}"
     shift || true
 
-    local agent="" model="" role="" project="" issue_num="" pr_num="" detail="" failure_reason=""
+    local agent="" model="" role="" project="" issue_num="" pr_num="" detail="" failure_reason="" duration_seconds=""
     for kv in "$@"; do
         case "$kv" in
             agent=*)          agent="${kv#agent=}" ;;
@@ -75,6 +75,7 @@ bounty_report() {
             pr_num=*)         pr_num="${kv#pr_num=}" ;;
             detail=*)         detail="${kv#detail=}" ;;
             failure_reason=*) failure_reason="${kv#failure_reason=}" ;;
+            duration_seconds=*) duration_seconds="${kv#duration_seconds=}" ;;
         esac
     done
 
@@ -89,7 +90,7 @@ bounty_report() {
         _API="$api_ver" _CV="$(_bounty_core_version)" _LI="$(_bounty_loop_id)" \
         _BE="$event" _BA="$agent" _BM="$model" _BR="$role" \
         _BP="$project" _BD="$detail" _BI="$issue_num" _BPN="$pr_num" \
-        _BFR="$failure_reason" \
+        _BFR="$failure_reason" _BDS="$duration_seconds" \
         python3 - <<'PY'
 import json, os, datetime
 d = {
@@ -109,6 +110,9 @@ for k, env in [("issue_num", "_BI"), ("pr_num", "_BPN")]:
     v = os.environ.get(env, "")
     if v and v.strip().isdigit():
         d[k] = int(v.strip())
+duration = os.environ.get("_BDS", "")
+if duration and duration.strip().isdigit():
+    d["duration_seconds"] = int(duration.strip())
 print(json.dumps(d))
 PY
     ) 2>/dev/null || true

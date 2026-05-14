@@ -394,6 +394,6 @@ else
 fi
 
 # Auto-invoke judge to classify the merged PR and post a verdict.
-"$LOOP_ROOT/scripts/judge.sh" "$PR_NUM" "$REPO" "" "dev" "$SLUG" 2>&1 | tee -a "$LOG_FILE" || true
+"$LOOP_ROOT/scripts/judge.sh" "$PR_NUM" "$REPO" "${LOOP_JUDGE_MODEL:-sonnet}" "judge" "$SLUG" 2>&1 | tee -a "$LOG_FILE" || true
 
 log "merge-handler done for PR #${PR_NUM}"
