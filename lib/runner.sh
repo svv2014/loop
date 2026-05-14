@@ -101,7 +101,7 @@ loop_run_agent() {
         # LOOP_AGENT_MODEL_OVERRIDE to give specific roles (e.g. PO) a
         # stronger model without changing the orchestrator's global config.
         # Requires the orchestrator to support `--model <id>`
-        # (svv2014/boba-orchestrator#30).
+        # (see internal orchestrator history).
         if [ -n "${LOOP_AGENT_MODEL_OVERRIDE:-}" ]; then
             "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd" --model "$LOOP_AGENT_MODEL_OVERRIDE"
         else
