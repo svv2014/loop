@@ -1809,13 +1809,30 @@ for c in data.get("comments", [])[-10:]:
     return 0
 }
 
+# --- Helper: resolve effective loop branch regex ------------------------------
+# Returns the regex used to identify loop-opened PR head branches.
+#
+# Resolution order:
+#   1. LOOP_BRANCH_PREFIX (legacy) — if set, emit `^<escaped-prefix>(\d+)-`.
+#      Capture group 1 is the issue number. Kept for backward compatibility.
+#   2. LOOP_BRANCH_PATTERN — full regex; default matches feat|fix|chore|docs.
+#      Default: `^(?:feat|fix|chore|docs)/issue-(\d+)-`. Capture group 1 is
+#      the issue number.
+_loop_branch_pattern() {
+    if [ -n "${LOOP_BRANCH_PREFIX:-}" ]; then
+        PREFIX="$LOOP_BRANCH_PREFIX" python3 -c 'import os, re; print("^" + re.escape(os.environ["PREFIX"]) + r"(\d+)-")'
+    else
+        printf '%s\n' "${LOOP_BRANCH_PATTERN:-^(?:feat|fix|chore|docs)/issue-(\d+)-}"
+    fi
+}
+
 # --- Check: CI red on loop-opened PRs → auto-apply needs-rework ---------------
 # Scans open PRs whose head branch matches the loop branch convention
-# (feat/issue-N-*). For each, queries `gh pr checks` to look for required
-# checks in FAILURE state. If found, and the PR has no human review and no
-# needs-rework label already, applies needs-rework to the PR and strips the
-# parent issue's trigger label (needs-dev / in-dev) so the scanner stops
-# re-claiming it. Emits a pr_ci_failed event to loop-monitor.
+# (feat|fix|chore|docs)/issue-N-*. For each, queries `gh pr checks` to look
+# for required checks in FAILURE state. If found, and the PR has no human
+# review and no needs-rework label already, applies needs-rework to the PR
+# and strips the parent issue's trigger label (needs-dev / in-dev) so the
+# scanner stops re-claiming it. Emits a pr_ci_failed event to loop-monitor.
 #
 # No-op conditions (checked before any mutation):
 #   - PR already has needs-rework or changes-requested label
@@ -1824,10 +1841,12 @@ for c in data.get("comments", [])[-10:]:
 #
 # Configurable env (all optional):
 #   AUTO_REWORK_ON_CI      — set to "false" to disable per-project (default: true)
-#   LOOP_BRANCH_PREFIX     — branch prefix convention (default: feat/issue-)
+#   LOOP_BRANCH_PATTERN    — branch regex (default: ^(?:feat|fix|chore|docs)/issue-(\d+)-)
+#   LOOP_BRANCH_PREFIX     — legacy single-prefix shortcut (overrides PATTERN if set)
 reconcile_ci_red_prs() {
     local repo="$1"
-    local branch_prefix="${LOOP_BRANCH_PREFIX:-feat/issue-}"
+    local branch_pattern
+    branch_pattern=$(_loop_branch_pattern)
 
     # Per-project opt-out via dev.auto_rework_on_ci: false in projects.yaml.
     if [ "${AUTO_REWORK_ON_CI:-true}" = "false" ]; then
@@ -1842,11 +1861,10 @@ reconcile_ci_red_prs() {
 
     # Filter to PRs whose head branch matches the loop convention.
     local loop_prs
-    loop_prs=$(PJSON="$prs_json" PREFIX="$branch_prefix" python3 - <<'PY'
+    loop_prs=$(PJSON="$prs_json" PATTERN="$branch_pattern" python3 - <<'PY'
 import json, os, re
 prs = json.loads(os.environ['PJSON'])
-prefix = os.environ['PREFIX']
-pat = re.compile(r'^' + re.escape(prefix) + r'(\d+)-')
+pat = re.compile(os.environ['PATTERN'])
 for pr in prs:
     head = pr.get('headRefName', '')
     m = pat.match(head)
@@ -1958,7 +1976,7 @@ print(json.dumps({'type':'pr_ci_failed','payload':{'repo':'${repo}','pr_number':
 
 # reconcile_ci_green_prs <repo> [slug]
 #
-# For each loop-opened PR (branch matches LOOP_BRANCH_PREFIX) whose required
+# For each loop-opened PR (branch matches LOOP_BRANCH_PATTERN) whose required
 # CI checks are all SUCCESS and which still carries needs-dev, promote it to
 # the project's review-stage trigger label (default: needs-review) and emit
 # a pr_ci_passed event. This closes the "green CI but PR sits indefinitely"
@@ -1975,11 +1993,13 @@ print(json.dumps({'type':'pr_ci_failed','payload':{'repo':'${repo}','pr_number':
 #
 # Configurable env (all optional):
 #   AUTO_PROMOTE_ON_CI     — set to "false" to disable per-project (default: true)
-#   LOOP_BRANCH_PREFIX     — branch prefix convention (default: feat/issue-)
+#   LOOP_BRANCH_PATTERN    — branch regex (default: ^(?:feat|fix|chore|docs)/issue-(\d+)-)
+#   LOOP_BRANCH_PREFIX     — legacy single-prefix shortcut (overrides PATTERN if set)
 reconcile_ci_green_prs() {
     local repo="$1"
     local slug="${2:-}"
-    local branch_prefix="${LOOP_BRANCH_PREFIX:-feat/issue-}"
+    local branch_pattern
+    branch_pattern=$(_loop_branch_pattern)
 
     # Per-project opt-out via AUTO_PROMOTE_ON_CI=false (or dev.auto_promote_on_ci
     # in projects.yaml set as an env var before calling this function).
@@ -1995,11 +2015,10 @@ reconcile_ci_green_prs() {
 
     # Filter to PRs whose head branch matches the loop convention.
     local loop_prs
-    loop_prs=$(PJSON="$prs_json" PREFIX="$branch_prefix" python3 - <<'PY'
+    loop_prs=$(PJSON="$prs_json" PATTERN="$branch_pattern" python3 - <<'PY'
 import json, os, re
 prs = json.loads(os.environ['PJSON'])
-prefix = os.environ['PREFIX']
-pat = re.compile(r'^' + re.escape(prefix) + r'(\d+)-')
+pat = re.compile(os.environ['PATTERN'])
 for pr in prs:
     head = pr.get('headRefName', '')
     m = pat.match(head)
@@ -2195,7 +2214,7 @@ _reconcile_rebase_one_pr() {
 }
 
 # --- Sweep: auto-rebase loop PRs when base branch has advanced ----------------
-# Scans open loop-opened PRs (feat/issue-N-*) whose mergeStateStatus is DIRTY
+# Scans open loop-opened PRs (matched by LOOP_BRANCH_PATTERN) whose mergeStateStatus is DIRTY
 # or mergeable is CONFLICTING. For each, attempts an isolated git rebase onto
 # origin/<base>. Clean rebases are pushed with --force-with-lease so CI
 # re-runs and Sweep 1 (reconcile_ci_green_prs) can promote them. Conflicting
@@ -2212,10 +2231,12 @@ _reconcile_rebase_one_pr() {
 #
 # Configurable env (all optional):
 #   AUTO_REBASE_ON_BASE_MOVE — set to "false" to disable per-project (default: true)
-#   LOOP_BRANCH_PREFIX       — branch prefix convention (default: feat/issue-)
+#   LOOP_BRANCH_PATTERN      — branch regex (default: ^(?:feat|fix|chore|docs)/issue-(\d+)-)
+#   LOOP_BRANCH_PREFIX       — legacy single-prefix shortcut (overrides PATTERN if set)
 reconcile_pr_base_moved() {
     local repo="$1" slug="${2:-}"
-    local branch_prefix="${LOOP_BRANCH_PREFIX:-feat/issue-}"
+    local branch_pattern
+    branch_pattern=$(_loop_branch_pattern)
 
     if [ "${AUTO_REBASE_ON_BASE_MOVE:-true}" = "false" ]; then
         log "[$repo] base-move: disabled via AUTO_REBASE_ON_BASE_MOVE=false — skipping"
@@ -2230,11 +2251,10 @@ reconcile_pr_base_moved() {
     # Filter to loop-opened PRs; skip those already in terminal rework states.
     # Emits: pr_num TAB head_ref TAB issue_num TAB labels_csv TAB pr_body(400)
     local loop_prs
-    loop_prs=$(PJSON="$prs_json" PREFIX="$branch_prefix" python3 - <<'PY'
+    loop_prs=$(PJSON="$prs_json" PATTERN="$branch_pattern" python3 - <<'PY'
 import json, os, re
 prs = json.loads(os.environ['PJSON'])
-prefix = os.environ['PREFIX']
-pat = re.compile(r'^' + re.escape(prefix) + r'(\d+)-')
+pat = re.compile(os.environ['PATTERN'])
 skip_set = {'needs-rework', 'changes-requested', 'blocked'}
 for pr in prs:
     head = pr.get('headRefName', '')
