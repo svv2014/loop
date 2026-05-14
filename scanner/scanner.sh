@@ -77,6 +77,18 @@ _handler_to_event_type() {
     esac
 }
 
+# _stage_cap <event_type>
+# Resolve the per-tick emit cap for a scanner event type. Operators can set
+# MAX_CONCURRENT_HANDLERS_LOOP_PR_REVIEW-style overrides; otherwise we preserve
+# the previous global MAX_CONCURRENT_HANDLERS fallback behavior.
+_stage_cap() {
+    local stage="$1"
+    local stage_upper var
+    stage_upper=$(printf '%s' "$stage" | tr '[:lower:]' '[:upper:]' | tr '.' '_')
+    var="MAX_CONCURRENT_HANDLERS_${stage_upper}"
+    printf '%s' "${!var:-${MAX_CONCURRENT_HANDLERS:-1}}"
+}
+
 # Map event type to handler script (dispatch_direct mode).
 dispatch_direct() {
     local json="$1"
@@ -402,10 +414,11 @@ _scan_issue_stage() {
         return
     fi
 
-    # Simple issue stage (e.g. po-handler, senior-dev-handler).
-    # Cap new emits per tick at MAX_CONCURRENT_HANDLERS so a project with many
-    # ready issues doesn't fan out to N parallel handler runs every tick.
-    local _cap="${MAX_CONCURRENT_HANDLERS:-1}"
+    # Simple issue stage (e.g. po-handler, senior-dev-handler). Cap new emits
+    # per tick per event type so cheap stages can drain faster than expensive
+    # stages without losing the previous global fallback behavior.
+    local _cap
+    _cap=$(_stage_cap "$event_type")
     local _emitted=0
     log "${event_type}: max=${_cap} (per-tick emit cap)"
     while IFS= read -r row; do
@@ -466,10 +479,14 @@ sys.exit(1)
 _scan_dev_issue_stage() {
     local slug="$1" repo="$2" trigger_label="$3" event_type="$4"
 
-    local _inflight _slots
+    local _inflight _slots _stage_limit
     _inflight=$(count_inflight_prs "$slug" "$repo")
     _slots=$(( MAX_CONCURRENT_PRS - _inflight ))
-    log "dev_issue: max=${MAX_CONCURRENT_PRS} in-flight=${_inflight} slots=${_slots}"
+    _stage_limit=$(_stage_cap "$event_type")
+    if [ "$_slots" -gt "$_stage_limit" ]; then
+        _slots="$_stage_limit"
+    fi
+    log "dev_issue: max=${MAX_CONCURRENT_PRS} in-flight=${_inflight} stage-cap=${_stage_limit} slots=${_slots}"
 
     if [ "$_slots" -le 0 ]; then
         log "skip dev_issue for $slug: ${_inflight}/${MAX_CONCURRENT_PRS} pipeline PRs in flight"
@@ -558,8 +575,9 @@ _scan_pr_stage() {
         fi
     fi
 
-    # Cap new emits per tick at MAX_CONCURRENT_HANDLERS, same as _scan_issue_stage.
-    local _cap="${MAX_CONCURRENT_HANDLERS:-1}"
+    # Cap new emits per tick per event type, same as _scan_issue_stage.
+    local _cap
+    _cap=$(_stage_cap "$event_type")
     local _emitted=0
     log "${event_type}: max=${_cap} (per-tick emit cap)"
     while IFS= read -r row; do
