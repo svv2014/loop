@@ -34,6 +34,8 @@ source "$LOOP_ROOT/lib/worktree.sh"
 source "$LOOP_ROOT/lib/failure_classifier.sh"
 # shellcheck source=../lib/failure_category.sh
 source "$LOOP_ROOT/lib/failure_category.sh"
+# shellcheck source=../lib/prompt-untrust.sh
+source "$LOOP_ROOT/lib/prompt-untrust.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-handler.log"
 MAX_RETRIES=3
@@ -109,6 +111,7 @@ loop_notify "▶️ [$SLUG] #$ISSUE_NUM dev starting"
 
 # Fetch issue body
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
+ISSUE_BODY_WRAPPED=$(printf '%s' "$ISSUE_BODY" | prompt_untrust_wrap issue_body)
 
 # Claim the issue
 backend_add_label "$REPO" "$ISSUE_NUM" in-progress
@@ -173,7 +176,7 @@ GitHub Issue #${ISSUE_NUM}: ${ISSUE_TITLE}
 URL: ${ISSUE_URL}
 
 Issue body:
-${ISSUE_BODY}
+${ISSUE_BODY_WRAPPED}
 
 Your job:
 1. cd ${WORKTREE_ROOT}  (already on origin/${DEFAULT_BRANCH} — no pull needed)
