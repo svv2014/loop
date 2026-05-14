@@ -78,13 +78,13 @@ If `true` and a merge attempt fails, the merge handler retries with `--rebase`. 
 
 ```yaml
 projects:
-  - name: PPL Study
-    slug: ppl
-    repo: svv2014/ppl-study
+  - name: My Project
+    slug: myproj
+    repo: my-org/my-project
     root: /path/to/your/project
     default_branch: main
     dev:
-      commit_prefix: PPL
+      commit_prefix: MYPROJ
     merge:
       strategy: squash
       auto_rebase: true
