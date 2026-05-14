@@ -11,15 +11,19 @@ setup() {
     export OPS_LOG="$BATS_TMPDIR/ops.log"
     rm -f "$OPS_LOG"
 
-    # Source the backend function under test first, then override
-    # loop_remove_label so the test can observe individual calls without
-    # hitting the real gh CLI.
-    source "$REPO_ROOT/lib/backends/github.sh"
+    # Source the backend stack. backend.sh loads github.sh via loop_load_backend
+    # and defines the backend_remove_label wrapper on top. Stubs must be defined
+    # AFTER sourcing so they aren't clobbered by loop_load_backend.
+    export BACKEND=github
+    source "$REPO_ROOT/lib/notify.sh"
+    source "$REPO_ROOT/lib/backends/backend.sh"
 
     loop_remove_label() {
         echo "remove $2 $3" >> "$OPS_LOG"
     }
-    export -f loop_remove_label
+    # Stub backend_issue_view so the label_transition wrapper doesn't call gh CLI.
+    backend_issue_view() { printf '[]'; }
+    export -f loop_remove_label backend_issue_view
 }
 
 teardown() {

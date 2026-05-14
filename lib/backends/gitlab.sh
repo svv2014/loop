@@ -115,9 +115,9 @@ backend_list_prs_with_label() {
     | jq -c "$_GL_MR_SORT" 2>/dev/null || true
 }
 
-# backend_add_label <repo> <number> <label>
+# _backend_add_label_impl <repo> <number> <label>
 # Tries issue first; falls back to MR.
-backend_add_label() {
+_backend_add_label_impl() {
     local repo="$1" number="$2" label="$3"
     _gl_parse_repo "$repo"
     glab issue update "$number" --repo "$_GL_REPO" --add-label "$label" 2>/dev/null \
@@ -125,8 +125,8 @@ backend_add_label() {
         || true
 }
 
-# backend_remove_label <repo> <number> <label> [<label> ...]
-backend_remove_label() {
+# _backend_remove_label_impl <repo> <number> <label> [<label> ...]
+_backend_remove_label_impl() {
     local repo="$1" number="$2"
     shift 2
     _gl_parse_repo "$repo"

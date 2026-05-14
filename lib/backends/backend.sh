@@ -78,6 +78,11 @@
 set -euo pipefail
 
 _LOOP_BACKENDS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Source loop_audit_event (provided by lib/notify.sh).
+# Best-effort — callers that already source notify.sh will get a no-op re-source.
+# shellcheck disable=SC1090
+source "${_LOOP_BACKENDS_DIR}/../notify.sh" 2>/dev/null || true
 _LOOP_BACKEND_LOADED=""
 
 # loop_load_backend — (re-)load the implementation for $BACKEND.
@@ -104,6 +109,64 @@ loop_load_backend
 
 # (declare this alongside the other backend_* interface functions)
 backend_issue_unmet_deps() { echo "backend_issue_unmet_deps not implemented" >&2; return 1; }
+
+# ---------------------------------------------------------------------------
+# Transparent wrappers: backend_add_label / backend_remove_label
+#
+# These shadow the per-backend _backend_*_impl functions (renamed in
+# github.sh / gitlab.sh / jira-gitlab.sh) and emit a label_transition audit
+# event via loop_audit_event after each operation. Event emission is
+# best-effort (|| true) and never aborts the caller.
+# ---------------------------------------------------------------------------
+
+# backend_add_label <repo> <number> <label>
+# Wraps _backend_add_label_impl to emit a label_transition audit event.
+# kind defaults to "issue" — github/glab add_label works for both issues and
+# PRs; distinguishing at this layer would require an extra API call.
+backend_add_label() {
+    local repo="$1" number="$2" label="$3"
+    local before_labels
+    before_labels=$(backend_issue_view "$repo" "$number" --json labels \
+        --jq '[.labels[].name]' 2>/dev/null || printf '[]')
+    _backend_add_label_impl "$repo" "$number" "$label"
+    local _rc=$?
+    local after_labels
+    after_labels=$(backend_issue_view "$repo" "$number" --json labels \
+        --jq '[.labels[].name]' 2>/dev/null || printf '[]')
+    local _source
+    _source=$(basename "${BASH_SOURCE[1]:-unknown}")
+    local _payload
+    _payload="{\"kind\":\"issue\",\"number\":${number},\"op\":\"add\",\"before_labels\":${before_labels},\"after_labels\":${after_labels},\"source\":\"${_source}\"}"
+    loop_audit_event "label_transition" "$_payload" 2>/dev/null || true
+    return $_rc
+}
+
+# backend_remove_label <repo> <number> <label> [<label> ...]
+# Wraps _backend_remove_label_impl to emit a label_transition audit event per
+# label removed. kind defaults to "issue" — see backend_add_label for rationale.
+backend_remove_label() {
+    local repo="$1" number="$2"
+    shift 2
+    local _label
+    for _label in "$@"; do
+        [ -z "$_label" ] && continue
+        local before_labels
+        before_labels=$(backend_issue_view "$repo" "$number" --json labels \
+            --jq '[.labels[].name]' 2>/dev/null || printf '[]')
+        _backend_remove_label_impl "$repo" "$number" "$_label"
+        local _rc=$?
+        local after_labels
+        after_labels=$(backend_issue_view "$repo" "$number" --json labels \
+            --jq '[.labels[].name]' 2>/dev/null || printf '[]')
+        local _source
+        _source=$(basename "${BASH_SOURCE[1]:-unknown}")
+        local _payload
+        _payload="{\"kind\":\"issue\",\"number\":${number},\"op\":\"remove\",\"before_labels\":${before_labels},\"after_labels\":${after_labels},\"source\":\"${_source}\"}"
+        loop_audit_event "label_transition" "$_payload" 2>/dev/null || true
+        if [ $_rc -ne 0 ]; then return $_rc; fi
+    done
+    return 0
+}
 
 # backend_cli_note — emit a CLI equivalence block for agent prompts.
 # On gitlab/jira-gitlab backends, prints a glab/gh translation table so the
