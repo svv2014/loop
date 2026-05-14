@@ -282,3 +282,55 @@ loop_issue_only_labels_csv() {
     local IFS=','
     echo "${LOOP_ISSUE_ONLY_LABELS[*]}"
 }
+
+# Color palette for the canonical state labels (hex, no leading #).
+_LOOP_LABEL_COLOR_NEEDS_PO="1D76DB"
+_LOOP_LABEL_COLOR_IN_PO="5DADE2"
+_LOOP_LABEL_COLOR_NEEDS_DEV="0075CA"
+_LOOP_LABEL_COLOR_IN_DEV="3498DB"
+_LOOP_LABEL_COLOR_NEEDS_REVIEW="D93F0B"
+_LOOP_LABEL_COLOR_IN_REVIEW="6A5ACD"
+_LOOP_LABEL_COLOR_NEEDS_QA="FBCA04"
+_LOOP_LABEL_COLOR_QA_PASS="0E8A16"
+_LOOP_LABEL_COLOR_QA_FAIL="B60205"
+_LOOP_LABEL_COLOR_BLOCKED="8B0000"
+_LOOP_LABEL_COLOR_DONE="006400"
+_LOOP_LABEL_COLOR_EXTERNAL_PR="0E8A16"
+_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_PASS="0E8A16"
+_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_FAIL="B60205"
+
+# loop_ensure_canonical_labels_exist <repo>
+# Creates every label in LOOP_CANONICAL_LABELS on <repo> if missing.
+# Idempotent — uses `gh label create` and tolerates already-exists errors.
+# Called from scanner startup so new canonical labels added in future
+# releases auto-populate on every tracked repo on the next sweep without
+# manual `gh label create` ops.
+loop_ensure_canonical_labels_exist() {
+    local repo="$1"
+    local existing
+    existing=$(gh label list --repo "$repo" --limit 200 --json name \
+               --jq '.[].name' 2>/dev/null || echo "")
+
+    _create_canonical_label() {
+        local name="$1" desc="$2" color="$3"
+        if ! printf '%s\n' "$existing" | grep -qxF "$name"; then
+            gh label create "$name" --repo "$repo" \
+               --description "$desc" --color "$color" 2>/dev/null || true
+        fi
+    }
+
+    _create_canonical_label needs-po              "PO triage queue (canonical)"                       "$_LOOP_LABEL_COLOR_NEEDS_PO"
+    _create_canonical_label in-po                 "PO triage in flight (canonical)"                   "$_LOOP_LABEL_COLOR_IN_PO"
+    _create_canonical_label needs-dev             "Development queue (canonical)"                     "$_LOOP_LABEL_COLOR_NEEDS_DEV"
+    _create_canonical_label in-dev                "Development in flight (canonical)"                 "$_LOOP_LABEL_COLOR_IN_DEV"
+    _create_canonical_label needs-review          "PR awaiting code review"                           "$_LOOP_LABEL_COLOR_NEEDS_REVIEW"
+    _create_canonical_label in-review             "Review in progress"                                "$_LOOP_LABEL_COLOR_IN_REVIEW"
+    _create_canonical_label needs-qa              "QA queue (canonical)"                              "$_LOOP_LABEL_COLOR_NEEDS_QA"
+    _create_canonical_label qa-pass               "QA approved — ready to merge"                      "$_LOOP_LABEL_COLOR_QA_PASS"
+    _create_canonical_label qa-fail               "QA failed — back to dev"                           "$_LOOP_LABEL_COLOR_QA_FAIL"
+    _create_canonical_label blocked               "Blocked — needs operator"                          "$_LOOP_LABEL_COLOR_BLOCKED"
+    _create_canonical_label "done"                "Merged and closed"                                 "$_LOOP_LABEL_COLOR_DONE"
+    _create_canonical_label external-pr           "PR from outside the operator account"              "$_LOOP_LABEL_COLOR_EXTERNAL_PR"
+    _create_canonical_label external-review-pass  "External PR — reviewer approved, awaits merge"     "$_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_PASS"
+    _create_canonical_label external-review-fail  "External PR — reviewer requested changes"          "$_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_FAIL"
+}

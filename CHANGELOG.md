@@ -14,6 +14,23 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 ## [Unreleased]
 
 ### Fixed
+- [#359] Three process-polish bugs that broke external-PR review flow
+  end-to-end on 2026-05-13:
+  - `backend_remove_label` now accepts multiple labels and removes each.
+    Previously only the first label was processed; subsequent args were
+    silently dropped. Several callers in review/dev/qa handlers used the
+    multi-arg form expecting it to work.
+  - `_dedup_key` (scanner) now returns a bare hex hash with no trailing
+    whitespace. On macOS, `md5sum` from coreutils appends `  -`, which
+    leaked into dedup filenames and made manual ops (clearing a stuck
+    entry) painful. ~467 existing dedup files have the malformed name;
+    they age out naturally.
+  - `loop_ensure_canonical_labels_exist` now auto-creates every label
+    in `LOOP_CANONICAL_LABELS` (incl. external-pr / external-review-*)
+    on each reconciler tick. Previously, adding a new canonical label
+    in code didn't create the corresponding label on the GitHub repo,
+    causing handlers to abort on `gh label add` with "not found" under
+    `set -e`. Root cause of the `#223` stuck-state on 2026-05-13.
 - [#354] Reconciler dup-PR keep selection now prefers operator-authored
   PRs (in `ALLOWED_AUTHORS`) over bot-authored PRs, with oldest-wins as
   the tiebreaker within the same trust tier. External-contributor PRs

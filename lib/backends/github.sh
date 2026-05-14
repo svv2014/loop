@@ -38,8 +38,17 @@ backend_add_label() {
 }
 
 backend_remove_label() {
-    local repo="$1" number="$2" label="$3"
-    loop_remove_label "$repo" "$number" "$label"
+    # Accepts one or more labels and removes each. Previously the function
+    # silently dropped args beyond the 3rd, which caused several callers
+    # in review-handler / dev-handler / qa-handler to fail silently when
+    # passing a list of labels to strip.
+    local repo="$1" number="$2"
+    shift 2
+    local label
+    for label in "$@"; do
+        [ -z "$label" ] && continue
+        loop_remove_label "$repo" "$number" "$label"
+    done
 }
 
 # backend_issue_has_any_label <repo> <number> <label1> [label2 ...]
