@@ -2198,12 +2198,16 @@ except Exception:
 # next reconciler tick will remove the stale entry from .git/worktrees.
 _reconcile_rebase_one_pr() {
     local repo="$1" pr_num="$2" base="$3" head="$4"
+    # ROOT is set by loop_load_project at the per-project reconciler entry
+    # point and points at the target project's local clone. LOOP_ROOT is the
+    # loop checkout itself and cannot fetch refs from a different repo (#384).
+    local repo_root="${ROOT:-$LOOP_ROOT}"
     local wt
     wt=$(mktemp -d "/tmp/loop-rebase-${repo//\//-}-${pr_num}-XXXXXX")
     # shellcheck disable=SC2064
-    trap "git -C '$LOOP_ROOT' worktree remove --force '$wt' 2>/dev/null || true; rm -rf '$wt'" RETURN
-    git -C "$LOOP_ROOT" fetch --quiet origin "$base" "$head" || return 1
-    git -C "$LOOP_ROOT" worktree add --quiet "$wt" "origin/$head" || return 1
+    trap "git -C '$repo_root' worktree remove --force '$wt' 2>/dev/null || true; rm -rf '$wt'" RETURN
+    git -C "$repo_root" fetch --quiet origin "$base" "$head" || return 1
+    git -C "$repo_root" worktree add --quiet "$wt" "origin/$head" || return 1
     if git -C "$wt" rebase --quiet "origin/$base"; then
         git -C "$wt" push --force-with-lease origin "HEAD:$head" || return 2
         return 0
