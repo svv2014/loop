@@ -4,7 +4,22 @@
 setup() {
     REPO_ROOT="$(cd "$BATS_TEST_DIRNAME/.." && pwd)"
     BIN_DIR="$BATS_TMPDIR/bin"
-    mkdir -p "$BIN_DIR" "$BATS_TMPDIR/home"
+    BAD_BIN_DIR="$BATS_TMPDIR/bad-bin"
+    LOOP_ENV_FILE="$REPO_ROOT/loop.env"
+    LOOP_ENV_BACKUP="$BATS_TMPDIR/loop.env.backup"
+    LOOP_ENV_HAD_FILE=0
+    if [ -f "$LOOP_ENV_FILE" ]; then
+        cp "$LOOP_ENV_FILE" "$LOOP_ENV_BACKUP"
+        LOOP_ENV_HAD_FILE=1
+    fi
+
+    mkdir -p "$BIN_DIR" "$BAD_BIN_DIR" "$BATS_TMPDIR/home"
+    printf '#!/usr/bin/env bash\nexit 1\n' > "$BAD_BIN_DIR/gh"
+    chmod +x "$BAD_BIN_DIR/gh"
+
+    # Simulate a local operator loop.env that would shadow test mocks unless
+    # this test owns loop.env for the duration of the run.
+    printf 'LOOP_EXTRA_PATH=%s\n' "$BAD_BIN_DIR" > "$REPO_ROOT/loop.env"
 
     cat > "$BIN_DIR/gh" <<'SH'
 #!/usr/bin/env bash
@@ -55,6 +70,7 @@ printf '%s\t%s\n' "$url" "$payload" >> "${CURL_CALLS:?}"
 SH
 
     chmod +x "$BIN_DIR/gh" "$BIN_DIR/claude" "$BIN_DIR/curl"
+    printf 'LOOP_EXTRA_PATH=%s\nLOOP_LOG_DIR=%s\n' "$BIN_DIR" "$BATS_TMPDIR/logs" > "$LOOP_ENV_FILE"
     export PATH="$BIN_DIR:$PATH"
     export LOOP_EXTRA_PATH="$BIN_DIR"
     export HOME="$BATS_TMPDIR/home"
@@ -65,7 +81,13 @@ SH
 }
 
 teardown() {
-    rm -rf "$BATS_TMPDIR/bin" "$BATS_TMPDIR/home" \
+    if [ "${LOOP_ENV_HAD_FILE:-0}" = "1" ]; then
+        cp "$LOOP_ENV_BACKUP" "$LOOP_ENV_FILE"
+    else
+        rm -f "$LOOP_ENV_FILE" 2>/dev/null || true
+    fi
+
+    rm -rf "$BATS_TMPDIR/bin" "$BATS_TMPDIR/bad-bin" "$BATS_TMPDIR/home" \
            "$BATS_TMPDIR/curl-calls.tsv" "$BATS_TMPDIR/gh-comments.log" 2>/dev/null || true
 }
 
