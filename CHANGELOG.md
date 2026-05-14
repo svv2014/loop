@@ -13,6 +13,8 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-05-14
+
 ### Fixed
 - [#359] Three process-polish bugs that broke external-PR review flow
   end-to-end on 2026-05-13:
@@ -392,3 +394,4 @@ quick path:
 
 [Unreleased]: https://github.com/svv2014/loop/compare/v0.1.0...HEAD
 [0.1.0]: https://github.com/svv2014/loop/releases/tag/v0.1.0
+[0.5.0]: https://github.com/svv2014/loop/releases/tag/v0.5.0
