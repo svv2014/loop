@@ -35,7 +35,7 @@ Content-Type: application/json
 |---|---|---|---|
 | `api` | yes | string `"<MAJOR>.<MINOR>"` | API version. Loop emits `1.0`. Monitor accepts `1.x`, rejects `2.x` with HTTP 426. |
 | `core_version` | yes | string semver | Sender's loop core version, for telemetry. |
-| `event` | yes | string | One of: `dev_start`, `dev_done`, `dev_failed`, `review_start`, `review_done`, `review_request_changes`, `qa_start`, `qa_pass`, `qa_fail`, `merge_start`, `merge_done`, `merge_conflict`, `merge_failed`, `po_start`, `po_done`, `po_failed`, `rework_start`, `rework_done`, `rework_failed`, `judge_start`, `judge_done` |
+| `event` | yes | string | One of: `dev_start`, `dev_done`, `dev_failed`, `review_start`, `review_done`, `review_request_changes`, `qa_start`, `qa_pass`, `qa_fail`, `merge_start`, `merge_done`, `merge_conflict`, `merge_failed`, `po_start`, `po_done`, `po_failed`, `rework_start`, `rework_done`, `rework_failed`, `judge_start`, `judge_done`, `qa_skipped` |
 | `role` | optional | string | Free-form (e.g. `dev`, `reviewer`, `merger`, or future specialist names like `frontend`) |
 | `agent` | optional | string | The agent CLI name (`claude`, `codex`, `gemini`, `aider`) |
 | `model` | optional | string | Model id (`sonnet`, `opus`, `o4-mini`) |
