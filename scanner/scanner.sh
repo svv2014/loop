@@ -62,6 +62,18 @@ done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
 
+# _stage_cap <event_type>
+# Resolves the per-tick emit cap for a given event type.
+# Checks MAX_CONCURRENT_HANDLERS_<STAGE> (event type uppercased, dots → underscores),
+# then MAX_CONCURRENT_HANDLERS, then defaults to 1.
+_stage_cap() {
+    local stage="$1"
+    local stage_upper
+    stage_upper=$(printf '%s' "$stage" | tr '[:lower:].' '[:upper:]_')
+    local var="MAX_CONCURRENT_HANDLERS_${stage_upper}"
+    printf '%s' "${!var:-${MAX_CONCURRENT_HANDLERS:-1}}"
+}
+
 # _handler_to_event_type <handler_base_name>
 # Maps a workflow handler name (from workflow YAML) to a loop event type string.
 _handler_to_event_type() {
@@ -403,9 +415,9 @@ _scan_issue_stage() {
     fi
 
     # Simple issue stage (e.g. po-handler, senior-dev-handler).
-    # Cap new emits per tick at MAX_CONCURRENT_HANDLERS so a project with many
-    # ready issues doesn't fan out to N parallel handler runs every tick.
-    local _cap="${MAX_CONCURRENT_HANDLERS:-1}"
+    # Cap new emits per tick so a project with many ready issues doesn't fan
+    # out to N parallel handler runs every tick. Cap is per-stage configurable.
+    local _cap; _cap=$(_stage_cap "$event_type")
     local _emitted=0
     log "${event_type}: max=${_cap} (per-tick emit cap)"
     while IFS= read -r row; do
@@ -558,8 +570,8 @@ _scan_pr_stage() {
         fi
     fi
 
-    # Cap new emits per tick at MAX_CONCURRENT_HANDLERS, same as _scan_issue_stage.
-    local _cap="${MAX_CONCURRENT_HANDLERS:-1}"
+    # Cap new emits per tick, same as _scan_issue_stage but resolved per-stage.
+    local _cap; _cap=$(_stage_cap "$event_type")
     local _emitted=0
     log "${event_type}: max=${_cap} (per-tick emit cap)"
     while IFS= read -r row; do
