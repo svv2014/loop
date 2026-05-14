@@ -15,30 +15,79 @@ What's coming. Issues drive the actual work; this doc reflects intent.
 - Six pipeline handlers: po, dev, dev-rework, review, qa, merge
 - Reconciler housekeeping with dependency-unblock parser
 
-## v0.1.x — incremental polish
+## Shipped — v0.4.0 (self-correcting pipeline, 2026-05-10)
+
+Made the autonomous pipeline self-correcting across the full life of a
+ticket rather than relying on operator intervention when a stage failed.
+
+- `loop_gh_issues_with_label` filters PRs out of issue-list results —
+  single fix that unblocked multi-week stalled pipelines (#266)
+- Untracked-data fail-fast classifier + `dev.worktree_extra_paths`
+  per-project escape hatch (#265)
+- Auto-`needs-rework` on red CI past threshold (#272); deterministic
+  `CHANGES_REQUESTED → needs-rework` sync from review-handler (#269)
+- Dev-rework prompt reads `statusCheckRollup` + `gh run view
+  --log-failed` so agents fix lint failures alongside review feedback
+  (#273); validation-cmd discovery from `.github/workflows/`,
+  `package.json`, `Makefile`, `pyproject.toml`, `pre-commit-config.yaml`
+  rather than a static `DEV_VALIDATION_CMD` (#274)
+- `scripts/status.sh` one-shot health summary (#252); budget counter
+  moved off `/tmp` so a reboot no longer resets the day's tally (#271)
+
+## Shipped — v0.5.0 (security + self-convergence, 2026-05-14)
+
+See [CHANGELOG.md](CHANGELOG.md) for the full entry. Headlines:
+
+- **External-PR review-only path** and **`safe-to-test` gate** before
+  any QA `validation_cmd` runs on fork PR code (#355, #372)
+- **Delimited-untrust wrapper** for every text surface that reaches an
+  agent prompt (#375); **trusted-author comment filter** (#331);
+  **fork auto-merge disabled** (#338); **`validation_cmd`
+  dangerous-pattern guard** (#351)
+- **Reconciler self-convergence**: auto-promote green-CI PRs (#282),
+  auto-rebase on base-move with configurable `LOOP_BRANCH_PATTERN`
+  (#283, #380), label-set convergence (#288), orphan-issue auto-PO
+  (#286), tracker auto-close (#290), review-handler stuck-state sweep
+  (#330), DIRTY rework escalation (#329), diff-aware QA baseline (#328)
+- **SQLite jobs queue scaffolding** as additive groundwork for
+  replacing label-state + /tmp-lock concurrency (#353, #369, #373,
+  #374)
+- **`loop:stage:*` label namespace** with reconciler sync (#332)
+- **Scanner serial mode + priority pick order** (#285); per-stage
+  handler emit cap (#367); PO parse/decision migrated to Python (#339)
+- **`scripts/loop-recover.sh`** operator rollback command (#340);
+  structured `failure_reason` on `*_failed` events (#308); judge
+  start/done bounty events (#370); prompt-injection defenses
+  documented in `docs/security-model.md` (#368)
+
+## v0.5.x — incremental polish (open)
 
 - Demo GIF in README hero (catch one during a busy pipeline window)
 - Loop-monitor dashboard screenshot in README
 - Mermaid label-state-machine diagram in `docs/architecture.md`
 - One-line install script (`curl … | bash`)
 - Issue-label coverage audit between repo + active workflow
-- Smaller follow-ups as they surface
 
-## v0.2.0 — quality gates
+## v0.6.0 — quality gates (next)
 
-The two biggest capability gaps versus competing projects are quality
-and specialization:
+The two biggest remaining capability gaps versus competing projects are
+quality and specialization:
 
 - **Spec-blind validator stage** — a separate AI agent that reads the
   ticket's `## Acceptance Criteria` + the merged-PR diff (not the
   implementation prompt or PR description) and verdicts each AC as
   pass/fail/unclear. New `spec-validator.sh` handler between QA and
   merge. Workflow opt-in (default-off) to start.
-- **Reconciler unblock for cross-section deps** — currently single-repo;
+- **Reconciler unblock for cross-repo deps** — currently single-repo;
   extend to `org/other-repo#N` references where the reconciler can
   also read merged status of cross-repo deps.
+- **Auto-revoke `safe-to-test` on PR head change** — close the loophole
+  documented in `docs/security-model.md` where a contributor can land
+  the label on a clean diff then push malware.
+- **Mandatory `ALLOWED_AUTHORS` at scanner startup** (#346) — refuse to
+  start without an explicit allow-list or explicit opt-out env var.
 
-## v0.3.0 — specialist agents
+## v0.7.0 — specialist agents
 
 Domain-specialized handlers routed by label or filepath analysis:
 
@@ -51,13 +100,14 @@ Domain-specialized handlers routed by label or filepath analysis:
 Per-role prompts in `prompts/<role>.md`, dispatcher logic in
 `scripts/dev-handler.sh`. Generalist fallback preserved.
 
-## v0.4.0 — operational improvements
+## v0.8.0 — operational improvements
 
 - Container-based QA validation (sandbox `validation_cmd` execution)
 - Multi-LLM-per-role tuning (e.g. Sonnet for backend, Haiku for docs)
 - Wave-based parallel execution within one feature
-- Auto-revoke `safe-to-test` when PR head changes
 - Built-in workflow validator step in CI
+- Complete jobs-queue cutover — drop label-state + /tmp-lock
+  concurrency in favour of the SQLite jobs table scaffolded in v0.5.0
 
 ## v1.0.0 — stable contracts
 

@@ -13,53 +13,179 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
 
 ## [Unreleased]
 
-### Fixed
-- [#359] Three process-polish bugs that broke external-PR review flow
-  end-to-end on 2026-05-13:
-  - `backend_remove_label` now accepts multiple labels and removes each.
-    Previously only the first label was processed; subsequent args were
-    silently dropped. Several callers in review/dev/qa handlers used the
-    multi-arg form expecting it to work.
-  - `_dedup_key` (scanner) now returns a bare hex hash with no trailing
-    whitespace. On macOS, `md5sum` from coreutils appends `  -`, which
-    leaked into dedup filenames and made manual ops (clearing a stuck
-    entry) painful. ~467 existing dedup files have the malformed name;
-    they age out naturally.
-  - `loop_ensure_canonical_labels_exist` now auto-creates every label
-    in `LOOP_CANONICAL_LABELS` (incl. external-pr / external-review-*)
-    on each reconciler tick. Previously, adding a new canonical label
-    in code didn't create the corresponding label on the GitHub repo,
-    causing handlers to abort on `gh label add` with "not found" under
-    `set -e`. Root cause of the `#223` stuck-state on 2026-05-13.
-- [#354] Reconciler dup-PR keep selection now prefers operator-authored
-  PRs (in `ALLOWED_AUTHORS`) over bot-authored PRs, with oldest-wins as
-  the tiebreaker within the same trust tier. External-contributor PRs
-  (not in `ALLOWED_AUTHORS`, not a bot) are SKIPPED from dedup entirely
-  — the reconciler will never auto-close an external contribution.
-  Previously the highest PR number won unconditionally, which destroyed
-  operator-in-flight work whenever a newer agent-authored duplicate
-  appeared. **p0-critical**.
+A security + self-convergence batch. The pipeline now (a) refuses to
+execute untrusted fork-PR code without an explicit operator opt-in,
+(b) treats every text surface that reaches an agent prompt as untrusted
+unless author-gated, and (c) sweeps its own label state, base-move
+rebases, CI-promote, orphan issues, and tracker-close without operator
+intervention. Foundations for the SQLite jobs queue (LOOP-294 tracker)
+also land here as additive scaffolding alongside the existing
+label-state pipeline.
 
-### Added
-- External-PR review-only path: PRs carrying the `external-pr` label go
-  through review-handler and halt at `external-review-pass` /
-  `external-review-fail` (new canonical labels) for operator decision.
-  QA and merge stages do not fire — protects the operator from executing
-  untrusted contributor code via `validation_cmd`. Notifications fire on
-  both terminal states.
+### Added — security gates
+- **External-PR review-only path** (#355, #356, #357). PRs carrying the
+  `external-pr` label go through review-handler and halt at
+  `external-review-pass` / `external-review-fail` (new canonical labels)
+  for operator decision. QA and merge stages do not fire — protects the
+  operator from executing untrusted contributor code via
+  `validation_cmd`. Bot welcome posts only on first-open (not reopen).
+- **safe-to-test gate before QA `validation_cmd`** (#372, LOOP-371). The
+  QA handler refuses to run a project's `validation_cmd` on a fork PR
+  unless a maintainer has applied the `safe-to-test` label after diff
+  review. Posts an explanatory comment, emits `qa_skipped`, strips
+  `needs-qa` / `ready-for-qa` and exits cleanly. Closes the gap where
+  any external PR could have triggered code execution.
+- **Delimited untrust wrapper for agent prompts** (#375, LOOP-321).
+  `lib/prompt-untrust.sh` wraps user-controlled text (issue body, PR
+  body, comments, reviewer feedback) in
+  `<<<UNTRUSTED_<KIND>>>>...<<<END_UNTRUSTED_<KIND>>>>` blocks with an
+  anti-injection preamble. Defangs embedded delimiter sequences with
+  zero-width space. Called from `po-handler.sh`, `dev-handler.sh`,
+  `dev-rework-handler.sh`, `review-handler.sh`.
+- **Trusted-author filter for PR/issue comments** (#331, LOOP-322).
+  `lib/comments.sh` filters comment bodies before they reach agent
+  prompts. Trust set: `ALLOWED_AUTHORS` plus `authorAssociation` in
+  `{OWNER, MEMBER, COLLABORATOR}`. Untrusted comments degrade to
+  observer rows (author / association / first-line snippet) rather than
+  prompt context. Bots excluded unless explicitly allow-listed.
+- **Fork-PR auto-merge disabled** (#338, LOOP-323). Auto-merge is gated
+  to internal-branch PRs only. Fork PRs require an explicit operator
+  merge regardless of CI / review state.
+- **`validation_cmd` dangerous-pattern guard** (#351, LOOP-324).
+  Refuses to execute `validation_cmd` strings containing patterns like
+  `rm -rf /`, `:(){:|:&};:`, curl-pipe-to-shell, etc.
+
+### Added — reconciler self-convergence
+- **Auto-promote green-CI loop PRs** from `needs-dev` to `needs-review`
+  (#282, LOOP-280). PRs sitting on the agent-emitted state with passing
+  CI move forward without waiting for operator nudges.
+- **Auto-rebase loop PRs when base branch moves** (#283, LOOP-281). The
+  reconciler matches every Loop-managed branch (`feat/issue-*`,
+  `fix/issue-*`, `chore/issue-*`, `docs/issue-*`) via configurable
+  `LOOP_BRANCH_PATTERN` regex (#380, LOOP-379), rebases onto the new
+  base, and force-pushes-with-lease.
+- **Label-set convergence per workflow rules** (#288). The reconciler
+  resolves conflicting label combinations against each project's
+  workflow YAML rather than leaving the issue/PR in an undefined state.
+- **Orphan-issue auto `needs-po`** (#286). Open issues with no pipeline
+  label and no closing PR get `needs-po` so they enter the queue
+  instead of rotting.
+- **Tracker auto-close** (#290). Tracker issues close automatically
+  when every child issue they reference is closed.
+- **Dead-end workflow states closed** (#289). `qa-fail` and other
+  terminal states in the default workflow now have explicit transitions.
+- **Skip orphan-auto-label when an open PR closes the issue** (#314).
+- **Review-handler stuck-state sweep** (#330, LOOP-320). EXIT trap on
+  review-handler plus a reconciler sweep that recovers PRs left in
+  `in-review` after handler crash.
+- **DIRTY rework escalation to `blocked`** (#329, LOOP-319). Rework PRs
+  that fail the agent's automated rebase are labelled `blocked` with an
+  actionable explanation instead of looping.
+- **Diff-aware QA baseline** (#328, LOOP-317). QA handler ignores
+  pre-existing baseline failures so it only flags regressions introduced
+  by the PR.
+- **Strip stale `needs-qa` on `qa-fail` → rework** (#327, LOOP-315).
+  Closes a label-state hole where `needs-qa` persisted across rework.
+
+### Added — jobs queue (LOOP-294 tracker, additive scaffolding)
+- SQLite jobs schema + `lib/jobs.sh` primitives (#353, LOOP-334).
+- Scanner dual-writes claimable events to the jobs table (#369,
+  LOOP-335) — the existing label-state pipeline is still authoritative.
+- Merge-handler claims from jobs table (#373, LOOP-336).
+- `jobs-cli list` / `jobs-cli show` subcommands + JSON contract docs
+  (#374, LOOP-337).
+
+### Added — observability and operability
+- **`loop:stage:*` label namespace** with reconciler sync (#332,
+  LOOP-292). Canonical stage labels live under a dedicated namespace so
+  external projects can't collide with Loop's state.
+- **Real-time progress events from active handlers** (#333, LOOP-293).
+  Long-running handlers emit progress events for the dashboard.
+- **Structured `failure_reason`** on every `*_failed` event (#308,
+  LOOP-291).
+- **Diagnostic context on `*_failed` and `qa_fail` bounty events**
+  (#350, LOOP-310).
+- **Judge `start` / `done` bounty events** (#370, LOOP-349).
+- **`scripts/loop-recover.sh`** — operator rollback command (#340,
+  LOOP-296).
+- **Per-stage emit cap** via `MAX_CONCURRENT_HANDLERS_<STAGE>` (#367,
+  LOOP-363).
+- **Document prompt-injection defenses** in `docs/security-model.md`
+  (#368, LOOP-347).
+- **Reconciler opt-out flags documented** in `loop.env.example` (#343,
+  LOOP-304).
 
 ### Changed
-- [LOOP-262] resolve rework trigger label per-project in pr-watchdog (#277)
-- [LOOP-267] scanner: new `dev.pipeline_slots` gate (serial mode) +
+- **Scanner serial mode + priority pick order** (#285, LOOP-267). New
+  `dev.pipeline_slots` gate enables serial execution per project;
   priority-aware pick order (`p0-critical` > `p1-high` > `p2-medium` >
-  `p3-low` > unlabeled, then by number ascending), applied at every stage
-- [LOOP-302] eliminate N+1 gh API calls in loop_gh_issues_with_label (#341)
-- [LOOP-303] remove dead loop_run_orchestrator function from lib/env.sh (#342)
-- [LOOP-304] document reconciler opt-out flags in loop.env.example (#343)
-- [LOOP-310] add diagnostic context to *_failed and qa_fail bounty events (#350)
-- [LOOP-324] guard against dangerous patterns in validation_cmd (#351)
-- [LOOP-311] fix merge-handler diagnostic: capture rc, retry on transient failure (#352)
-- [LOOP-334] add SQLite jobs schema and lib/jobs.sh primitives (#353)
+  `p3-low` > unlabeled, then by number ascending) applied at every
+  stage. Serial-mode deadlock fix (#297) — first-stage trigger
+  (`needs-po`) is excluded from the in-flight slot count.
+- **PO handler parse/decision logic migrated to Python** (#339,
+  LOOP-295), Phase A of the bash-to-Python progression. Bash entry
+  point preserved.
+- **PO tightens `needs-clarification` bar** (#287). Writes a spec when
+  the issue has any structured AC; clarification only when truly
+  unparseable.
+- **PR rework-trigger label resolved per-project in pr-watchdog**
+  (#277, LOOP-262).
+- **Reconciler keeps `needs-dev` on PRs** (#278) — `needs-dev` is the
+  rework trigger in the default workflow.
+- **Eliminate N+1 `gh` API calls** in `loop_gh_issues_with_label`
+  (#341, LOOP-302).
+- **CI-promote PR-body parsing fix** (#284) — newlines no longer split
+  the loop over PR bodies during the green-CI sweep.
+
+### Fixed
+- **Three process-polish bugs that broke external-PR review flow**
+  (#360, fixes #359), 2026-05-13:
+  - `backend_remove_label` now accepts multiple labels and removes each
+    (previously dropped all but the first arg, silently breaking
+    several call sites).
+  - `_dedup_key` (scanner) now returns a bare hex hash with no trailing
+    whitespace. macOS `md5sum` from coreutils was appending `  -` and
+    leaking into dedup filenames; ~467 existing files age out
+    naturally.
+  - `loop_ensure_canonical_labels_exist` auto-creates every label in
+    `LOOP_CANONICAL_LABELS` (incl. `external-pr` / `external-review-*`)
+    on each reconciler tick. Root cause of the #223 stuck state.
+- **Reconciler dup-PR keep selection prefers operator-authored**
+  (#358, fixes #354). Operator-authored PRs (in `ALLOWED_AUTHORS`) win
+  over bot-authored; external-contributor PRs are skipped from dedup
+  entirely. Previously the highest PR number won unconditionally,
+  destroying operator-in-flight work. **p0-critical**.
+- **Scanner: skip `dev_issue` if open PR already closes the issue**
+  (#364, LOOP-362). Prevents duplicate dev work when a fix-in-flight
+  PR is already linked.
+- **Scanner `acquire_lock` race** (#326, LOOP-301) — switch to atomic
+  noclobber pattern.
+- **Custom-agent `cd` to working directory** (#325, LOOP-300) — fix
+  `_loop_invoke_agent` for non-claude agents.
+- **Merge-handler diagnostic capture + transient-failure retry** (#352,
+  LOOP-311).
+- **Reconciler matches `fix/issue-*`, `chore/issue-*`, `docs/issue-*`**
+  in addition to `feat/issue-*` (#380, LOOP-379). Root cause of 13
+  stuck loop-monitor PRs left unrebased after a base-branch move.
+- **Strip private-project leaks** from issue templates and `lib/runner.sh`
+  comment (#378). `ISSUE_TEMPLATE/config.yml` points at this repo's
+  Discussions; `runner.sh` no longer references an internal
+  orchestrator URL.
+- **Use generic placeholder in projects-yaml-reference example**
+  (#377, LOOP-376).
+- **Dead code removed**: `loop_run_orchestrator` from `lib/env.sh`
+  (#342, LOOP-303).
+
+### Security
+The bulk of this release is security hardening — see the "Added —
+security gates" section above. Operators upgrading should:
+1. Apply the `safe-to-test` label only after a diff review on each fork
+   PR (it is **not** auto-revoked on push; on the roadmap).
+2. Set `ALLOWED_AUTHORS` for every project (#346 will make this
+   mandatory at scanner startup).
+3. Re-read `docs/security-model.md` — the prompt-injection surface map
+   and delimited-untrust pattern are new.
+
 ## [0.4.0] - 2026-05-10
 
 A 12-PR batch focused on making the autonomous pipeline self-correcting
@@ -390,5 +516,8 @@ quick path:
 7. Verify: `launchctl list | grep loop`; `tail -f
    ~/.loop/logs/loop-scanner.log`
 
-[Unreleased]: https://github.com/svv2014/loop/compare/v0.1.0...HEAD
+[Unreleased]: https://github.com/svv2014/loop/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/svv2014/loop/releases/tag/v0.4.0
+[0.3.0]: https://github.com/svv2014/loop/releases/tag/v0.3.0
+[0.2.0]: https://github.com/svv2014/loop/releases/tag/v0.2.0
 [0.1.0]: https://github.com/svv2014/loop/releases/tag/v0.1.0
