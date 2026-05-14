@@ -11,14 +11,20 @@ source "$LOOP_ROOT/lib/bounty.sh"
 
 PR_NUM="${1:-}"
 REPO="${2:-}"
-MODEL="${3:-}"
-ROLE="${4:-}"
+JUDGE_MODEL="${LOOP_JUDGE_MODEL:-sonnet}"
+MODEL="${3:-$JUDGE_MODEL}"
+ROLE="${4:-judge}"
 PROJECT="${5:-}"
 
 if [ -z "$PR_NUM" ] || [ -z "$REPO" ]; then
     echo "Usage: $0 <pr_number> <repo> [model] [role] [project]" >&2
     exit 1
 fi
+
+JUDGE_STARTED_AT=$(date +%s)
+bounty_report "judge_start" \
+    model="$MODEL" role="$ROLE" project="$PROJECT" \
+    pr_num="$PR_NUM" || true
 
 # ── Fetch PR timeline via gh ──────────────────────────────────────────────────
 
@@ -67,7 +73,7 @@ EOF
 
 # ── Invoke claude to classify ─────────────────────────────────────────────────
 
-VERDICT_JSON=$(claude -p --model sonnet --output-format text \
+VERDICT_JSON=$(claude -p --model "$MODEL" --output-format text \
     "$JUDGE_PROMPT" 2>/dev/null) || VERDICT_JSON=""
 
 # Strip markdown fences if present
@@ -115,9 +121,16 @@ if [ -n "$VERDICT_PAYLOAD" ]; then
 fi
 
 # Also report as a feed event
-bounty_report "judge" \
+JUDGE_FINISHED_AT=$(date +%s)
+JUDGE_DURATION_SECONDS=$((JUDGE_FINISHED_AT - JUDGE_STARTED_AT))
+if [ "$JUDGE_DURATION_SECONDS" -lt 0 ]; then
+    JUDGE_DURATION_SECONDS=0
+fi
+
+bounty_report "judge_done" \
     model="$MODEL" role="$ROLE" project="$PROJECT" \
     pr_num="$PR_NUM" \
+    duration_seconds="$JUDGE_DURATION_SECONDS" \
     detail="outcome=${OUTCOME} points=${POINTS} ${SUMMARY}" || true
 
 # ── Comment on PR ─────────────────────────────────────────────────────────────
