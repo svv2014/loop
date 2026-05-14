@@ -143,10 +143,16 @@ DEDUP_DIR="/tmp/loop-scanner-dedup"
 mkdir -p "$DEDUP_DIR"
 
 _dedup_key() {
-    printf '%s' "$1" | md5sum 2>/dev/null \
-        || printf '%s' "$1" | md5 -q 2>/dev/null \
-        || printf '%s' "$1" | sha256sum | cut -c1-32
-    true
+    # Always returns a bare hex hash with no whitespace. Previously md5sum
+    # output (the linux/coreutils form) leaked '  -' into the dedup
+    # filename, making manual ops (rm a stuck entry) painful and the
+    # macOS-fallback to `md5 -q` unreachable. Use ${hash%% *} to keep
+    # only the first whitespace-separated token (the hex digest).
+    local hash
+    hash=$(printf '%s' "$1" | md5sum 2>/dev/null) \
+        || hash=$(printf '%s' "$1" | md5 -q 2>/dev/null) \
+        || hash=$(printf '%s' "$1" | sha256sum | cut -c1-32)
+    printf '%s' "${hash%% *}"
 }
 
 # emit <json> <dedup_id>

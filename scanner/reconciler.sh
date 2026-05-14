@@ -2891,7 +2891,13 @@ reconcile_stage_labels() {
     local repo="$1" slug="$2"
     log "[$repo] stage-label sync"
 
+    # Ensure canonical state labels AND stage labels both exist before any
+    # downstream handler tries to add or remove them. Without this, handlers
+    # hit "'<label>' not found" from gh and abort under set -e mid-run
+    # (root cause of svv2014/loop-monitor#223 stuck state on 2026-05-13).
+    loop_ensure_canonical_labels_exist "$repo"
     loop_ensure_stage_labels_exist "$repo"
+
 
     local issues_json
     issues_json=$(gh issue list --repo "$repo" --state open --limit 200 \

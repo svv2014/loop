@@ -125,13 +125,18 @@ backend_add_label() {
         || true
 }
 
-# backend_remove_label <repo> <number> <label>
+# backend_remove_label <repo> <number> <label> [<label> ...]
 backend_remove_label() {
-    local repo="$1" number="$2" label="$3"
+    local repo="$1" number="$2"
+    shift 2
     _gl_parse_repo "$repo"
-    glab issue update "$number" --repo "$_GL_REPO" --remove-label "$label" 2>/dev/null \
-        || glab mr update "$number" --repo "$_GL_REPO" --remove-label "$label" 2>/dev/null \
-        || true
+    local label
+    for label in "$@"; do
+        [ -z "$label" ] && continue
+        glab issue update "$number" --repo "$_GL_REPO" --remove-label "$label" 2>/dev/null \
+            || glab mr update "$number" --repo "$_GL_REPO" --remove-label "$label" 2>/dev/null \
+            || true
+    done
 }
 
 # backend_issue_has_any_label <repo> <number> <label1> [label2 ...]
