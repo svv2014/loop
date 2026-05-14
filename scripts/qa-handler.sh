@@ -33,6 +33,11 @@ source "$LOOP_ROOT/lib/cli-hint.sh"
 source "$LOOP_ROOT/lib/failure_category.sh"
 # shellcheck source=../lib/qa-baseline.sh
 source "$LOOP_ROOT/lib/qa-baseline.sh"
+# shellcheck source=../lib/prompt-untrust.sh
+# Sourced for forward use — the QA prompt currently delegates PR/issue body
+# fetches to the agent (no shell-side interpolation of user content), but any
+# future site that interpolates raw fields should pipe through prompt_untrust_wrap.
+source "$LOOP_ROOT/lib/prompt-untrust.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-qa-handler.log"
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [qa-handler] $*" | tee -a "$LOG_FILE"; }

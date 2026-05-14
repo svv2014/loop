@@ -34,6 +34,8 @@ source "$LOOP_ROOT/lib/cli-hint.sh"
 source "$LOOP_ROOT/lib/worktree.sh"
 # shellcheck source=../lib/comments.sh
 source "$LOOP_ROOT/lib/comments.sh"
+# shellcheck source=../lib/prompt-untrust.sh
+source "$LOOP_ROOT/lib/prompt-untrust.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-rework-handler.log"
 MAX_RETRIES=2
@@ -232,6 +234,7 @@ if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
         QA_FAILURE_DETAILS="No trusted QA failure comment found — check loop-qa-handler.log for details."
     fi
     log "qa-fail details (trusted): $QA_FAILURE_DETAILS"
+    QA_FAILURE_DETAILS=$(printf '%s' "$QA_FAILURE_DETAILS" | prompt_untrust_wrap review_feedback)
 fi
 
 # Resolve workflow-specific labels for this project (default vs current).

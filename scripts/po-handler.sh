@@ -40,6 +40,8 @@ source "$LOOP_ROOT/lib/failure_classifier.sh"
 source "$LOOP_ROOT/lib/failure_category.sh"
 # shellcheck source=../lib/comments.sh
 source "$LOOP_ROOT/lib/comments.sh"
+# shellcheck source=../lib/prompt-untrust.sh
+source "$LOOP_ROOT/lib/prompt-untrust.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-po-handler.log"
 MAX_RETRIES=2
@@ -146,6 +148,7 @@ _po_exit_cleanup() {
 trap '_po_exit_cleanup' EXIT TERM INT
 
 ISSUE_BODY=$(backend_issue_view "$REPO" "$ISSUE_NUM" --json body --jq .body 2>/dev/null || echo "")
+ISSUE_BODY_WRAPPED=$(printf '%s' "$ISSUE_BODY" | prompt_untrust_wrap issue_body)
 
 # Auto-decompose gate: if the issue carries the literal `epic` label AND its
 # body has a populated Acceptance / Acceptance Criteria section (≥1 checkbox),
@@ -247,6 +250,7 @@ if [ -n "$_in_flight_pr_num" ]; then
         _pr_reviews=$(backend_pr_view "$REPO" "$_IN_FLIGHT_PR" \
             --json reviews --jq '.reviews[-5:][].body' 2>/dev/null \
             || echo "(no review comments)")
+        _pr_reviews=$(printf '%s' "$_pr_reviews" | prompt_untrust_wrap review_feedback)
         log "in-flight PR #${_IN_FLIGHT_PR} found for issue #${ISSUE_NUM} (branch: ${_pr_branch})"
         _MR_PREAMBLE="--- EXISTING IMPLEMENTATION IN FLIGHT ---
 PR #${_IN_FLIGHT_PR}: ${_pr_title}
@@ -305,7 +309,7 @@ You have been given GitHub issue #${ISSUE_NUM}: ${ISSUE_TITLE}
 URL: ${ISSUE_URL}
 
 ${_MR_PREAMBLE}${_PO_AUTO_DECOMPOSE_DIRECTIVE}Current body:
-${ISSUE_BODY}
+${ISSUE_BODY_WRAPPED}
 
 Recent comments (most recent last) — may include human steering, blocker context from prior dev attempts, or supplementary scope:
 ${ISSUE_COMMENTS}

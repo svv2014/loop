@@ -33,6 +33,8 @@ source "$LOOP_ROOT/lib/cli-hint.sh"
 source "$LOOP_ROOT/lib/failure_category.sh"
 # shellcheck source=../lib/comments.sh
 source "$LOOP_ROOT/lib/comments.sh"
+# shellcheck source=../lib/prompt-untrust.sh
+source "$LOOP_ROOT/lib/prompt-untrust.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-review-handler.log"
 MAX_RETRIES=2
@@ -172,6 +174,13 @@ if [ -n "$_PR_OBSERVER_ROWS" ]; then
         _PR_TRUSTED_CONTEXT="${_PR_TRUSTED_CONTEXT}  [${_clogin}]: ${_cfirst}
 "
     done <<< "$_PR_OBSERVER_ROWS"
+fi
+
+# Trusted-author bodies are still raw user-controlled text — wrap before the
+# block enters the agent prompt so a compromised collaborator account can't
+# smuggle instructions. Observer rows ride along inside the same block.
+if [ -n "$_PR_TRUSTED_CONTEXT" ]; then
+    _PR_TRUSTED_CONTEXT=$(printf '%s' "$_PR_TRUSTED_CONTEXT" | prompt_untrust_wrap pr_comments)
 fi
 
 _BACKEND_CLI_NOTE=$(backend_cli_note)
