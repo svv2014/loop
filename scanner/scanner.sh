@@ -20,6 +20,8 @@ source "$LOOP_ROOT/lib/config.sh"
 source "$LOOP_ROOT/lib/backends/backend.sh"
 # shellcheck source=../lib/labels.sh
 source "$LOOP_ROOT/lib/labels.sh"
+# shellcheck source=../lib/jobs.sh
+source "$LOOP_ROOT/lib/jobs.sh"
 # workflow helpers (loop_polled_labels, loop_handler_for_label, loop_stage_trigger,
 # loop_workflow_for_project) are already loaded via lib/env.sh → lib/workflow.sh.
 # The line below is for shellcheck only.
@@ -61,6 +63,17 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# _scanner_jobs_enqueue <slug> <stage> <num>
+# Best-effort dual-write to the jobs table alongside the legacy label-event path.
+# Skipped when LOOP_JOBS_ENQUEUE=0 or --dry-run.
+_scanner_jobs_enqueue() {
+    local slug="$1" stage="$2" num="$3"
+    [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] || return 0
+    $DRY_RUN && return 0
+    jobs_enqueue "$slug" "$stage" "$num" >/dev/null \
+        || log "WARN: jobs_enqueue failed for ${stage}:${slug}:${num}"
+}
 
 # _stage_cap <event_type>
 # Resolves the per-tick emit cap for a given event type.
@@ -440,6 +453,7 @@ _scan_issue_stage() {
         local evt
         evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$num" "$title" "$url")
         emit "$evt" "${event_type}:${slug}:${num}"
+        _scanner_jobs_enqueue "$slug" "$event_type" "$num"
         # Count attempts, not just fresh emits: a deduped ticket means its
         # handler ran in the last 30 min and is likely still in flight, so
         # it should consume a concurrency slot too.
@@ -542,6 +556,7 @@ _scan_dev_issue_stage() {
         fi
         _evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$_num" "$_title" "$_url")
         emit "$_evt" "${event_type}:${slug}:${_num}"
+        _scanner_jobs_enqueue "$slug" "$event_type" "$_num"
         _emitted=$(( _emitted + 1 ))
     done < "$_rows_tmp"
     rm -f "$_rows_tmp" "$_seen_tmp"
@@ -595,6 +610,7 @@ _scan_pr_stage() {
         evt=$(_emit_pr_event "$event_type" "$slug" "$repo" "$num" "$title" "$url" \
               "$rework_context_key" "$rework_context_val")
         emit "$evt" "${event_type}:${slug}:${num}"
+        _scanner_jobs_enqueue "$slug" "$event_type" "$num"
         _emitted=$(( _emitted + 1 ))
     done < <(backend_list_prs_with_label "$repo" "$trigger_label" | _sort_rows_by_priority)
 }
@@ -669,6 +685,10 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
+        jobs_init_schema 2>/dev/null \
+            || log "WARN: jobs schema init failed — jobs DB disabled for this tick"
+    fi
     while IFS= read -r slug; do
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
