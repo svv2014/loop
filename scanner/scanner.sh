@@ -435,6 +435,33 @@ _scan_issue_stage() {
     done < <(backend_list_issues_with_label "$repo" "$trigger_label" | _sort_rows_by_priority)
 }
 
+# _scan_has_open_pr_for_issue <repo> <issue_num>
+# Prints the first open PR number whose body declares "Closes #<issue_num>"
+# (case-insensitive, exact number match — same pattern as reconciler).
+# Prints nothing and returns 1 if none found or on gh error (fail-open).
+_scan_has_open_pr_for_issue() {
+    local repo="$1" issue_num="$2"
+    local candidates
+    candidates=$(gh pr list --repo "$repo" --state open \
+        --search "closes #${issue_num} in:body" \
+        --json number,body 2>/dev/null) || return 1
+    printf '%s\n' "$candidates" | python3 -c "
+import json, re, sys
+issue_num = int(sys.argv[1])
+CLOSES_RE = re.compile(
+    r'(?i)(?:clos(?:e|es|ed)|fix(?:es|ed)?|resolv(?:e|es|ed)?)\s+#(\d+)'
+)
+prs = json.load(sys.stdin)
+for pr in prs:
+    body = pr.get('body') or ''
+    for m in CLOSES_RE.finditer(body):
+        if int(m.group(1)) == issue_num:
+            print(pr['number'])
+            sys.exit(0)
+sys.exit(1)
+" "$issue_num" 2>/dev/null || return 1
+}
+
 # _scan_dev_issue_stage — dev_issue with concurrent slot limiting, priority sort, dep gating.
 _scan_dev_issue_stage() {
     local slug="$1" repo="$2" trigger_label="$3" event_type="$4"
@@ -491,6 +518,14 @@ _scan_dev_issue_stage() {
         _unmet=$(backend_issue_unmet_deps "$repo" "$_num" 2>/dev/null || true)
         if [ -n "$_unmet" ]; then
             log "defer dev_issue #$_num $_title — unmet deps: $(printf '%s' "$_unmet" | tr '\n' ' ')"
+            continue
+        fi
+        # Duplicate-PR guard: skip if an open PR already closes this issue.
+        # On gh error the helper returns empty (fail-open) so we proceed normally.
+        local _existing_pr
+        _existing_pr=$(_scan_has_open_pr_for_issue "$repo" "$_num" 2>/dev/null || true)
+        if [ -n "$_existing_pr" ]; then
+            log "skip dev_issue #$_num: open PR #$_existing_pr already closes it"
             continue
         fi
         _evt=$(_emit_issue_event "$event_type" "$slug" "$repo" "$_num" "$_title" "$_url")
