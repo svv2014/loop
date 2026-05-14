@@ -115,6 +115,15 @@ To resume:
 launchctl load ~/Library/LaunchAgents/com.user.loop-scanner.plist
 ```
 
+## Reconciler branch matching
+
+Reconciler sweeps (`reconcile_ci_red_prs`, `reconcile_ci_green_prs`, `reconcile_pr_base_moved`) identify loop-opened PRs by matching their head branch against a regex.
+
+- **`LOOP_BRANCH_PATTERN`** (default `^(?:feat|fix|chore|docs)/issue-(\d+)-`) — full regex. Capture group 1 must be the issue number. Override this if your project uses a different convention.
+- **`LOOP_BRANCH_PREFIX`** (legacy) — single-prefix shortcut. If set and non-empty, it overrides `LOOP_BRANCH_PATTERN` and is interpreted as `^<escaped-prefix>(\d+)-`. Prefer `LOOP_BRANCH_PATTERN` for new setups.
+
+If a PR's head branch does not match, all three sweeps will silently ignore it (no auto-promote, no auto-rework, no auto-rebase).
+
 ## Quick verification
 
 After any recovery action, confirm loop is alive and processing:
