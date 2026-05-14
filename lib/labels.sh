@@ -36,18 +36,23 @@ fi
 _LOOP_LABELS_LOADED=1
 
 # Canonical label set (order is the rough pipeline progression).
+# All loop-owned state labels now live under the loop:* namespace:
+#   loop:action:*  — operator-set queue triggers
+#   loop:active:*  — agent-set claim labels (in-flight)
+#   loop:result:*  — agent-set outcome labels (terminal / transition)
+#   loop:stage:*   — visualisation (set by reconciler, unchanged)
 LOOP_CANONICAL_LABELS=(
-    needs-po
-    in-po
-    needs-dev
-    in-dev
-    needs-review
-    in-review
-    needs-qa
-    qa-pass
-    qa-fail
-    blocked
-    "done"
+    "loop:action:po"
+    "loop:active:po"
+    "loop:action:dev"
+    "loop:active:dev"
+    "loop:action:review"
+    "loop:active:review"
+    "loop:action:qa"
+    "loop:result:qa-pass"
+    "loop:result:qa-fail"
+    "loop:result:blocked"
+    "loop:result:done"
     # External-PR review-only path. PRs carrying `external-pr` (set by the
     # repo's auto-label GitHub Action) go through review-handler and then
     # halt at one of these terminal-ish states for operator decision. They
@@ -58,17 +63,17 @@ LOOP_CANONICAL_LABELS=(
 )
 
 # Convenience scalars — handlers reference these instead of string literals.
-LOOP_LABEL_NEEDS_PO=needs-po
-LOOP_LABEL_IN_PO=in-po
-LOOP_LABEL_NEEDS_DEV=needs-dev
-LOOP_LABEL_IN_DEV=in-dev
-LOOP_LABEL_NEEDS_REVIEW=needs-review
-LOOP_LABEL_IN_REVIEW=in-review
-LOOP_LABEL_NEEDS_QA=needs-qa
-LOOP_LABEL_QA_PASS=qa-pass
-LOOP_LABEL_QA_FAIL=qa-fail
-LOOP_LABEL_BLOCKED=blocked
-LOOP_LABEL_DONE="done"
+LOOP_LABEL_NEEDS_PO="loop:action:po"
+LOOP_LABEL_IN_PO="loop:active:po"
+LOOP_LABEL_NEEDS_DEV="loop:action:dev"
+LOOP_LABEL_IN_DEV="loop:active:dev"
+LOOP_LABEL_NEEDS_REVIEW="loop:action:review"
+LOOP_LABEL_IN_REVIEW="loop:active:review"
+LOOP_LABEL_NEEDS_QA="loop:action:qa"
+LOOP_LABEL_QA_PASS="loop:result:qa-pass"
+LOOP_LABEL_QA_FAIL="loop:result:qa-fail"
+LOOP_LABEL_BLOCKED="loop:result:blocked"
+LOOP_LABEL_DONE="loop:result:done"
 LOOP_LABEL_EXTERNAL_PR=external-pr
 LOOP_LABEL_EXTERNAL_REVIEW_PASS=external-review-pass
 LOOP_LABEL_EXTERNAL_REVIEW_FAIL=external-review-fail
@@ -81,15 +86,31 @@ LOOP_LABEL_EXTERNAL_REVIEW_FAIL=external-review-fail
 # Stored as a newline-separated "<alias> <canonical>" string for bash 3.x
 # compatibility (no associative arrays). Use loop_canonical_label /
 # loop_deprecated_aliases_for to query.
-LOOP_DEPRECATED_ALIAS_MAP="po-review needs-po
-dev needs-dev
-plan needs-dev
-in-progress needs-dev
-review-pending needs-review
-ready-for-qa needs-qa
-needs-rework needs-dev
-changes-requested needs-dev
-in-rework in-dev"
+#
+# Phase 1 (pre-namespace): old short names mapped to their bare equivalents.
+# Phase 2 (this ticket #344): bare names mapped to loop:* namespaced canonicals.
+# The resolver does a single-pass lookup, so each alias points directly to the
+# current canonical even if the intermediate name is itself now deprecated.
+LOOP_DEPRECATED_ALIAS_MAP="po-review loop:action:po
+dev loop:action:dev
+plan loop:action:dev
+in-progress loop:action:dev
+review-pending loop:action:review
+ready-for-qa loop:action:qa
+needs-rework loop:action:dev
+changes-requested loop:action:dev
+in-rework loop:active:dev
+needs-po loop:action:po
+in-po loop:active:po
+needs-dev loop:action:dev
+in-dev loop:active:dev
+needs-review loop:action:review
+in-review loop:active:review
+needs-qa loop:action:qa
+qa-pass loop:result:qa-pass
+qa-fail loop:result:qa-fail
+blocked loop:result:blocked
+done loop:result:done"
 
 LOOP_LABEL_DEPRECATED_PO_REVIEW=po-review
 LOOP_LABEL_DEPRECATED_DEV=dev
@@ -100,6 +121,17 @@ LOOP_LABEL_DEPRECATED_READY_FOR_QA=ready-for-qa
 LOOP_LABEL_DEPRECATED_NEEDS_REWORK=needs-rework
 LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED=changes-requested
 LOOP_LABEL_DEPRECATED_IN_REWORK=in-rework
+LOOP_LABEL_DEPRECATED_NEEDS_PO=needs-po
+LOOP_LABEL_DEPRECATED_IN_PO=in-po
+LOOP_LABEL_DEPRECATED_NEEDS_DEV=needs-dev
+LOOP_LABEL_DEPRECATED_IN_DEV=in-dev
+LOOP_LABEL_DEPRECATED_NEEDS_REVIEW=needs-review
+LOOP_LABEL_DEPRECATED_IN_REVIEW=in-review
+LOOP_LABEL_DEPRECATED_NEEDS_QA=needs-qa
+LOOP_LABEL_DEPRECATED_QA_PASS=qa-pass
+LOOP_LABEL_DEPRECATED_QA_FAIL=qa-fail
+LOOP_LABEL_DEPRECATED_BLOCKED=blocked
+LOOP_LABEL_DEPRECATED_DONE="done"
 
 # loop_canonical_label <name>
 # Echo the canonical form for <name>. If <name> is already canonical (or
@@ -168,15 +200,25 @@ EOF
 # Orthogonal labels (priority, semver, epic, etc.) are not in this list and
 # must be preserved verbatim.
 #
-# Composition: every canonical stage except the terminal `blocked` / `done`,
-# plus every deprecated alias, plus `needs-clarification` (an out-of-band
-# blocker label that handlers set but never clears on close).
+# Composition: every canonical stage except the terminal loop:result:blocked /
+# loop:result:done, plus every deprecated alias, plus `needs-clarification`
+# (an out-of-band blocker label that handlers set but never clears on close).
 #
 # Consumed by:
 #   scripts/merge-handler.sh         — strip on PR merge
 #   scanner/reconciler.sh            — strip on issue close
 #   scripts/backfill-stale-labels.sh — one-shot historical cleanup
 LOOP_PIPELINE_STAGE_LABELS=(
+    "loop:action:po"
+    "loop:active:po"
+    "loop:action:dev"
+    "loop:active:dev"
+    "loop:action:review"
+    "loop:active:review"
+    "loop:action:qa"
+    "loop:result:qa-pass"
+    "loop:result:qa-fail"
+    needs-clarification
     needs-po
     in-po
     needs-dev
@@ -186,7 +228,6 @@ LOOP_PIPELINE_STAGE_LABELS=(
     needs-qa
     qa-pass
     qa-fail
-    needs-clarification
     po-review
     dev
     plan
@@ -233,12 +274,14 @@ loop_pipeline_stage_labels_csv() {
 # pipeline at all," including terminal states. Superset of LOOP_PIPELINE_STAGE_LABELS
 # plus blocked/done (terminal) and tracker (epic taxonomy). Used by
 # reconcile_lost_issues to detect issues with NO pipeline label at all (so
-# they can be routed back to po-review for triage).
+# they can be routed back to loop:action:po for triage).
 #
 # DO NOT use this for strip-on-close — use LOOP_PIPELINE_STAGE_LABELS for
 # that, since blocked/done/tracker must be preserved.
 LOOP_PIPELINE_TRACKED_LABELS=(
     "${LOOP_PIPELINE_STAGE_LABELS[@]}"
+    "loop:result:blocked"
+    "loop:result:done"
     blocked
     "done"
     tracker
@@ -261,13 +304,14 @@ loop_pipeline_tracked_labels_string() {
 # aliases of the trigger labels so a stale `dev`/`po-review`/`plan` on a PR
 # also gets cleaned up.
 #
-# NOTE: `needs-dev` was intentionally REMOVED from this list. In the default
-# workflow (config/workflows/default.yaml) `needs-dev` is also the PR rework
-# trigger emitted by review-handler when changes are requested. Stripping it
-# from open PRs broke the rework flow: PRs ended up with no pipeline label and
-# became invisible to the scanner. Issue/PR overlap of `needs-dev` is by
-# design in the default workflow; treat it as a PR-valid label.
+# NOTE: `loop:action:dev` / `needs-dev` was intentionally NOT put here.
+# In the default workflow `loop:action:dev` is also the PR rework trigger
+# emitted by review-handler when changes are requested. Stripping it from
+# open PRs broke the rework flow: PRs ended up with no pipeline label and
+# became invisible to the scanner. Issue/PR overlap of `loop:action:dev` is
+# by design in the default workflow; treat it as a PR-valid label.
 LOOP_ISSUE_ONLY_LABELS=(
+    "loop:action:po"
     needs-po
     tracker
     epic
@@ -319,18 +363,18 @@ loop_ensure_canonical_labels_exist() {
         fi
     }
 
-    _create_canonical_label needs-po              "PO triage queue (canonical)"                       "$_LOOP_LABEL_COLOR_NEEDS_PO"
-    _create_canonical_label in-po                 "PO triage in flight (canonical)"                   "$_LOOP_LABEL_COLOR_IN_PO"
-    _create_canonical_label needs-dev             "Development queue (canonical)"                     "$_LOOP_LABEL_COLOR_NEEDS_DEV"
-    _create_canonical_label in-dev                "Development in flight (canonical)"                 "$_LOOP_LABEL_COLOR_IN_DEV"
-    _create_canonical_label needs-review          "PR awaiting code review"                           "$_LOOP_LABEL_COLOR_NEEDS_REVIEW"
-    _create_canonical_label in-review             "Review in progress"                                "$_LOOP_LABEL_COLOR_IN_REVIEW"
-    _create_canonical_label needs-qa              "QA queue (canonical)"                              "$_LOOP_LABEL_COLOR_NEEDS_QA"
-    _create_canonical_label qa-pass               "QA approved — ready to merge"                      "$_LOOP_LABEL_COLOR_QA_PASS"
-    _create_canonical_label qa-fail               "QA failed — back to dev"                           "$_LOOP_LABEL_COLOR_QA_FAIL"
-    _create_canonical_label blocked               "Blocked — needs operator"                          "$_LOOP_LABEL_COLOR_BLOCKED"
-    _create_canonical_label "done"                "Merged and closed"                                 "$_LOOP_LABEL_COLOR_DONE"
-    _create_canonical_label external-pr           "PR from outside the operator account"              "$_LOOP_LABEL_COLOR_EXTERNAL_PR"
-    _create_canonical_label external-review-pass  "External PR — reviewer approved, awaits merge"     "$_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_PASS"
-    _create_canonical_label external-review-fail  "External PR — reviewer requested changes"          "$_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_FAIL"
+    _create_canonical_label "loop:action:po"      "PO triage queue"                             "$_LOOP_LABEL_COLOR_NEEDS_PO"
+    _create_canonical_label "loop:active:po"       "PO triage in flight"                         "$_LOOP_LABEL_COLOR_IN_PO"
+    _create_canonical_label "loop:action:dev"      "Development queue"                           "$_LOOP_LABEL_COLOR_NEEDS_DEV"
+    _create_canonical_label "loop:active:dev"      "Development in flight"                       "$_LOOP_LABEL_COLOR_IN_DEV"
+    _create_canonical_label "loop:action:review"   "PR awaiting code review"                     "$_LOOP_LABEL_COLOR_NEEDS_REVIEW"
+    _create_canonical_label "loop:active:review"   "Review in progress"                          "$_LOOP_LABEL_COLOR_IN_REVIEW"
+    _create_canonical_label "loop:action:qa"       "QA queue"                                    "$_LOOP_LABEL_COLOR_NEEDS_QA"
+    _create_canonical_label "loop:result:qa-pass"  "QA approved — ready to merge"                "$_LOOP_LABEL_COLOR_QA_PASS"
+    _create_canonical_label "loop:result:qa-fail"  "QA failed — back to dev"                     "$_LOOP_LABEL_COLOR_QA_FAIL"
+    _create_canonical_label "loop:result:blocked"  "Blocked — needs operator"                    "$_LOOP_LABEL_COLOR_BLOCKED"
+    _create_canonical_label "loop:result:done"     "Merged and closed"                           "$_LOOP_LABEL_COLOR_DONE"
+    _create_canonical_label external-pr            "PR from outside the operator account"        "$_LOOP_LABEL_COLOR_EXTERNAL_PR"
+    _create_canonical_label external-review-pass   "External PR — reviewer approved, awaits merge"    "$_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_PASS"
+    _create_canonical_label external-review-fail   "External PR — reviewer requested changes"    "$_LOOP_LABEL_COLOR_EXTERNAL_REVIEW_FAIL"
 }

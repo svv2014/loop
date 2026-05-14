@@ -44,13 +44,13 @@ _LOOP_STAGE_COLOR_DONE="006400"
 loop_trigger_label_for_stage() {
     local slug="$1" stage="$2"
     case "$stage" in
-        po)      loop_stage_trigger "$slug" po      issue 2>/dev/null || echo "needs-po" ;;
-        dev)     loop_stage_trigger "$slug" dev     issue 2>/dev/null || echo "needs-dev" ;;
-        review)  loop_stage_trigger "$slug" review  pr    2>/dev/null || echo "needs-review" ;;
-        qa)      loop_stage_trigger "$slug" qa      pr    2>/dev/null || echo "needs-qa" ;;
-        merge)   loop_stage_trigger "$slug" merge   pr    2>/dev/null || echo "qa-pass" ;;
-        blocked) echo "blocked" ;;
-        done)    echo "done" ;;
+        po)      loop_stage_trigger "$slug" po      issue 2>/dev/null || echo "loop:action:po" ;;
+        dev)     loop_stage_trigger "$slug" dev     issue 2>/dev/null || echo "loop:action:dev" ;;
+        review)  loop_stage_trigger "$slug" review  pr    2>/dev/null || echo "loop:action:review" ;;
+        qa)      loop_stage_trigger "$slug" qa      pr    2>/dev/null || echo "loop:action:qa" ;;
+        merge)   loop_stage_trigger "$slug" merge   pr    2>/dev/null || echo "loop:result:qa-pass" ;;
+        blocked) echo "loop:result:blocked" ;;
+        done)    echo "loop:result:done" ;;
         *)       return 1 ;;
     esac
 }
@@ -65,7 +65,7 @@ loop_stage_for_labels() {
 
     # Blocked and done are terminal — check first, highest precedence.
     case ",$labels_csv," in
-        *",blocked,"*) echo "blocked"; return 0 ;;
+        *",loop:result:blocked,"*|*",blocked,"*) echo "blocked"; return 0 ;;
     esac
 
     for stage in $_LOOP_STAGE_PRIORITY; do
@@ -95,7 +95,7 @@ loop_stage_for_labels() {
                 esac ;;
             merge)
                 case ",$labels_csv," in
-                    *",qa-pass,"*) echo "merge"; return 0 ;;
+                    *",qa-pass,"*|*",loop:result:qa-pass,"*) echo "merge"; return 0 ;;
                 esac ;;
         esac
     done
