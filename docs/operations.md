@@ -2,6 +2,20 @@
 
 Practical reference for unsticking loop when something goes wrong. Pair this with `docs/failure-handling.md` (handler-internal classification) and `docs/architecture.md` (component overview).
 
+## Label namespace
+
+Loop uses a `loop:*` label namespace for all pipeline state labels. The four
+sub-namespaces are `loop:action:*` (operator-set queue triggers),
+`loop:active:*` (agent-set claim labels), `loop:result:*` (agent-set outcome
+labels), and `loop:stage:*` (reconciler-derived stage markers). See
+[docs/labels.md](labels.md) for the full taxonomy.
+
+**Legacy label names** (`needs-po`, `needs-dev`, `needs-review`, `needs-qa`,
+`qa-pass`, `qa-fail`, and earlier aliases) still work via the alias map in
+`lib/labels.sh`. The reconciler rewrites them on its next sweep — no manual
+migration needed. The canonical names in this doc use the new `loop:*` style;
+the inline comments show the legacy equivalent during the transition.
+
 ## State locations
 
 Every piece of mutable state loop creates, in one place:
@@ -44,7 +58,8 @@ Symptoms: many tickets failing with the same generic error; PO `needs-clarificat
    ```
 5. Re-queue any ticket sitting in `needs-clarification` whose root cause is fixed:
    ```bash
-   gh issue edit <num> --remove-label needs-clarification --add-label needs-po
+   gh issue edit <num> --remove-label needs-clarification --add-label loop:action:po
+   # legacy alias still works: --add-label needs-po
    ```
 
 ### "PRs are piling up with conflicts or failing CI"
@@ -61,10 +76,11 @@ $LOOP_ROOT/scripts/pr-watchdog.sh              # do it
 Without the watchdog, label manually:
 
 ```bash
-gh pr edit <num> --repo <owner/repo> --add-label needs-rework
+gh pr edit <num> --repo <owner/repo> --add-label loop:action:dev
+# legacy alias still works: --add-label needs-rework
 ```
 
-The dev-rework handler picks up `needs-rework` PRs at the next scanner tick.
+The dev-rework handler picks up `loop:action:dev` PRs at the next scanner tick.
 
 ### "Tokens are spiking — slow loop down"
 
