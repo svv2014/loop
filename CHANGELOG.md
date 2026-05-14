@@ -174,6 +174,15 @@ label-state pipeline.
   fake PR number). Drop the unused field from emitter + receiver in
   both. Regression: PR #297 on svv2014/loop-monitor was skipped on
   the next reconciler tick after creation due to this bug.
+- **`_reconcile_rebase_one_pr` operates on per-project ROOT, not
+  LOOP_ROOT** (#385, LOOP-384). The rebase helper ran every git
+  command against the loop checkout itself, so cross-project fetches
+  failed with `couldn't find remote ref` and the caller logged
+  `transient git error (ret=1)` on every tick. Auto-rebase on
+  base-move (#283) had never actually performed an end-to-end rebase
+  on any project other than svv2014/loop since shipping. Use the
+  per-project `$ROOT` set by `loop_load_project`; fall back to
+  `LOOP_ROOT` only if unset.
 - **Strip private-project leaks** from issue templates and `lib/runner.sh`
   comment (#378). `ISSUE_TEMPLATE/config.yml` points at this repo's
   Discussions; `runner.sh` no longer references an internal
