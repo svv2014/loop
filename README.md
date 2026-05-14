@@ -581,6 +581,67 @@ scripts/loop-recover.sh 78 --to-stage dev
   already contains the recovery marker).
 - Labels only — no branch state, commits, or PRs are modified.
 
+## Jobs CLI
+
+Inspect the Loop jobs queue directly from the command line.
+
+```bash
+# List all jobs (column-aligned table)
+./scripts/jobs-cli.sh list
+
+# Filter by status
+./scripts/jobs-cli.sh list --status pending
+./scripts/jobs-cli.sh list --status in_flight
+./scripts/jobs-cli.sh list --status completed
+./scripts/jobs-cli.sh list --status failed
+
+# Filter by project slug
+./scripts/jobs-cli.sh list --project myapp
+
+# Combine filters and limit rows
+./scripts/jobs-cli.sh list --project myapp --status pending --limit 20
+
+# Emit JSON array (stable contract — see schema below)
+./scripts/jobs-cli.sh list --json
+
+# Show a single job by id (key/value block)
+./scripts/jobs-cli.sh show 42
+
+# Show a single job as JSON
+./scripts/jobs-cli.sh show 42 --json
+```
+
+### JSON Schema
+
+`list --json` emits a JSON array; `show --json` emits a single object.
+Both follow this stable contract (nullable fields use `null`, not empty string):
+
+```json
+[
+  {
+    "id": 1,
+    "project": "loop",
+    "stage": "merge",
+    "issue_or_pr": 123,
+    "status": "pending",
+    "claimed_by": null,
+    "claimed_at": null,
+    "completed_at": null,
+    "attempts": 0,
+    "last_error": null,
+    "created_at": 1715600000
+  }
+]
+```
+
+Field notes:
+- `created_at`, `claimed_at`, `completed_at` — Unix epoch seconds (integer).
+- `attempts` — integer; incremented each time the job is claimed.
+- `status` — one of `pending`, `in_flight`, `completed`, `failed`.
+
+The DB file location is controlled by the `LOOP_JOBS_DB` environment variable
+(default: `$LOOP_LOG_DIR/jobs.db`, which is typically `~/.loop/jobs.db`).
+
 ## Development
 
 ```bash
