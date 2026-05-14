@@ -81,6 +81,49 @@ case "$PR_STATE" in
         ;;
 esac
 
+# --- Security gate: external-pr requires safe-to-test before validation_cmd runs ---
+# validation_cmd executes arbitrary project code (pytest, npm, make, ...). For PRs
+# from outside the operator account (label `external-pr`), require an explicit
+# operator-applied `safe-to-test` label first. Otherwise: skip QA cleanly so the
+# scanner does not retry. See docs/security-model.md.
+_PR_LABELS_JSON=$(backend_pr_view "$REPO" "$PR_NUM" --json labels 2>/dev/null || echo '{"labels":[]}')
+_PR_LABELS=$(echo "$_PR_LABELS_JSON" | python3 -c "import json,sys
+try:
+    d=json.load(sys.stdin)
+except Exception:
+    print(''); sys.exit(0)
+for l in d.get('labels', []):
+    name = l.get('name','') if isinstance(l, dict) else str(l)
+    if name:
+        print(name)" 2>/dev/null || echo "")
+
+_has_external_pr=0
+_has_safe_to_test=0
+while IFS= read -r _lbl; do
+    [ -z "$_lbl" ] && continue
+    _canonical=$(loop_canonical_label "$_lbl" 2>/dev/null || echo "$_lbl")
+    case "$_canonical" in
+        external-pr) _has_external_pr=1 ;;
+        safe-to-test) _has_safe_to_test=1 ;;
+    esac
+    case "$_lbl" in
+        external-pr) _has_external_pr=1 ;;
+        safe-to-test) _has_safe_to_test=1 ;;
+    esac
+done <<< "$_PR_LABELS"
+
+if [ "$_has_external_pr" = "1" ] && [ "$_has_safe_to_test" != "1" ]; then
+    log "PR #$PR_NUM has external-pr but not safe-to-test — gating QA (operator must approve)"
+    bounty_report "qa_skipped" model="${LOOP_AGENT_MODEL:-sonnet}" role=qa project="$SLUG" pr_num="$PR_NUM" \
+        detail="external-pr without safe-to-test — operator must approve" || true
+    backend_comment_pr "$REPO" "$PR_NUM" \
+        "QA blocked: this PR is labeled \`external-pr\` but not \`safe-to-test\`. An operator must apply the \`safe-to-test\` label to permit QA execution." \
+        2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_QA" 2>/dev/null || true
+    backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" 2>/dev/null || true
+    exit 0
+fi
+
 # Auto-promote drafts — PRs are no longer opened as drafts, but promote any legacy ones.
 _is_draft=$(gh pr view "$PR_NUM" --repo "$REPO" --json isDraft --jq '.isDraft' 2>/dev/null || echo "false")
 if [ "$_is_draft" = "true" ]; then

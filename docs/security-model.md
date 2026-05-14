@@ -108,6 +108,8 @@ and you need to push a hotfix, follow the regular flow.
 - **Failure mode:** Prompt injection via issue body, PR text, comments,
   commit messages, or CI logs → agent runs unintended commands.
   Operator monitors via logs and bounty scorecards.
+- **Note:** QA `validation_cmd` is gated: `external-pr` requires
+  `safe-to-test` before code-executing validation runs.
 
 ### Credential surface
 
