@@ -32,6 +32,7 @@ LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 
 # SIGHUP-reopen contract (#194): logrotate-style tools truncate or rename
 # the on-disk log file. The launchd plist redirects stdout/stderr to a
@@ -63,6 +64,17 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# _scanner_check_log_fd — exit if the log file is no longer writable so launchd
+# restarts the process and opens a fresh descriptor. This handles the case where
+# a closed pipe upstream (e.g. a dead tee child) causes echo in log() to hang.
+_scanner_check_log_fd() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: log file not writable ($LOG_FILE) — exiting for restart" >&2
+        exit 1
+    fi
+}
 
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
@@ -762,6 +774,14 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_check_log_fd
+    # Write heartbeat so the scanner-watchdog can detect a wedged scanner.
+    if ! $DRY_RUN; then
+        local _dedup_count
+        _dedup_count=$(find "$DEDUP_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+        printf '%s dedup_count=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$_dedup_count" \
+            > "$HEARTBEAT_FILE" 2>/dev/null || true
+    fi
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
