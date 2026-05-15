@@ -1,0 +1,52 @@
+name: Require Closes reference
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, edited]
+
+jobs:
+  check-closes-ref:
+    runs-on: ubuntu-latest
+    # Skip bot-authored PRs and PRs tagged as release-pr.
+    # github.actor covers the PR author; the label check below handles release-pr.
+    if: |
+      !contains(fromJSON('["github-actions[bot]","dependabot[bot]","loop-bot"]'), github.actor)
+    steps:
+      - name: Check PR body for Closes/Fixes/Resolves reference
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+          PR_LABELS: ${{ toJSON(github.event.pull_request.labels.*.name) }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+
+          # Skip PRs carrying the release-pr label.
+          if echo "$PR_LABELS" | python3 -c "import json,sys; labels=json.load(sys.stdin); exit(0 if 'release-pr' in labels else 1)" 2>/dev/null; then
+            echo "Skipping release-pr — exempt from Closes reference requirement."
+            exit 0
+          fi
+
+          # Extract the first Closes/Fixes/Resolves #N reference.
+          CLOSES_NUM=$(printf '%s' "$PR_BODY" | python3 -c "
+          import re, sys
+          m = re.search(r'(?im)^(closes|fixes|resolves)\s+#([0-9]+)\b', sys.stdin.read())
+          print(m.group(2) if m else '')
+          " 2>/dev/null || true)
+
+          if [ -z "$CLOSES_NUM" ]; then
+            echo "::error::PR body must contain a 'Closes #N', 'Fixes #N', or 'Resolves #N' line referencing an open issue in this repo."
+            exit 1
+          fi
+
+          echo "Found Closes reference: #${CLOSES_NUM}"
+
+          # Validate that the referenced issue exists and is open.
+          ISSUE_STATE=$(gh api "repos/${REPO}/issues/${CLOSES_NUM}" --jq '.state' 2>/dev/null || echo "")
+
+          if [ "$ISSUE_STATE" != "open" ]; then
+            echo "::error::PR references issue #${CLOSES_NUM} but it is not open (state: '${ISSUE_STATE:-not found}'). Use an open issue number."
+            exit 1
+          fi
+
+          echo "Issue #${CLOSES_NUM} is open. Check passed."
