@@ -112,14 +112,16 @@ _review_handler_cleanup() {
                 "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
                 "$_REWORK_LABEL" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
                 "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
-                blocked 'done' 2>/dev/null; then
-            log "CLEANUP: PR #$PR_NUM still has in-review on exit (rc=$rc) — re-queuing as ${_REVIEW_LABEL}"
+                "$LOOP_LABEL_EXTERNAL_REVIEW_FAIL" "$LOOP_LABEL_EXTERNAL_REVIEW_PASS" \
+                "$LOOP_LABEL_BLOCKED" blocked "$LOOP_LABEL_DONE" 'done' 2>/dev/null; then
+            log "CLEANUP: PR #$PR_NUM still has in-review on exit (rc=$rc) — marking blocked for operator review"
             backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_IN_REVIEW" 2>/dev/null || true
-            backend_add_label    "$REPO" "$PR_NUM" "$_REVIEW_LABEL" 2>/dev/null || true
+            backend_remove_label "$REPO" "$PR_NUM" "$_REVIEW_LABEL" 2>/dev/null || true
+            backend_add_label    "$REPO" "$PR_NUM" "$LOOP_LABEL_BLOCKED" 2>/dev/null || true
             backend_comment_pr "$REPO" "$PR_NUM" \
-                "Automated review aborted (exit=${rc}). Re-queued for review." \
+                "Automated review aborted without a verdict (exit=${rc}). Marked as blocked — operator action needed." \
                 2>/dev/null || true
-            loop_notify "⚠️ [$SLUG] PR#$PR_NUM review aborted (exit=$rc) — re-queued" || true
+            loop_notify "⚠️ [$SLUG] PR#$PR_NUM review aborted (exit=$rc) — blocked, operator action needed" || true
         fi
     fi
     return $rc
@@ -302,7 +304,7 @@ if loop_run_agent "$TASK_PROMPT" "$ROOT" 2>&1 | tee -a "$LOG_FILE"; then
     if [ "$_IS_EXTERNAL_PR" != "true" ] && ! backend_pr_has_any_label "$REPO" "$PR_NUM" \
             "$LOOP_LABEL_NEEDS_QA" "$LOOP_LABEL_DEPRECATED_READY_FOR_QA" \
             "$_REWORK_LABEL" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" \
-            blocked 'done'; then
+            "$LOOP_LABEL_BLOCKED" blocked "$LOOP_LABEL_DONE" 'done'; then
         log "WARN: PR #$PR_NUM has no decision label after review agent — defaulting to '${_REWORK_LABEL}'"
         backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED"
         backend_add_label "$REPO" "$PR_NUM" "$_REWORK_LABEL"

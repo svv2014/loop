@@ -180,6 +180,29 @@ _dedup_key() {
     printf '%s' "${hash%% *}"
 }
 
+# Stage-age cache — tracks when a PR first appeared at a given stage.
+# Prevents a stuck PR from winning the per-tick cap slot indefinitely.
+# Key: "stage-age:<event_type>:<slug>:<num>". Never auto-expires; clear
+# /tmp/loop-stage-age/ manually (or delete a specific entry) to reset.
+STAGE_AGE_DIR="/tmp/loop-stage-age"
+mkdir -p "$STAGE_AGE_DIR"
+
+# _stage_age_exceeded <key> <max_seconds>
+# Returns 0 (true) if this key was first recorded more than max_seconds ago.
+# Side-effect: creates the tracking file on first call for a new key.
+_stage_age_exceeded() {
+    local key="$1" max_age="$2"
+    local key_file
+    key_file="$STAGE_AGE_DIR/$(_dedup_key "$key")"
+    if [ ! -f "$key_file" ]; then
+        touch "$key_file"
+        return 1
+    fi
+    local age
+    age=$(( $(date +%s) - $(stat -f%m "$key_file" 2>/dev/null || stat -c%Y "$key_file" 2>/dev/null || echo 0) ))
+    [ "$age" -ge "$max_age" ]
+}
+
 # emit <json> <dedup_id>
 # Only emits if this dedup_id hasn't been emitted in the last 30 minutes.
 # Dispatches via event queue (LOOP_DISPATCH_MODE=event-queue) or direct script (default).
@@ -592,17 +615,44 @@ _scan_pr_stage() {
     while IFS= read -r row; do
         [ "$_emitted" -ge "$_cap" ] && break
         [ -z "$row" ] && continue
-        local num title url
-        num=$(printf '%s' "$row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
-        title=$(printf '%s' "$row" | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
-        url=$(printf '%s' "$row"   | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
+        local num title url labels
+        num=$(printf '%s' "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['number'])")
+        title=$(printf '%s' "$row"  | python3 -c "import json,sys; print(json.load(sys.stdin)['title'])")
+        url=$(printf '%s' "$row"    | python3 -c "import json,sys; print(json.load(sys.stdin)['url'])")
+        labels=$(printf '%s' "$row" | python3 -c "import json,sys; print(' '.join(json.load(sys.stdin).get('labels') or []))")
+
+        # Refuse to dispatch loop-handlers on external PRs unless operator-approved.
+        # External PRs carry `external-pr` (set by repo auto-label action); Loop should
+        # never auto-review them unless the operator explicitly adds `operator-approved`.
+        case " $labels " in
+            *" $LOOP_LABEL_EXTERNAL_PR "*)
+                case " $labels " in
+                    *" operator-approved "*) ;;
+                    *)
+                        log "skip ${event_type} #${num}: ${LOOP_LABEL_EXTERNAL_PR} without operator-approved"
+                        continue
+                        ;;
+                esac
+                ;;
+        esac
 
         # Skip if the PR has moved to a downstream stage or is actively being handled.
         # in-review / deprecated rework-alias are handler-set operational labels (not in workflow YAML).
         # shellcheck disable=SC2086
         if backend_pr_has_any_label "$repo" "$num" \
-               in-review "$LOOP_LABEL_DEPRECATED_IN_REWORK" 'done' blocked \
+               in-review "$LOOP_LABEL_DEPRECATED_IN_REWORK" \
+               "$LOOP_LABEL_BLOCKED" blocked "$LOOP_LABEL_DONE" 'done' \
                ${downstream}; then
+            continue
+        fi
+
+        # Skip PRs stuck at this stage longer than LOOP_MAX_AGE_IN_STAGE_SECONDS (default 1h).
+        # Prevents a zombie PR from consuming the per-tick cap slot indefinitely and
+        # starving all other PRs at this stage. Operator must clear /tmp/loop-stage-age/
+        # (or the specific entry) to re-enable dispatch for the affected PR.
+        local _max_stage_age="${LOOP_MAX_AGE_IN_STAGE_SECONDS:-3600}"
+        if _stage_age_exceeded "${event_type}:${slug}:${num}" "$_max_stage_age"; then
+            log "skip ${event_type} #${num}: stuck at ${trigger_label} for >${_max_stage_age}s — round-robin skip; operator action needed"
             continue
         fi
 
