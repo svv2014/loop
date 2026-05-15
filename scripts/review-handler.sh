@@ -138,6 +138,28 @@ if [ "$retries" -ge "$MAX_RETRIES" ]; then
     exit 0
 fi
 
+# Idempotency guard: if the bot already posted a CHANGES_REQUESTED or APPROVED
+# review on the PR's current head SHA, skip — the PR is in "waiting for author"
+# state and the verdict still stands. Re-applying needs-review (e.g. by a stale
+# label race or a manual relabel) must not trigger a fresh review on unchanged
+# code. Companion to LOOP-418's crash-recovery fix.
+if [ "${BACKEND:-github}" = "github" ]; then
+    _HEAD_SHA=$(backend_pr_view "$REPO" "$PR_NUM" --json headRefOid --jq '.headRefOid' 2>/dev/null || echo "")
+    _BOT_LOGIN=$(gh api user --jq '.login' 2>/dev/null || echo "")
+    if [ -n "$_HEAD_SHA" ] && [ -n "$_BOT_LOGIN" ]; then
+        _PRIOR_VERDICT=$(backend_pr_view "$REPO" "$PR_NUM" --json reviews \
+            --jq --arg sha "$_HEAD_SHA" --arg login "$_BOT_LOGIN" \
+            '[.reviews[]|select(.author.login==$login and .commit.oid==$sha and (.state=="CHANGES_REQUESTED" or .state=="APPROVED"))]|last|.state // ""' \
+            2>/dev/null || echo "")
+        if [ -n "$_PRIOR_VERDICT" ]; then
+            log "idempotency: bot ($_BOT_LOGIN) already posted $_PRIOR_VERDICT on PR #$PR_NUM head ${_HEAD_SHA:0:7} — clearing $LOOP_LABEL_NEEDS_REVIEW and skipping"
+            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_NEEDS_REVIEW" 2>/dev/null || true
+            backend_remove_label "$REPO" "$PR_NUM" "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" 2>/dev/null || true
+            exit 0
+        fi
+    fi
+fi
+
 # External PR detection — set once, used at decision time below.
 _IS_EXTERNAL_PR=false
 if backend_pr_has_any_label "$REPO" "$PR_NUM" "$LOOP_LABEL_EXTERNAL_PR" 2>/dev/null; then
