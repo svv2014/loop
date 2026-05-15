@@ -332,7 +332,9 @@ print(m.group(2) if m else '')
         fi
 
         _closes_state=$(gh issue view "$_closes_num" --repo "$REPO" --json state --jq .state 2>/dev/null || echo "")
-        if [ "$_closes_state" != "open" ]; then
+        # gh returns "OPEN"/"CLOSED" (uppercase); normalize before comparing.
+        _closes_state_lc=$(printf '%s' "$_closes_state" | tr '[:upper:]' '[:lower:]')
+        if [ "$_closes_state_lc" != "open" ]; then
             log "ERROR: PR #$_dev_pr_num references issue #$_closes_num which is not open (state='${_closes_state:-unknown}') — closing PR"
             backend_close_pr "$REPO" "$_dev_pr_num" --delete-branch
             bounty_report "dev_failed_no_ticket" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="PR #${_dev_pr_num} references #${_closes_num} which is not open" || true
