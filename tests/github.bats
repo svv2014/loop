@@ -115,3 +115,32 @@ enhancement"
     run loop_remove_label "owner/repo" 1 "dev"
     [ "$status" -eq 0 ]
 }
+
+# ---------------------------------------------------------------------------
+# loop_gh_comment
+# ---------------------------------------------------------------------------
+
+@test "loop_gh_comment: body is prefixed with [loop:<handler_id>]" {
+    export GH_MOCK_LOG="$BATS_TMPDIR/gh.log"
+    run loop_gh_comment "owner/repo" 42 "judge" "Great work"
+    [ "$status" -eq 0 ]
+    grep -q '\[loop:judge\]' "$GH_MOCK_LOG"
+}
+
+@test "loop_gh_comment: review stage tag" {
+    export GH_MOCK_LOG="$BATS_TMPDIR/gh.log"
+    run loop_gh_comment "owner/repo" 7 "review" "LGTM"
+    [ "$status" -eq 0 ]
+    grep -q '\[loop:review\]' "$GH_MOCK_LOG"
+}
+
+@test "loop_gh_comment: succeeds even when gh returns non-zero" {
+    export GH_MOCK_EXIT=1
+    run loop_gh_comment "owner/repo" 1 "qa" "all good"
+    [ "$status" -eq 0 ]
+}
+
+@test "no direct gh pr comment/review calls at line start in scripts/" {
+    run grep -rE '^gh pr (comment|review)' "$REPO_ROOT/scripts/"
+    [ "$status" -eq 1 ]
+}

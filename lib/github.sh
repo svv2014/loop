@@ -118,6 +118,16 @@ loop_gh_prs_with_label() {
         ' 2>/dev/null || true
 }
 
+# loop_gh_comment <repo> <pr_num> <handler_id> <body>
+# Posts a PR comment whose body is prefixed with [loop:<handler_id>] so the
+# PR timeline is forensically readable without per-handler bot tokens (Path A).
+loop_gh_comment() {
+    local repo="$1" pr_num="$2" handler_id="$3" body="$4"
+    local tagged_body
+    tagged_body="[loop:${handler_id}] ${body}"
+    gh pr comment "$pr_num" --repo "$repo" --body "$tagged_body" 2>/dev/null || true
+}
+
 loop_add_label() {
     local repo="$1" number="$2" label="$3"
     gh issue edit "$number" --repo "$repo" --add-label "$label" 2>/dev/null \
