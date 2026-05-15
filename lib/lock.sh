@@ -23,6 +23,20 @@ LOOP_LOCK_DIR="${LOOP_LOCK_DIR:-/tmp/loop-locks}"
 LOOP_LOCK_TTL="${LOOP_LOCK_TTL:-7200}"
 mkdir -p "$LOOP_LOCK_DIR"
 
+# _lock_emit_recovered <slug> <holder_pid> <reason> [lock_age]
+# Emits a lock_recovered event to loop-monitor when a stale lock is stolen.
+# Non-fatal: never blocks or errors out.
+_lock_emit_recovered() {
+    local slug="$1" holder_pid="$2" reason="$3" lock_age="${4:-0}"
+    # Source monitor.sh lazily — callers may not have it yet.
+    # shellcheck disable=SC1090
+    [ "$(type -t _loop_emit_event 2>/dev/null || true)" = "function" ] \
+        || source "${LOOP_ROOT:-}/lib/monitor.sh" 2>/dev/null || return 0
+    _loop_emit_event "lock_recovered" \
+        "{\"slug\":\"${slug}\",\"holder_pid\":${holder_pid},\"reason\":\"${reason}\",\"lock_age_seconds\":${lock_age}}" \
+        2>/dev/null || true
+}
+
 # loop_acquire_lock <slug> [max_wait_seconds]
 loop_acquire_lock() {
     local slug="$1"
@@ -42,7 +56,8 @@ loop_acquire_lock() {
         local holder_pid
         holder_pid=$(cat "$lock_file" 2>/dev/null || echo "")
         if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
-            # Holder is dead — steal the lock
+            # Holder is dead — steal the lock and surface the event
+            _lock_emit_recovered "$slug" "$holder_pid" "dead_pid" 0
             rm -f "$lock_file"
             continue
         fi
@@ -52,6 +67,7 @@ loop_acquire_lock() {
             local lock_age
             lock_age=$(python3 -c "import os,sys,time; print(int(time.time()-os.stat(sys.argv[1]).st_mtime))" "$lock_file" 2>/dev/null || echo 0)
             if [ "$lock_age" -gt "$LOOP_LOCK_TTL" ]; then
+                _lock_emit_recovered "$slug" "$holder_pid" "ttl_expired" "$lock_age"
                 kill "$holder_pid" 2>/dev/null || true
                 if [ "$(cat "$lock_file" 2>/dev/null || echo)" = "$holder_pid" ]; then
                     rm -f "$lock_file"
