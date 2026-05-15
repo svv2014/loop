@@ -761,8 +761,25 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
+# _scanner_check_log_writable — exit (triggering launchd restart) if the log
+# file is no longer writable. Happens when logrotate replaces the file while
+# we hold an FD to the old inode; SIGHUP reopens, but if that failed we exit.
+_scanner_check_log_writable() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if ! true >> "$LOG_FILE" 2>/dev/null; then
+        # Try to reopen stdout/stderr before giving up; exit lets launchd restart.
+        exec 1>>"$LOG_FILE" || exit 1
+        exec 2>>"$LOG_FILE" || true
+    fi
+}
+
 run_once() {
+    $DRY_RUN || _scanner_check_log_writable
     log "=== scan tick start ==="
+    # Touch heartbeat so the watchdog knows we are alive.
+    $DRY_RUN || touch "$HEARTBEAT_FILE"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
