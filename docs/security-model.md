@@ -26,12 +26,29 @@ Untrusted at code-execution level:
 
 ## Three security gates
 
-### Gate 1 — pipeline activation requires labels (collaborator-only)
+### Gate 1 — default-deny author gate (`allowed_authors`)
 
-The scanner only acts on issues/PRs carrying a workflow trigger label
-(`dev`, `needs-review`, `needs-qa`, etc.). GitHub permissions enforce
-that **only repo collaborators can apply labels**. A drive-by user can
-open an issue but cannot label it; the scanner will ignore it.
+The scanner enforces a fail-closed author gate before processing any project.
+Two conditions must hold for a project to be processed:
+
+1. **`allowed_authors` is configured** in `config/projects.yaml` for that project
+   (a non-empty list of GitHub logins who may trigger the pipeline), **OR**
+2. **`LOOP_TRUSTED_PUBLIC=1`** is set in `loop.env`, explicitly opting in to
+   public trust (anyone who can open an issue can trigger the PO handler).
+
+If neither condition holds, the scanner logs an error, emits a `LOOP_NOTIFY`
+alert, skips the project entirely, and increments the `security_misconfig`
+counter visible in the reconciler digest. This is the **default-deny posture**:
+an unconfigured project is blocked, not silently allowed.
+
+When `LOOP_TRUSTED_PUBLIC=1` is set, the scanner proceeds but logs a per-tick
+warning (`WARN: $slug runs without ALLOWED_AUTHORS — trusting public`) as
+intentional friction so operators are reminded the gate is open.
+
+Within a scan tick, per-issue author checks are also applied: issues and PRs
+opened by authors outside `ALLOWED_AUTHORS` are skipped, unless the ticket
+carries the `operator-approved` label (a per-ticket override controlled by
+GitHub collaborator permissions).
 
 If a collaborator account is compromised, the attacker can label issues
 and PRs and trigger the AI agent. Mitigations:

@@ -3167,4 +3167,4 @@ fi
 
 orphans_gc=$(recovery_gc_stale_worktrees)
 
-log "=== reconciler done orphans_gc=${orphans_gc} ==="
+log "=== reconciler done orphans_gc=${orphans_gc} security_misconfig=$(security_misconfig_total) ==="
