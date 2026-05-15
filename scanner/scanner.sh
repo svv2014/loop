@@ -763,6 +763,19 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+
+    # Heartbeat: write current epoch to a file so the scanner-watchdog can
+    # detect a silently-wedged scanner (alive PID, no emit activity).
+    if ! $DRY_RUN; then
+        date +%s > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
+    # Stdout integrity check: if the log file was rotated or is no longer
+    # writable, try to reopen it. Exit if reopen fails so launchd restarts.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "${LOG_FILE}" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
