@@ -102,10 +102,21 @@ loop_run_agent() {
         # stronger model without changing the orchestrator's global config.
         # Requires the orchestrator to support `--model <id>`
         # (see internal orchestrator history).
+        #
+        # Wall-clock timeout guard: if the orchestrator worker crashes silently
+        # the parent call would otherwise hang forever holding the project lock.
+        # LOOP_HANDLER_TIMEOUT (default: 7200s / 2h) caps the wall time.
+        local _orch_timeout="${LOOP_HANDLER_TIMEOUT:-7200}"
+        local _timeout_cmd=""
+        if command -v timeout >/dev/null 2>&1; then
+            _timeout_cmd="timeout ${_orch_timeout}"
+        fi
         if [ -n "${LOOP_AGENT_MODEL_OVERRIDE:-}" ]; then
-            "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd" --model "$LOOP_AGENT_MODEL_OVERRIDE"
+            # shellcheck disable=SC2086
+            ${_timeout_cmd} "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd" --model "$LOOP_AGENT_MODEL_OVERRIDE"
         else
-            "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd"
+            # shellcheck disable=SC2086
+            ${_timeout_cmd} "$LOOP_ORCHESTRATOR" "$prompt" --mode quick --cwd "$cwd"
         fi
         return $?
     fi

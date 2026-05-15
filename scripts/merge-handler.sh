@@ -104,7 +104,7 @@ loop_notify "▶️ [$SLUG] PR#$PR_NUM merge starting"
 # Pre-flight: if GitHub already knows the PR is CONFLICTING, don't even try
 # to merge — bounce straight to dev-rework so the dev agent rebases.
 MERGE_STATE=$(backend_pr_view "$REPO" "$PR_NUM" --json mergeable,mergeStateStatus 2>/dev/null \
-    | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeable',''), d.get('mergeStateStatus',''))")
+    | python3 -c "import json,sys; c=sys.stdin.read(); d=json.loads(c) if c.strip() else {}; print(d.get('mergeable',''), d.get('mergeStateStatus',''))" 2>/dev/null || true)
 case "$MERGE_STATE" in
     *CONFLICTING*|*DIRTY*)
         log "PR #${PR_NUM} is CONFLICTING — bouncing to dev-rework (no retry loop)"
@@ -145,7 +145,7 @@ progress_stop
 if [ "${_merge_rc}" -ne 0 ]; then
     # Check if the failure was a conflict discovered at merge time.
     POST_STATE=$(backend_pr_view "$REPO" "$PR_NUM" --json mergeable,mergeStateStatus 2>/dev/null \
-        | python3 -c "import json,sys; d=json.load(sys.stdin); print(d.get('mergeable',''), d.get('mergeStateStatus',''))")
+        | python3 -c "import json,sys; c=sys.stdin.read(); d=json.loads(c) if c.strip() else {}; print(d.get('mergeable',''), d.get('mergeStateStatus',''))" 2>/dev/null || true)
     case "$POST_STATE" in
         *CONFLICTING*|*DIRTY*)
             log "merge failed due to conflict — routing to dev-rework"
