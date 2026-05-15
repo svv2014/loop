@@ -763,6 +763,17 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+
+    # Heartbeat: update mtime so scanner-watchdog can detect a wedged scanner.
+    $DRY_RUN || touch "${LOOP_LOG_DIR}/scanner-heartbeat"
+
+    # Stdout integrity: if the log file is no longer writable (e.g. after log
+    # rotation removed or replaced the inode), reopen FDs and exit so launchd
+    # can restart with a fresh file descriptor against the current inode.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ] 2>/dev/null; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || { printf '[scanner] FATAL: cannot reopen log\n' >&2; exit 1; }
+    fi
+
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
@@ -772,7 +783,11 @@ run_once() {
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
-    log "=== scan tick done ==="
+
+    # Tick telemetry: log dedup cache size alongside tick completion.
+    local _dedup_count
+    _dedup_count=$(find "$DEDUP_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+    log "=== scan tick done === (dedup_entries=${_dedup_count})"
 }
 
 acquire_lock
