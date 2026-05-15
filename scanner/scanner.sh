@@ -615,6 +615,29 @@ _scan_pr_stage() {
     done < <(backend_list_prs_with_label "$repo" "$trigger_label" | _sort_rows_by_priority)
 }
 
+# _sweep_stale_locks — drop lock files whose recorded PID is no longer alive.
+# Called at the start of every scanner tick so handlers that died without
+# releasing their lock (SIGKILL, set -e abort before trap registration) don't
+# block future dispatches indefinitely.
+_sweep_stale_locks() {
+    local lock_dir="${LOOP_LOCK_DIR:-/tmp/loop-locks}"
+    [ -d "$lock_dir" ] || return 0
+    local f pid
+    for f in "$lock_dir"/*.lock; do
+        [ -f "$f" ] || continue
+        pid=$(cat "$f" 2>/dev/null || true)
+        if [ -z "$pid" ]; then
+            log "WARN: sweep: empty lock file $f — removing"
+            rm -f "$f"
+            continue
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            log "WARN: sweep: stale lock $f (PID $pid dead) — removing"
+            rm -f "$f"
+        fi
+    done
+}
+
 scan_project() {
     local slug="$1"
 
@@ -685,6 +708,7 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
             || log "WARN: jobs schema init failed — jobs DB disabled for this tick"
