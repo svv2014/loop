@@ -641,6 +641,11 @@ _sweep_stale_locks() {
 scan_project() {
     local slug="$1"
 
+    if loop_project_is_paused "$slug"; then
+        log "paused: skipping $slug"
+        return 0
+    fi
+
     # Daily handler-time budget — if today's spend has met the cap, skip
     # emitting new work entirely. In-flight handlers continue; only new
     # dispatches are paused until the next day rolls over.

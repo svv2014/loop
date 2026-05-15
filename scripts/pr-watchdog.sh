@@ -101,6 +101,10 @@ log "tick start (conflict-grace=${CONFLICT_GRACE_SECONDS}s ci-grace=${CI_GRACE_S
 # Walk every project. loop_load_project sets REPO and ALLOWED_AUTHORS.
 while IFS= read -r slug; do
     [ -z "$slug" ] && continue
+    if loop_project_is_paused "$slug"; then
+        log "paused: skipping $slug"
+        continue
+    fi
     if ! loop_load_project "$slug" 2>/dev/null; then
         log "skip $slug (load failed)"
         continue

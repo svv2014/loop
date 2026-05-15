@@ -3086,6 +3086,10 @@ run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
     loop_load_backend
+    if loop_project_is_paused "$slug"; then
+        log "paused: skipping $slug"
+        return 0
+    fi
     if project_locked "$slug"; then
         log "=== $slug: handler active — skip reconciliation this tick"
         return 0
