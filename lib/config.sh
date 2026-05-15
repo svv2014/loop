@@ -73,6 +73,7 @@ for p in data.get("projects", []) or []:
         # all pipeline stages (needs-po through qa-pass). Empty = no gate.
         # Configure per-project via `dev.pipeline_slots` in projects.yaml.
         print(f"PIPELINE_SLOTS='{sh(dev.get('pipeline_slots', ''))}'")
+        print(f"DEV_COOLDOWN_MINUTES='{sh(dev.get('cooldown_minutes', 30))}'")
         # WORKTREE_EXTRA_PATHS: paths from the primary checkout to symlink into
         # each fresh worker worktree. Useful for projects with gitignored runtime
         # files (ML training data, downloaded models, large fixtures) that the
@@ -127,7 +128,7 @@ PY
         return 1
     fi
     eval "$out"
-    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE AUTO_REWORK_ON_CI BACKEND MAX_CONCURRENT_PRS PIPELINE_SLOTS MAX_CONCURRENT_HANDLERS WORKTREE_EXTRA_PATHS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES _PROJECT_AGENT _PROJECT_MODEL _PROJECT_FALLBACK
+    export NAME REPO ROOT DEFAULT_BRANCH COMMIT_PREFIX DEV_VALIDATION_CMD QA_VALIDATION_CMD QA_BROWSER_URL QA_TIMEOUT_SECONDS HANDLER_TIMEOUT_SECONDS MERGE_STRATEGY AUTO_REBASE AUTO_REWORK_ON_CI BACKEND MAX_CONCURRENT_PRS PIPELINE_SLOTS DEV_COOLDOWN_MINUTES MAX_CONCURRENT_HANDLERS WORKTREE_EXTRA_PATHS LOOP_AGENT_MODEL ALLOWED_AUTHORS WORKFLOW LOOP_LABEL_OVERRIDES _PROJECT_AGENT _PROJECT_MODEL _PROJECT_FALLBACK
 }
 
 # loop_list_slugs — print each project slug on its own line
