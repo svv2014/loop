@@ -41,8 +41,9 @@ loop_acquire_lock() {
         # Lock exists — is the holder still alive?
         local holder_pid
         holder_pid=$(cat "$lock_file" 2>/dev/null || echo "")
-        if [ -n "$holder_pid" ] && ! kill -0 "$holder_pid" 2>/dev/null; then
-            # Holder is dead — steal the lock
+        if [ -z "$holder_pid" ] || ! kill -0 "$holder_pid" 2>/dev/null; then
+            # Holder is dead or PID absent — log and steal the lock
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [lock] WARN: stale lock ${lock_file} (PID '${holder_pid}' not alive) — reclaiming" >&2
             rm -f "$lock_file"
             continue
         fi
