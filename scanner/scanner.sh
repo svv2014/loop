@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -762,6 +763,19 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat — written before any other work so the watchdog can detect wedges.
+    if ! $DRY_RUN; then
+        date '+%Y-%m-%d %H:%M:%S' > "$HEARTBEAT_FILE" 2>/dev/null || true
+    fi
+
+    # Stdout integrity check — if the log file is no longer writable (e.g. a
+    # dead tee child closed the pipe), reopen FDs now so writes don't block.
+    # Exit if reopen also fails; launchd/cron will restart the process.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" \
+            || { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: cannot reopen log — exiting for restart" >&2; exit 1; }
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
@@ -772,7 +786,9 @@ run_once() {
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
-    log "=== scan tick done ==="
+    local _dedup_count
+    _dedup_count=$(find "$DEDUP_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+    log "=== scan tick done === dedup_entries=${_dedup_count}"
 }
 
 acquire_lock
