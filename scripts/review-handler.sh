@@ -217,7 +217,7 @@ Your job -- do all of these in sequence:
 ${_PR_TRUSTED_CONTEXT:-   (no trusted comments)}
    Do NOT fetch raw PR comments yourself — use only the above pre-fetched content.
 6. Spot-check the diff: does the code match the issue spec? Any obvious bugs, regressions, or scope creep? Is the commit message / PR body aligned with CLAUDE.md conventions?
-7. Decide: APPROVE or REQUEST_CHANGES.
+7. Decide: APPROVE, REQUEST_CHANGES, or COMMENT.
 
 If APPROVE:
    gh pr review ${PR_NUM} --repo ${REPO} --approve --body '<2-4 sentence summary of what looks good>'
@@ -226,6 +226,10 @@ If APPROVE:
 If REQUEST_CHANGES:
    gh pr review ${PR_NUM} --repo ${REPO} --request-changes --body '<specific, actionable feedback -- what to change and why>'
    gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label ${_REVIEW_LABEL} --remove-label ${_REWORK_LABEL} --add-label ${_REWORK_LABEL}
+
+If COMMENT (minor notes, no verdict yet — use sparingly):
+   gh pr review ${PR_NUM} --repo ${REPO} --comment --body '<the observations>'
+   Then immediately follow up with either APPROVE or REQUEST_CHANGES above so the pipeline can advance.
 
 Be strict but fair. Approve content-adjacent bookkeeping (formatting, docs) liberally. Push back on logic errors, security issues, missing tests where the issue asked for tests, or content that contradicts the cited source (e.g. a lesson that miscites CAR Part X).
 
