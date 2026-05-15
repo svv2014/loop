@@ -763,6 +763,9 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Liveness heartbeat — updated every tick so the scanner watchdog can detect
+    # a wedged scanner (alive PID, no emits) and trigger a launchd/cron restart.
+    $DRY_RUN || touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
