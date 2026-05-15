@@ -47,7 +47,10 @@ path = os.environ['WF_PATH']
 with open(path) as f:
     wf = yaml.safe_load(f) or {}
 
-TERMINALS = {'done', 'blocked', 'needs-clarification'}
+TERMINALS = {
+    'done', 'blocked', 'needs-clarification',
+    'loop:result:done', 'loop:result:blocked',
+}
 PRODUCING_KEYS = (
     'on_done', 'on_blocked', 'on_clarification',
     'on_failed_after_max', 'on_pass', 'on_fail',

@@ -1,19 +1,23 @@
 # Loop default workflow — canonical label vocabulary.
 #
 # Canonical labels (single source of truth: lib/labels.sh, docs/labels.md):
-#   needs-po, in-po, needs-dev, in-dev,
-#   needs-review, in-review,
-#   needs-qa, qa-pass, qa-fail,
-#   blocked, done
+#   loop:action:po, loop:active:po,
+#   loop:action:dev, loop:active:dev,
+#   loop:action:review, loop:active:review,
+#   loop:action:qa,
+#   loop:result:qa-pass, loop:result:qa-fail,
+#   loop:result:blocked, loop:result:done
 #
 # Stages:
-#   needs-po (issue) → needs-dev (issue) → needs-review (PR) →
-#   {approve → needs-qa | reject → needs-dev (PR rework)} →
-#   qa-pass / qa-fail (PR) → merge → done
+#   loop:action:po (issue) → loop:action:dev (issue) → loop:action:review (PR) →
+#   {approve → loop:action:qa | reject → loop:action:dev (PR rework)} →
+#   loop:result:qa-pass / loop:result:qa-fail (PR) → merge → loop:result:done
 #
-# Deprecated synonyms (po-review, dev, plan, in-progress, review-pending,
-# ready-for-qa, needs-rework, changes-requested, in-rework) are rewritten by
-# `reconcile_alias_renames` on the next reconciler tick — see lib/labels.sh.
+# Deprecated synonyms (needs-po, in-po, needs-dev, in-dev, needs-review,
+# in-review, needs-qa, qa-pass, qa-fail, blocked, done, po-review, dev,
+# plan, in-progress, review-pending, ready-for-qa, needs-rework,
+# changes-requested, in-rework) are rewritten by `reconcile_alias_renames`
+# on the next reconciler tick — see lib/labels.sh.
 #
 # To use: in config/projects.yaml, set `workflow: default` for a project.
 # Per-project label overrides are supported via the `labels:` map.
@@ -28,45 +32,45 @@ description: |
 
 issue_stages:
   - id: po
-    trigger_label: needs-po
+    trigger_label: "loop:action:po"
     handler: po-handler
-    on_done: needs-dev
-    on_blocked: blocked
+    on_done: "loop:action:dev"
+    on_blocked: "loop:result:blocked"
     on_clarification: needs-clarification
 
   - id: dev
-    trigger_label: needs-dev
+    trigger_label: "loop:action:dev"
     handler: dev-handler
-    on_done: needs-review
-    on_failed_after_max: blocked
+    on_done: "loop:action:review"
+    on_failed_after_max: "loop:result:blocked"
 
 pr_stages:
   - id: review
-    trigger_label: needs-review
+    trigger_label: "loop:action:review"
     handler: review-handler
     decisions:
-      approve: needs-qa
-      reject: needs-dev
+      approve: "loop:action:qa"
+      reject: "loop:action:dev"
 
   - id: rework
-    trigger_label: needs-dev
+    trigger_label: "loop:action:dev"
     handler: dev-rework-handler
-    on_done: needs-review
-    on_failed_after_max: blocked
+    on_done: "loop:action:review"
+    on_failed_after_max: "loop:result:blocked"
 
   - id: qa
-    trigger_label: needs-qa
+    trigger_label: "loop:action:qa"
     handler: qa-handler
-    on_pass: qa-pass
-    on_fail: qa-fail
+    on_pass: "loop:result:qa-pass"
+    on_fail: "loop:result:qa-fail"
 
   - id: merge
-    trigger_label: qa-pass
+    trigger_label: "loop:result:qa-pass"
     handler: merge-handler
-    on_done: done
+    on_done: "loop:result:done"
 
   - id: qa-rework
-    trigger_label: qa-fail
+    trigger_label: "loop:result:qa-fail"
     handler: dev-rework-handler
-    on_done: needs-review
-    on_failed_after_max: blocked
+    on_done: "loop:action:review"
+    on_failed_after_max: "loop:result:blocked"
