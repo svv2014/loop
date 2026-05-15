@@ -761,8 +761,14 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+_scanner_write_heartbeat() {
+    # Update mtime so scanner-watchdog.sh can detect a wedged scanner.
+    touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+}
+
 run_once() {
     log "=== scan tick start ==="
+    $DRY_RUN || _scanner_write_heartbeat
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
