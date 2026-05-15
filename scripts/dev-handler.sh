@@ -257,6 +257,59 @@ if matches:
         loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "Dev agent finished without opening a PR"
     else
         log "belt-and-braces: found PR #$_dev_pr_num for issue #$ISSUE_NUM"
+
+        # Validate the PR body contains a parseable Closes/Fixes/Resolves #N
+        # reference that resolves to an open issue in the same repo.
+        _pr_body=$(backend_pr_view "$REPO" "$_dev_pr_num" --json body --jq .body 2>/dev/null || echo "")
+        _closes_num=$(printf '%s' "$_pr_body" | python3 -c "
+import re, sys
+m = re.search(r'(?im)^(closes|fixes|resolves)\s+#([0-9]+)\b', sys.stdin.read())
+print(m.group(2) if m else '')
+" 2>/dev/null || true)
+
+        if [ -z "$_closes_num" ]; then
+            log "ERROR: PR #$_dev_pr_num has no Closes/Fixes/Resolves #N line — closing PR and aborting"
+            backend_close_pr "$REPO" "$_dev_pr_num" --delete-branch
+            bounty_report "dev_failed_no_ticket" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="PR #${_dev_pr_num} missing Closes/Fixes/Resolves reference" || true
+            _no_ticket_comment=$(mktemp /tmp/loop-no-ticket-XXXXXX.md)
+            {
+                echo "## Dev agent error: missing \`Closes #N\` reference"
+                echo ""
+                echo "PR #${_dev_pr_num} was opened without a \`Closes #N\` / \`Fixes #N\` / \`Resolves #N\` line in its body."
+                echo "Loop requires every automated PR to reference its originating issue so the pipeline audit trail and auto-close wiring work correctly."
+                echo ""
+                echo "The PR has been closed. Loop will retry this issue on the next cycle."
+            } > "$_no_ticket_comment"
+            backend_comment_issue "$REPO" "$ISSUE_NUM" "$(cat "$_no_ticket_comment")" 2>/dev/null || true
+            rm -f "$_no_ticket_comment"
+            loop_strip_pipeline_labels "$REPO" "$ISSUE_NUM" >/dev/null || true
+            backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
+            loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "Dev agent opened PR #${_dev_pr_num} without Closes #N"
+            cleanup_worktree
+            exit 0
+        fi
+
+        _closes_state=$(gh issue view "$_closes_num" --repo "$REPO" --json state --jq .state 2>/dev/null || echo "")
+        if [ "$_closes_state" != "open" ]; then
+            log "ERROR: PR #$_dev_pr_num references issue #$_closes_num which is not open (state='${_closes_state:-unknown}') — closing PR"
+            backend_close_pr "$REPO" "$_dev_pr_num" --delete-branch
+            bounty_report "dev_failed_no_ticket" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" issue_num="$ISSUE_NUM" detail="PR #${_dev_pr_num} references #${_closes_num} which is not open" || true
+            _bad_ref_comment=$(mktemp /tmp/loop-bad-ref-XXXXXX.md)
+            {
+                echo "## Dev agent error: \`Closes\` references a non-open issue"
+                echo ""
+                echo "PR #${_dev_pr_num} contains \`Closes #${_closes_num}\` but that issue is not open (state: \`${_closes_state:-unknown}\`)."
+                echo "The PR has been closed. Please verify the issue reference in the PR body and retry."
+            } > "$_bad_ref_comment"
+            backend_comment_issue "$REPO" "$ISSUE_NUM" "$(cat "$_bad_ref_comment")" 2>/dev/null || true
+            rm -f "$_bad_ref_comment"
+            loop_strip_pipeline_labels "$REPO" "$ISSUE_NUM" >/dev/null || true
+            backend_add_label "$REPO" "$ISSUE_NUM" needs-clarification
+            loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "Dev agent PR #${_dev_pr_num} references non-open issue #${_closes_num}"
+            cleanup_worktree
+            exit 0
+        fi
+
         if ! backend_pr_has_any_label "$REPO" "$_dev_pr_num" \
                 "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" "$LOOP_LABEL_NEEDS_REVIEW" \
                 "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
