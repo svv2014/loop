@@ -140,6 +140,8 @@ projects:
     slug: myapp
     repo: owner/my-app
     workflow: default              # references config/workflows/default.yaml
+    allowed_authors:               # required — who may trigger the pipeline
+      - your-github-login
     labels:                              # optional — sparse overrides
       loop:action:dev: dev               # repo uses 'dev' instead of canonical
       loop:result:qa-pass: approved
@@ -517,8 +519,16 @@ accordingly:
   `require code-owner approval` on `main` so even the operator's own
   PRs need a CODEOWNERS-listed reviewer.
 
+### Security baseline
+
+Set `allowed_authors` in `config/projects.yaml` for every project. Without it the
+scanner refuses to process that project unless `LOOP_TRUSTED_PUBLIC=1` is explicitly
+set in `loop.env`, acknowledging that anyone who can open a GitHub issue can trigger
+the pipeline. This is the fail-closed default: unset = deny, not allow-all.
+
 See [`docs/security-model.md`](docs/security-model.md) for the full
-security model, including prompt injection defenses and trust boundaries.
+security model, including the default-deny author gate, prompt injection defenses,
+and trust boundaries.
 
 ## Status check
 

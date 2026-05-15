@@ -22,6 +22,10 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/jobs.sh
 source "$LOOP_ROOT/lib/jobs.sh"
+# shellcheck source=../lib/notify.sh
+source "$LOOP_ROOT/lib/notify.sh"
+# shellcheck source=../lib/author_gate.sh
+source "$LOOP_ROOT/lib/author_gate.sh"
 # workflow helpers (loop_polled_labels, loop_handler_for_label, loop_stage_trigger,
 # loop_workflow_for_project) are already loaded via lib/env.sh → lib/workflow.sh.
 # The line below is for shellcheck only.
@@ -630,6 +634,18 @@ scan_project() {
 
     loop_load_project "$slug" || { log "skip: slug '$slug' unloadable"; return; }
     loop_load_backend
+
+    # Author-gate precondition: require ALLOWED_AUTHORS or LOOP_TRUSTED_PUBLIC opt-in.
+    if ! loop_project_has_author_gate "$slug"; then
+        if [ -z "${LOOP_TRUSTED_PUBLIC:-}" ]; then
+            log "ERROR: $slug skipped — no allowed_authors configured; set LOOP_TRUSTED_PUBLIC=1 to opt in to public trust"
+            loop_notify "Loop scanner: $slug — skipped (no allowed_authors configured; set LOOP_TRUSTED_PUBLIC=1 to opt in to public trust)"
+            SECURITY_MISCONFIG_COUNT=$(( ${SECURITY_MISCONFIG_COUNT:-0} + 1 ))
+            return
+        fi
+        log "WARN: $slug runs without ALLOWED_AUTHORS — trusting public"
+    fi
+
     local repo="$REPO"
 
     local wf_name
@@ -685,6 +701,7 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    SECURITY_MISCONFIG_COUNT=0
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
             || log "WARN: jobs schema init failed — jobs DB disabled for this tick"
@@ -693,7 +710,9 @@ run_once() {
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
-    log "=== scan tick done ==="
+    # Persist security_misconfig counter for the reconciler digest.
+    printf '%s\n' "$SECURITY_MISCONFIG_COUNT" > "$(security_misconfig_count_file)" 2>/dev/null || true
+    log "=== scan tick done security_misconfig=${SECURITY_MISCONFIG_COUNT} ==="
 }
 
 acquire_lock

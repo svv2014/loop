@@ -126,3 +126,25 @@ PY
     echo "$count" > "$count_file"
     log "[$repo] author_gated_pending=$count (slug=$slug)"
 }
+
+# loop_project_has_author_gate <slug>
+# Returns 0 (success) iff ALLOWED_AUTHORS is set and non-empty for the current
+# project. Must be called after loop_load_project so ALLOWED_AUTHORS is exported.
+loop_project_has_author_gate() {
+    [ -n "${ALLOWED_AUTHORS:-}" ]
+}
+
+# security_misconfig_count_file
+# Path to the file that the scanner writes its per-tick misconfig count to.
+security_misconfig_count_file() {
+    printf '%s/security-misconfig.count\n' "${LOOP_LOG_DIR:-/tmp}"
+}
+
+# security_misconfig_total
+# Read the scanner's last-written misconfig count. Returns 0 if unset.
+security_misconfig_total() {
+    local f; f=$(security_misconfig_count_file)
+    [ -f "$f" ] || { echo 0; return 0; }
+    local n; n=$(tr -d '[:space:]' < "$f" 2>/dev/null || echo 0)
+    printf '%s\n' "${n:-0}"
+}
