@@ -708,6 +708,19 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+
+    # Liveness heartbeat — write current timestamp so scanner-watchdog.sh can
+    # detect a wedged scanner (alive PID, no emit activity) and kill+restart it.
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
+    # Stdout/log integrity check — if the log file has become unwritable (e.g.
+    # deleted from under us without a SIGHUP) exit so launchd can restart us.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ] 2>/dev/null; then
+        exit 1
+    fi
+
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
