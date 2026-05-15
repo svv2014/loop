@@ -36,6 +36,8 @@ source "$LOOP_ROOT/lib/failure_classifier.sh"
 source "$LOOP_ROOT/lib/failure_category.sh"
 # shellcheck source=../lib/prompt-untrust.sh
 source "$LOOP_ROOT/lib/prompt-untrust.sh"
+# shellcheck source=../lib/scope.sh
+source "$LOOP_ROOT/lib/scope.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-handler.log"
 MAX_RETRIES=3
@@ -193,6 +195,22 @@ Your job:
 5. Before committing, verify there are actual staged changes:
    git diff --cached --quiet && echo 'WARNING: no staged changes' || true
    If there are no changes to commit, comment on the issue explaining why (e.g. already implemented, out of scope) and add label 'needs-clarification' instead of opening an empty PR.
+5b. SCOPE FENCE — after staging files (git add) and before committing, enforce
+   the declared issue scope. Run these commands exactly:
+      STAGED_FILES=\$(git diff --cached --name-only 2>/dev/null || true)
+      if [ -n "\$STAGED_FILES" ]; then
+        ISSUE_BODY_LIVE=\$(gh issue view ${ISSUE_NUM} --repo ${REPO} --json body --jq .body 2>/dev/null || echo "")
+        source ${LOOP_ROOT}/lib/scope.sh
+        SCOPE_VIOLATIONS=\$(loop_check_scope "\$ISSUE_BODY_LIVE" "\$STAGED_FILES" || true)
+        if [ -n "\$SCOPE_VIOLATIONS" ]; then
+          echo "SCOPE VIOLATION: staged files outside declared issue scope:" >&2
+          echo "\$SCOPE_VIOLATIONS" >&2
+          _block_body="## Scope violation\n\nStaged files outside the scope declared in this issue:\n\n\$SCOPE_VIOLATIONS\n\nNot committing. Remove out-of-scope changes and retry."
+          gh issue comment ${ISSUE_NUM} --repo ${REPO} --body "\$_block_body" 2>/dev/null || true
+          gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label loop:result:blocked 2>/dev/null || true
+          exit 1
+        fi
+      fi
 6. Commit: git commit -m '[${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>'
 7. Push the branch and open a PR:
    gh pr create --repo ${REPO} --title '[${COMMIT_PREFIX}-${ISSUE_NUM}] <short description>' \\
@@ -257,6 +275,35 @@ if matches:
         loop_notify_human_required "$SLUG" "$ISSUE_NUM" needs-clarification "Dev agent finished without opening a PR"
     else
         log "belt-and-braces: found PR #$_dev_pr_num for issue #$ISSUE_NUM"
+
+        # Scope fence: verify PR files don't exceed the issue's declared scope.
+        _pr_files=$(gh pr diff "$_dev_pr_num" --repo "$REPO" --name-only 2>/dev/null || true)
+        if [ -n "$_pr_files" ]; then
+            _scope_violations=$(loop_check_scope "$ISSUE_BODY" "$_pr_files" || true)
+            if [ -n "$_scope_violations" ]; then
+                log "SCOPE VIOLATION on PR #$_dev_pr_num for issue #$ISSUE_NUM: $_scope_violations"
+                _scope_body=$(mktemp /tmp/loop-scope-XXXXXX.md)
+                {
+                    echo "## Scope violation — PR blocked"
+                    echo ""
+                    echo "The following files in this PR exceed the scope declared in the issue:"
+                    echo ""
+                    echo '```'
+                    echo "$_scope_violations"
+                    echo '```'
+                    echo ""
+                    echo "The PR has not been merged. Remove out-of-scope changes and re-open."
+                } > "$_scope_body"
+                backend_comment_issue "$REPO" "$_dev_pr_num" "$(cat "$_scope_body")" 2>/dev/null || true
+                rm -f "$_scope_body"
+                loop_strip_pipeline_labels "$REPO" "$ISSUE_NUM" >/dev/null || true
+                backend_add_label "$REPO" "$ISSUE_NUM" "$LOOP_LABEL_BLOCKED"
+                loop_notify_human_required "$SLUG" "$ISSUE_NUM" blocked "Scope violation in PR #$_dev_pr_num: $_scope_violations"
+                cleanup_worktree
+                exit 0
+            fi
+        fi
+
         if ! backend_pr_has_any_label "$REPO" "$_dev_pr_num" \
                 "$LOOP_LABEL_DEPRECATED_REVIEW_PENDING" "$LOOP_LABEL_NEEDS_REVIEW" \
                 "$LOOP_LABEL_DEPRECATED_CHANGES_REQUESTED" "$LOOP_LABEL_DEPRECATED_NEEDS_REWORK" \
