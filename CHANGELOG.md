@@ -23,6 +23,7 @@ projects.yaml schema, bounty event API, CLI flags, lock dir, log dir).
   `needs-qa`, `qa-pass`, `qa-fail`, and all prior aliases) remain fully
   functional via the alias map in `lib/labels.sh` — the reconciler rewrites
   them on its next sweep with no manual migration required.
+- [LOOP-408] merge-handler: use per-stage lock instead of project-wide lock (#410)
 
 ## [0.5.0] - 2026-05-14
 
