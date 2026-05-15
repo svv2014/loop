@@ -51,6 +51,11 @@ projects:
       # Downstream stages (review/qa/merge for existing work) still drain.
       # Omit to disable the gate. See README → "Pipeline concurrency & priority".
       # pipeline_slots: 1
+      # Optional: cooldown window in minutes. Before promoting a dev-agent PR,
+      # Loop checks whether any recently-merged PR touched the same files. If so,
+      # it blocks the new PR and labels the issue loop:result:blocked so an
+      # operator can review the overlap. Set to 0 to disable. Default: 30.
+      # cooldown_minutes: 30
 
     qa:
       # Optional: command run by QA handler to validate the PR branch.

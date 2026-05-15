@@ -36,6 +36,8 @@ source "$LOOP_ROOT/lib/failure_classifier.sh"
 source "$LOOP_ROOT/lib/failure_category.sh"
 # shellcheck source=../lib/prompt-untrust.sh
 source "$LOOP_ROOT/lib/prompt-untrust.sh"
+# shellcheck source=../lib/dev_cooldown.sh
+source "$LOOP_ROOT/lib/dev_cooldown.sh"
 
 LOG_FILE="${LOOP_LOG_DIR}/loop-dev-handler.log"
 MAX_RETRIES=3
@@ -232,6 +234,46 @@ if loop_run_agent "$TASK_PROMPT" "$WORKTREE_ROOT" 2>&1 | tee -a "$LOG_FILE"; the
     loop_notify "✅ [$SLUG] #$ISSUE_NUM dev done"
     retry_clear
     loop_backoff_clear "$SLUG" "$ISSUE_NUM" dev
+
+    # Cooldown guard: block if the committed changes overlap files from a
+    # recently-merged PR. Runs post-agent so we have an actual diff to inspect.
+    # If triggered, any PR the agent opened is closed before we exit.
+    _cooldown_mins="${DEV_COOLDOWN_MINUTES:-30}"
+    if [ "$_cooldown_mins" -gt 0 ] && \
+       ! loop_dev_cooldown_check "$REPO" "$ISSUE_BODY" "$WORKTREE_ROOT" "$DEFAULT_BRANCH" "$_cooldown_mins"; then
+        log "cooldown: blocked — file overlap with PR #${DEV_COOLDOWN_BLOCK_PR}, merged ~${DEV_COOLDOWN_BLOCK_MINS}m ago"
+
+        # Close the PR opened by the agent, if any.
+        _cooldown_pr_num=$(backend_list_open_prs_raw "$REPO" | python3 -c "
+import json, re, sys
+num = '${ISSUE_NUM}'
+prs = json.load(sys.stdin)
+matches = [
+    pr['number'] for pr in prs
+    if re.match(r'^(fix|feat)/issue-' + re.escape(num) + r'-', pr.get('headRefName', ''))
+    or re.search(r'Closes #' + re.escape(num) + r'([^0-9]|\$)', pr.get('body', ''), re.IGNORECASE)
+]
+if matches:
+    print(sorted(matches)[-1])
+" 2>/dev/null || true)
+        if [ -n "${_cooldown_pr_num:-}" ]; then
+            gh pr close "$_cooldown_pr_num" --repo "$REPO" \
+               --comment "Closed by Loop cooldown guard — file overlap with PR #${DEV_COOLDOWN_BLOCK_PR}." \
+               2>/dev/null || true
+            log "cooldown: closed PR #$_cooldown_pr_num"
+        fi
+
+        _cooldown_msg="Conflicts with recent merge — file overlap with PR #${DEV_COOLDOWN_BLOCK_PR}, merged ~${DEV_COOLDOWN_BLOCK_MINS}m ago. Mark as follow-up if intentional by adding \`## Follow-up of #${DEV_COOLDOWN_BLOCK_PR}\` to the issue body."
+        backend_comment_issue "$REPO" "$ISSUE_NUM" "$_cooldown_msg" 2>/dev/null || true
+        loop_strip_pipeline_labels "$REPO" "$ISSUE_NUM" >/dev/null || true
+        backend_add_label "$REPO" "$ISSUE_NUM" "loop:result:blocked"
+        loop_notify_human_required "$SLUG" "$ISSUE_NUM" "loop:result:blocked" \
+            "Dev cooldown: file overlap with PR #${DEV_COOLDOWN_BLOCK_PR}"
+        loop_notify "🚧 [$SLUG] #$ISSUE_NUM blocked by cooldown guard (PR #${DEV_COOLDOWN_BLOCK_PR})"
+        cleanup_worktree
+        exit 0
+    fi
+
     # Belt-and-braces: if the agent forgot to swap labels, clean up here.
     backend_remove_label "$REPO" "$ISSUE_NUM" in-progress
     # Locate the PR opened for this issue (by head ref pattern or Closes reference).
