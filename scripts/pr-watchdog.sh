@@ -46,6 +46,56 @@ done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [pr-watchdog] $*"; }
 
+# _try_clean_rebase <repo> <pr_num> <head_branch>
+# Attempts a cheap clean rebase of the PR head onto its base branch.
+# Returns 0 and pushes if rebase is clean; returns non-zero otherwise (no side effects).
+_try_clean_rebase() {
+    local repo="$1" pr_num="$2" head_branch="$3"
+    local tmp_dir
+    tmp_dir="${TMPDIR:-/tmp}/loop-rebase-$(printf '%s' "$repo" | tr '/' '-')-${pr_num}"
+    rm -rf "$tmp_dir"
+
+    if ! gh repo clone "$repo" "$tmp_dir" -- --depth=50 --quiet 2>/dev/null; then
+        log "WARN: PR #${pr_num} clone failed, skipping auto-rebase"
+        return 1
+    fi
+
+    local base
+    base=$(gh pr view "$pr_num" --repo "$repo" --json baseRefName --jq .baseRefName 2>/dev/null) || {
+        rm -rf "$tmp_dir"
+        return 1
+    }
+    if [ -z "$base" ]; then
+        rm -rf "$tmp_dir"
+        return 1
+    fi
+
+    local rebase_ok=1
+    (
+        cd "$tmp_dir" || exit 1
+        git fetch origin "$head_branch" --quiet 2>/dev/null || exit 1
+        git fetch origin "$base" --quiet 2>/dev/null || exit 1
+        git checkout "$head_branch" --quiet 2>/dev/null || exit 1
+        behind=$(git rev-list --count "origin/${base}...HEAD" 2>/dev/null || echo "999")
+        if [ "$behind" -gt 50 ]; then
+            log "pr-watchdog: PR #${pr_num} too far behind base (${behind} commits), deferring to dev-rework"
+            exit 1
+        fi
+        if git rebase "origin/$base" 2>/dev/null; then
+            git push origin "$head_branch" --force-with-lease 2>/dev/null || exit 1
+            exit 0
+        fi
+        git rebase --abort 2>/dev/null || true
+        exit 1
+    ) && rebase_ok=0
+
+    rm -rf "$tmp_dir"
+    if [ "$rebase_ok" -eq 0 ]; then
+        log "pr-watchdog: auto-rebased PR #${pr_num} onto ${base}"
+    fi
+    return "$rebase_ok"
+}
+
 log "tick start (conflict-grace=${CONFLICT_GRACE_SECONDS}s ci-grace=${CI_GRACE_SECONDS}s dry-run=${DRY_RUN})"
 
 # Walk every project. loop_load_project sets REPO and ALLOWED_AUTHORS.
@@ -70,6 +120,20 @@ while IFS= read -r slug; do
 
     while IFS=$'\t' read -r num reason; do
         [ -z "$num" ] && continue
+
+        # For CONFLICTING PRs, try a cheap clean rebase before triggering dev-rework.
+        case "$reason" in
+            conflict*)
+                if ! $DRY_RUN; then
+                    head_branch=$(gh pr view "$num" --repo "$REPO" \
+                        --json headRefName --jq .headRefName 2>/dev/null || echo "")
+                    if [ -n "$head_branch" ] && _try_clean_rebase "$REPO" "$num" "$head_branch"; then
+                        continue
+                    fi
+                fi
+                ;;
+        esac
+
         if $DRY_RUN; then
             log "DRY $slug #$num would-rework ($rework_label): $reason"
             continue
