@@ -3091,6 +3091,11 @@ run_project() {
         return 0
     fi
     log "=== $slug ($REPO) ==="
+    reconcile_stale_prs "$REPO"
+    if loop_project_is_paused "$slug"; then
+        log "paused: skipping $slug (mutating reconciliation suppressed)"
+        return 0
+    fi
     reconcile_labels "$REPO"
     reconcile_synonym_labels "$REPO" "$slug"
     reconcile_alias_renames "$REPO" "$slug"
@@ -3098,7 +3103,6 @@ run_project() {
     reconcile_duplicate_prs "$REPO"
     reconcile_obsolete_open_prs "$REPO"
     reconcile_orphaned_claims "$REPO"
-    reconcile_stale_prs "$REPO"
     reconcile_stuck_in_review "$REPO"
     reconcile_needs_clarification "$REPO"
     reconcile_unblock "$REPO"

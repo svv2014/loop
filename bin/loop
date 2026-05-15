@@ -1,0 +1,61 @@
+#!/usr/bin/env bash
+# bin/loop — Loop CLI entry point.
+#
+# Usage:
+#   loop project pause  <slug>   mark project paused (idempotent)
+#   loop project resume <slug>   clear paused flag   (idempotent)
+#   loop project list            show active/paused state per project
+
+set -euo pipefail
+
+LOOP_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+# shellcheck source=../lib/env.sh
+source "$LOOP_ROOT/lib/env.sh"
+# shellcheck source=../lib/config.sh
+source "$LOOP_ROOT/lib/config.sh"
+
+_usage() {
+    cat >&2 <<'EOF'
+Usage:
+  loop project pause  <slug>   -- mark project paused (idempotent)
+  loop project resume <slug>   -- clear paused flag   (idempotent)
+  loop project list            -- print active/paused state per project
+EOF
+    exit 2
+}
+
+[ $# -ge 1 ] || _usage
+
+case "$1" in
+    project)
+        shift
+        [ $# -ge 1 ] || _usage
+        case "$1" in
+            pause)
+                [ $# -eq 2 ] || { echo "usage: loop project pause <slug>" >&2; exit 2; }
+                if ! loop_project_set_paused "$2"; then
+                    echo "error: unknown slug '$2'" >&2
+                    exit 1
+                fi
+                echo "paused: $2"
+                ;;
+            resume)
+                [ $# -eq 2 ] || { echo "usage: loop project resume <slug>" >&2; exit 2; }
+                loop_project_clear_paused "$2"
+                echo "resumed: $2"
+                ;;
+            list)
+                while IFS= read -r slug; do
+                    [ -z "$slug" ] && continue
+                    if loop_project_is_paused "$slug"; then
+                        printf '%-30s paused\n' "$slug"
+                    else
+                        printf '%-30s active\n' "$slug"
+                    fi
+                done < <(loop_list_slugs)
+                ;;
+            *) _usage ;;
+        esac
+        ;;
+    *) _usage ;;
+esac

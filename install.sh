@@ -410,6 +410,7 @@ bootstrap_register_services() {
     log_dir=$(bootstrap_resolve_log_dir)
     extra_path=$(bootstrap_resolve_extra_path)
     mkdir -p "$log_dir"
+    mkdir -p "${LOOP_STATE_DIR:-$HOME/.loop/state}"
 
     if [ "$(uname -s)" = "Darwin" ]; then
         bootstrap_register_launchd "$log_dir" "$extra_path"

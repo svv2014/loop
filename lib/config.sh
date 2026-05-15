@@ -145,3 +145,78 @@ for p in data.get("projects", []) or []:
         print(s)
 PY
 }
+
+# Pause state: one slug per line, lexically sorted, deduped.
+# Override by setting LOOP_STATE_DIR in loop.env.
+LOOP_PAUSED_STATE_FILE="${LOOP_STATE_DIR:-$HOME/.loop/state}/paused-projects"
+
+# loop_project_is_paused <slug>
+# Returns 0 if paused, 1 otherwise.
+loop_project_is_paused() {
+    local slug="$1"
+    [ -f "$LOOP_PAUSED_STATE_FILE" ] || return 1
+    grep -Fxq "$slug" "$LOOP_PAUSED_STATE_FILE"
+}
+
+# loop_project_set_paused <slug>
+# Validates slug against config, adds to state file (idempotent).
+# Exits non-zero if slug is unknown.
+loop_project_set_paused() {
+    local slug="$1"
+    if ! loop_list_slugs 2>/dev/null | grep -qxF "$slug"; then
+        echo "loop_project_set_paused: unknown slug '$slug'" >&2
+        return 1
+    fi
+    loop_project_is_paused "$slug" && return 0
+    local state_dir
+    state_dir="$(dirname "$LOOP_PAUSED_STATE_FILE")"
+    mkdir -p "$state_dir"
+    local _lock="${LOOP_PAUSED_STATE_FILE}.lock"
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock 9
+            printf '%s\n' "$slug" >> "$LOOP_PAUSED_STATE_FILE"
+            sort -u "$LOOP_PAUSED_STATE_FILE" -o "$LOOP_PAUSED_STATE_FILE"
+        ) 9>"$_lock"
+    else
+        local _i
+        for _i in 1 2 3 4 5; do
+            if mkdir "$_lock" 2>/dev/null; then
+                printf '%s\n' "$slug" >> "$LOOP_PAUSED_STATE_FILE"
+                sort -u "$LOOP_PAUSED_STATE_FILE" -o "$LOOP_PAUSED_STATE_FILE"
+                rmdir "$_lock"
+                break
+            fi
+            sleep 0.2
+        done
+    fi
+}
+
+# loop_project_clear_paused <slug>
+# Removes slug from state file (idempotent, no-op if not paused).
+loop_project_clear_paused() {
+    local slug="$1"
+    [ -f "$LOOP_PAUSED_STATE_FILE" ] || return 0
+    local _lock="${LOOP_PAUSED_STATE_FILE}.lock"
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock 9
+            local tmp
+            tmp=$(mktemp)
+            grep -vxF "$slug" "$LOOP_PAUSED_STATE_FILE" > "$tmp" || true
+            mv "$tmp" "$LOOP_PAUSED_STATE_FILE"
+        ) 9>"$_lock"
+    else
+        local _i _tmp
+        for _i in 1 2 3 4 5; do
+            if mkdir "$_lock" 2>/dev/null; then
+                _tmp=$(mktemp)
+                grep -vxF "$slug" "$LOOP_PAUSED_STATE_FILE" > "$_tmp" || true
+                mv "$_tmp" "$LOOP_PAUSED_STATE_FILE"
+                rmdir "$_lock"
+                break
+            fi
+            sleep 0.2
+        done
+    fi
+}
