@@ -70,10 +70,20 @@ fi
 loop_load_project "$SLUG" || { log "ERROR: unknown slug '$SLUG'"; exit 2; }
 loop_load_backend
 
+# merge-handler is API-only (no local worktree writes). Use a per-stage lock
+# so it doesn't queue behind LLM-bound handlers (qa, dev, review) that hold
+# the project-wide lock for 10–30 min. Two merge-handlers for the same project
+# still serialize via this narrower key.
+source "$LOOP_ROOT/lib/workflow.sh"
+_MERGE_LOCK_KEY="${SLUG}-merge"
+if loop_stage_needs_project_lock "$SLUG" "merge"; then
+    _MERGE_LOCK_KEY="$SLUG"
+fi
+
 # Combined EXIT handler: release advisory lock + jobs_complete/fail depending on exit code.
 _merge_handler_cleanup() {
     local _rc=$?
-    loop_release_lock "$SLUG" || true
+    loop_release_lock "$_MERGE_LOCK_KEY" || true
     if [ -n "$_JOBS_CLAIMED_ID" ]; then
         if [ "$_rc" -eq 0 ]; then
             jobs_complete "$_JOBS_CLAIMED_ID" || true
@@ -83,10 +93,9 @@ _merge_handler_cleanup() {
     fi
 }
 
-# Per-project lock — only one Loop handler at a time per repo.
 source "$LOOP_ROOT/lib/lock.sh"
-loop_acquire_lock "$SLUG" || { log "ERROR: couldn't acquire lock for $SLUG within 1hr — exiting"; exit 1; }
-log "acquired project lock for $SLUG"
+loop_acquire_lock "$_MERGE_LOCK_KEY" || { log "ERROR: couldn't acquire lock for $_MERGE_LOCK_KEY within 1hr — exiting"; exit 1; }
+log "acquired lock $_MERGE_LOCK_KEY for $SLUG"
 trap '_merge_handler_cleanup' EXIT INT TERM
 
 STRATEGY_FLAG="--squash"
