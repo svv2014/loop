@@ -277,41 +277,41 @@ projects:
 YAML
 }
 
-@test "workflow fixture: proj-default issue labels include needs-po and needs-dev" {
+@test "workflow fixture: proj-default issue labels include loop:action:po and loop:action:dev" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-default" issue
     [ "$status" -eq 0 ]
-    [[ "$output" == *"needs-po"* ]]
-    [[ "$output" == *"needs-dev"* ]]
+    [[ "$output" == *"loop:action:po"* ]]
+    [[ "$output" == *"loop:action:dev"* ]]
 }
 
-@test "workflow fixture: proj-minimal issue labels include needs-dev but NOT needs-po" {
+@test "workflow fixture: proj-minimal issue labels include loop:action:dev but NOT loop:action:po" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-minimal" issue
     [ "$status" -eq 0 ]
-    [[ "$output" == *"needs-dev"* ]]
-    [[ "$output" != *"needs-po"* ]]
+    [[ "$output" == *"loop:action:dev"* ]]
+    [[ "$output" != *"loop:action:po"* ]]
 }
 
-@test "workflow fixture: proj-default PR labels include needs-review, needs-qa, qa-pass" {
+@test "workflow fixture: proj-default PR labels include loop:action:review, loop:action:qa, loop:result:qa-pass" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-default" pr
     [ "$status" -eq 0 ]
-    [[ "$output" == *"needs-review"* ]]
-    [[ "$output" == *"needs-qa"* ]]
-    [[ "$output" == *"qa-pass"* ]]
+    [[ "$output" == *"loop:action:review"* ]]
+    [[ "$output" == *"loop:action:qa"* ]]
+    [[ "$output" == *"loop:result:qa-pass"* ]]
 }
 
-@test "workflow fixture: proj-minimal PR labels use needs-qa for merge (no review stage)" {
+@test "workflow fixture: proj-minimal PR labels use loop:action:qa for merge (no review stage)" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
     run loop_polled_labels "proj-minimal" pr
     [ "$status" -eq 0 ]
-    [[ "$output" == *"needs-qa"* ]]
-    [[ "$output" != *"needs-review"* ]]
+    [[ "$output" == *"loop:action:qa"* ]]
+    [[ "$output" != *"loop:action:review"* ]]
 }
 
 @test "workflow fixture: proj-default emits loop.dev_issue for dev-labeled issue" {
@@ -319,11 +319,11 @@ YAML
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
 
     local PLAN_ISSUE
-    PLAN_ISSUE='{"number":1,"title":"Fix thing","url":"http://gh/1","labels":["needs-dev"],"author":"bot"}'
+    PLAN_ISSUE='{"number":1,"title":"Fix thing","url":"http://gh/1","labels":["loop:action:dev"],"author":"bot"}'
 
     backend_list_issues_with_label() {
         local _label="$2"
-        [ "$_label" = "needs-dev" ] && printf '%s\n' "$PLAN_ISSUE"
+        [ "$_label" = "loop:action:dev" ] && printf '%s\n' "$PLAN_ISSUE"
         return 0
     }
     backend_list_prs_with_label()  { return 0; }
@@ -352,17 +352,17 @@ YAML
     grep -q '"type".*"loop\.dev_issue"' "$emit_log"
 }
 
-@test "workflow fixture: proj-minimal emits loop.pr_merge for needs-qa PR (no review step)" {
+@test "workflow fixture: proj-minimal emits loop.pr_merge for loop:action:qa PR (no review step)" {
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
 
     local MERGE_PR
-    MERGE_PR='{"number":5,"title":"Merge me","url":"http://gh/5","labels":["needs-qa"],"headRefName":"feat/5","mergeable":"MERGEABLE"}'
+    MERGE_PR='{"number":5,"title":"Merge me","url":"http://gh/5","labels":["loop:action:qa"],"headRefName":"feat/5","mergeable":"MERGEABLE"}'
 
     backend_list_issues_with_label() { return 0; }
     backend_list_prs_with_label() {
         local _label="$2"
-        [ "$_label" = "needs-qa" ] && printf '%s\n' "$MERGE_PR"
+        [ "$_label" = "loop:action:qa" ] && printf '%s\n' "$MERGE_PR"
         return 0
     }
     backend_list_open_prs_raw()   { echo "[]"; }
@@ -490,13 +490,13 @@ YAML
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
 
     local R1 R2 R3
-    R1='{"number":11,"title":"low","url":"http://gh/11","labels":["needs-dev","p3-low"],"author":"bot"}'
-    R2='{"number":12,"title":"med","url":"http://gh/12","labels":["needs-dev","p2-medium"],"author":"bot"}'
-    R3='{"number":13,"title":"high","url":"http://gh/13","labels":["needs-dev","p1-high"],"author":"bot"}'
+    R1='{"number":11,"title":"low","url":"http://gh/11","labels":["loop:action:dev","p3-low"],"author":"bot"}'
+    R2='{"number":12,"title":"med","url":"http://gh/12","labels":["loop:action:dev","p2-medium"],"author":"bot"}'
+    R3='{"number":13,"title":"high","url":"http://gh/13","labels":["loop:action:dev","p1-high"],"author":"bot"}'
 
     backend_list_issues_with_label() {
         local _label="$2"
-        if [ "$_label" = "needs-dev" ]; then
+        if [ "$_label" = "loop:action:dev" ]; then
             printf '%s\n%s\n%s\n' "$R1" "$R2" "$R3"
         fi
         return 0
@@ -593,21 +593,21 @@ YAML
     _write_fixture_config
     export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
 
-    # 6 issues all sitting at needs-po (the first-stage trigger for
+    # 6 issues all sitting at loop:action:po (the first-stage trigger for
     # proj-default). Before the fix these counted as in-flight=6 and the
     # gate skipped all po claims. After the fix in-flight excludes the
     # first-stage trigger and the gate lets one through.
     local I1 I2 I3 I4 I5 I6
-    I1='{"number":1,"title":"a","url":"http://gh/1","labels":["needs-po"],"author":"bot"}'
-    I2='{"number":2,"title":"b","url":"http://gh/2","labels":["needs-po"],"author":"bot"}'
-    I3='{"number":3,"title":"c","url":"http://gh/3","labels":["needs-po"],"author":"bot"}'
-    I4='{"number":4,"title":"d","url":"http://gh/4","labels":["needs-po"],"author":"bot"}'
-    I5='{"number":5,"title":"e","url":"http://gh/5","labels":["needs-po"],"author":"bot"}'
-    I6='{"number":6,"title":"f","url":"http://gh/6","labels":["needs-po"],"author":"bot"}'
+    I1='{"number":1,"title":"a","url":"http://gh/1","labels":["loop:action:po"],"author":"bot"}'
+    I2='{"number":2,"title":"b","url":"http://gh/2","labels":["loop:action:po"],"author":"bot"}'
+    I3='{"number":3,"title":"c","url":"http://gh/3","labels":["loop:action:po"],"author":"bot"}'
+    I4='{"number":4,"title":"d","url":"http://gh/4","labels":["loop:action:po"],"author":"bot"}'
+    I5='{"number":5,"title":"e","url":"http://gh/5","labels":["loop:action:po"],"author":"bot"}'
+    I6='{"number":6,"title":"f","url":"http://gh/6","labels":["loop:action:po"],"author":"bot"}'
 
     backend_list_issues_with_label() {
         local _label="$2"
-        if [ "$_label" = "needs-po" ]; then
+        if [ "$_label" = "loop:action:po" ]; then
             printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$I1" "$I2" "$I3" "$I4" "$I5" "$I6"
         fi
         return 0

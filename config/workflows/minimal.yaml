@@ -28,4 +28,5 @@ pr_stages:
   - id: merge
     trigger_label: "loop:action:qa"
     handler: merge-handler
+    needs_project_lock: false
     on_done: "loop:result:done"

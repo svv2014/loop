@@ -275,6 +275,33 @@ sys.exit(1)
 PY
 }
 
+# loop_stage_needs_project_lock <slug> <stage_id>
+# Returns 0 if the stage should acquire the per-project lock (default),
+# 1 if the stage has opted out via `needs_project_lock: false` in the
+# workflow YAML.  Stages that opt out use a narrower per-stage lock
+# instead (e.g. <slug>-merge) so LLM-bound handlers (qa, dev, review)
+# don't serialise them.
+loop_stage_needs_project_lock() {
+    local slug="$1" stage_id="$2"
+    local wf
+    wf=$(loop_workflow_for_project "$slug")
+    local wf_file="$_LOOP_WORKFLOW_DIR/${wf}.yaml"
+    [ -f "$wf_file" ] || return 0
+    SLUG="$slug" WF="$wf_file" SID="$stage_id" python3 - <<'PY'
+import os, sys, yaml
+sid = os.environ['SID']
+with open(os.environ['WF']) as f:
+    wf = yaml.safe_load(f) or {}
+for sec in ('issue_stages', 'pr_stages'):
+    for stage in wf.get(sec, []) or []:
+        if stage.get('id') == sid:
+            if stage.get('needs_project_lock', True) is False:
+                sys.exit(1)
+            sys.exit(0)
+sys.exit(0)
+PY
+}
+
 # loop_workflow_validate <path>
 # Exit 0 if schema-v1 valid; non-zero with stderr message otherwise.
 # Warns (does not fail) for handler scripts not found on disk.
@@ -289,7 +316,8 @@ scripts_dir = os.environ.get('SCRIPTS_DIR', 'scripts')
 
 # Labels valid as transition targets without needing to be trigger_labels.
 # Includes terminal states and outcome labels that don't launch a handler.
-TERMINAL_LABELS = {'done', 'blocked', 'needs-clarification', 'qa-fail'}
+TERMINAL_LABELS = {'done', 'blocked', 'needs-clarification', 'qa-fail',
+                   'loop:result:done', 'loop:result:blocked'}
 
 try:
     with open(path) as f:
