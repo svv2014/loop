@@ -171,11 +171,25 @@ loop_project_set_paused() {
     local state_dir
     state_dir="$(dirname "$LOOP_PAUSED_STATE_FILE")"
     mkdir -p "$state_dir"
-    (
-        flock 9
-        printf '%s\n' "$slug" >> "$LOOP_PAUSED_STATE_FILE"
-        sort -u "$LOOP_PAUSED_STATE_FILE" -o "$LOOP_PAUSED_STATE_FILE"
-    ) 9>"${LOOP_PAUSED_STATE_FILE}.lock"
+    local _lock="${LOOP_PAUSED_STATE_FILE}.lock"
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock 9
+            printf '%s\n' "$slug" >> "$LOOP_PAUSED_STATE_FILE"
+            sort -u "$LOOP_PAUSED_STATE_FILE" -o "$LOOP_PAUSED_STATE_FILE"
+        ) 9>"$_lock"
+    else
+        local _i
+        for _i in 1 2 3 4 5; do
+            if mkdir "$_lock" 2>/dev/null; then
+                printf '%s\n' "$slug" >> "$LOOP_PAUSED_STATE_FILE"
+                sort -u "$LOOP_PAUSED_STATE_FILE" -o "$LOOP_PAUSED_STATE_FILE"
+                rmdir "$_lock"
+                break
+            fi
+            sleep 0.2
+        done
+    fi
 }
 
 # loop_project_clear_paused <slug>
@@ -183,11 +197,26 @@ loop_project_set_paused() {
 loop_project_clear_paused() {
     local slug="$1"
     [ -f "$LOOP_PAUSED_STATE_FILE" ] || return 0
-    (
-        flock 9
-        local tmp
-        tmp=$(mktemp)
-        grep -vxF "$slug" "$LOOP_PAUSED_STATE_FILE" > "$tmp" || true
-        mv "$tmp" "$LOOP_PAUSED_STATE_FILE"
-    ) 9>"${LOOP_PAUSED_STATE_FILE}.lock"
+    local _lock="${LOOP_PAUSED_STATE_FILE}.lock"
+    if command -v flock >/dev/null 2>&1; then
+        (
+            flock 9
+            local tmp
+            tmp=$(mktemp)
+            grep -vxF "$slug" "$LOOP_PAUSED_STATE_FILE" > "$tmp" || true
+            mv "$tmp" "$LOOP_PAUSED_STATE_FILE"
+        ) 9>"$_lock"
+    else
+        local _i _tmp
+        for _i in 1 2 3 4 5; do
+            if mkdir "$_lock" 2>/dev/null; then
+                _tmp=$(mktemp)
+                grep -vxF "$slug" "$LOOP_PAUSED_STATE_FILE" > "$_tmp" || true
+                mv "$_tmp" "$LOOP_PAUSED_STATE_FILE"
+                rmdir "$_lock"
+                break
+            fi
+            sleep 0.2
+        done
+    fi
 }

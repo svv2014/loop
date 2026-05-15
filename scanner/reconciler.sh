@@ -3086,15 +3086,16 @@ run_project() {
     local slug="$1"
     loop_load_project "$slug" || { log "skip $slug (config error)"; return 0; }
     loop_load_backend
-    if loop_project_is_paused "$slug"; then
-        log "paused: skipping $slug"
-        return 0
-    fi
     if project_locked "$slug"; then
         log "=== $slug: handler active — skip reconciliation this tick"
         return 0
     fi
     log "=== $slug ($REPO) ==="
+    reconcile_stale_prs "$REPO"
+    if loop_project_is_paused "$slug"; then
+        log "paused: skipping $slug (mutating reconciliation suppressed)"
+        return 0
+    fi
     reconcile_labels "$REPO"
     reconcile_synonym_labels "$REPO" "$slug"
     reconcile_alias_renames "$REPO" "$slug"
@@ -3102,7 +3103,6 @@ run_project() {
     reconcile_duplicate_prs "$REPO"
     reconcile_obsolete_open_prs "$REPO"
     reconcile_orphaned_claims "$REPO"
-    reconcile_stale_prs "$REPO"
     reconcile_stuck_in_review "$REPO"
     reconcile_needs_clarification "$REPO"
     reconcile_unblock "$REPO"
