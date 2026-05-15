@@ -316,7 +316,8 @@ scripts_dir = os.environ.get('SCRIPTS_DIR', 'scripts')
 
 # Labels valid as transition targets without needing to be trigger_labels.
 # Includes terminal states and outcome labels that don't launch a handler.
-TERMINAL_LABELS = {'done', 'blocked', 'needs-clarification', 'qa-fail'}
+TERMINAL_LABELS = {'done', 'blocked', 'needs-clarification', 'qa-fail',
+                   'loop:result:done', 'loop:result:blocked'}
 
 try:
     with open(path) as f:
