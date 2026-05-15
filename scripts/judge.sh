@@ -8,6 +8,8 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 LOOP_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 source "$LOOP_ROOT/lib/env.sh"
 source "$LOOP_ROOT/lib/bounty.sh"
+# shellcheck source=../lib/github.sh
+source "$LOOP_ROOT/lib/github.sh"
 
 PR_NUM="${1:-}"
 REPO="${2:-}"
@@ -153,6 +155,6 @@ PR_COMMENT=$(cat <<COMMENT
 COMMENT
 )
 
-gh pr comment "$PR_NUM" --repo "$REPO" --body "$PR_COMMENT" 2>/dev/null || true
+loop_gh_comment "$REPO" "$PR_NUM" judge "$PR_COMMENT"
 
 echo "Judge verdict: outcome=${OUTCOME} points=${POINTS}"

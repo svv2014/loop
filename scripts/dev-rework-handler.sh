@@ -287,11 +287,11 @@ if [ "$REWORK_CONTEXT" = "qa-fail" ]; then
    ---
    ${QA_FAILURE_DETAILS}
    ---"
-    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Fixed QA failure: <summary of what was fixed>'"
+    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body '[loop:rework] Fixed QA failure: <summary of what was fixed>'"
 else
     _REWORK_TRIGGER="reviewer feedback or CI failure"
     _STEP2="2. ${_FULL_PR_DIAGNOSTICS}"
-    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body 'Addressed feedback / fixed CI: <summary>'"
+    _STEP7="   gh pr comment ${PR_NUM} --repo ${REPO} --body '[loop:rework] Addressed feedback / fixed CI: <summary>'"
 fi
 
 _VALIDATION_STEP="4. Validate locally before committing — match CI exactly. Discover what CI runs by reading the project itself:
@@ -399,7 +399,7 @@ if [ "$_POST_DIRTY" = "true" ]; then
         if [ -n "$LINKED_ISSUE" ]; then
             _BLOCK_BODY=$(printf '%s\nParent: #%s' "$_BLOCK_BODY" "$LINKED_ISSUE")
         fi
-        gh pr comment "$PR_NUM" --repo "$REPO" --body "$_BLOCK_BODY" 2>/dev/null || true
+        loop_gh_comment "$REPO" "$PR_NUM" rework "$_BLOCK_BODY"
     fi
     _rework_blocked_diag="$(bounty_truncate_detail "$_rework_tail")"
     bounty_report "rework_blocked" model="${LOOP_AGENT_MODEL:-sonnet}" role=dev project="$SLUG" \

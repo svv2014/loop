@@ -265,12 +265,12 @@ ${_pr_reviews}
 "
         _MR_PATHS="
 G - REFINE-WITH-ACTIVE-MR (spec adjustment small enough the current MR can absorb it):
-   - Comment on the MR: gh pr comment ${_IN_FLIGHT_PR} --repo ${REPO} --body 'PO: spec refinement: [details]'
+   - Comment on the MR: gh pr comment ${_IN_FLIGHT_PR} --repo ${REPO} --body '[loop:po] PO: spec refinement: [details]'
    - Flag MR for rework: gh pr edit ${_IN_FLIGHT_PR} --repo ${REPO} --add-label ${_REWORK_LABEL}
    - Leave issue label at dev (no label change on issue)
 
 H - SUPERSEDE (requirements changed enough the MR is wrong — wrong approach or stale spec):
-   - Comment on MR: gh pr comment ${_IN_FLIGHT_PR} --repo ${REPO} --body 'PO: closing — superseded by new spec. [Explanation].'
+   - Comment on MR: gh pr comment ${_IN_FLIGHT_PR} --repo ${REPO} --body '[loop:po] PO: closing — superseded by new spec. [Explanation].'
    - Close MR: gh pr close ${_IN_FLIGHT_PR} --repo ${REPO}
    - Rewrite issue spec using SPEC FORMAT below
    - gh issue edit ${ISSUE_NUM} --repo ${REPO} --remove-label in-progress --add-label dev

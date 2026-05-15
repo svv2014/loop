@@ -220,11 +220,11 @@ ${_PR_TRUSTED_CONTEXT:-   (no trusted comments)}
 7. Decide: APPROVE or REQUEST_CHANGES.
 
 If APPROVE:
-   gh pr review ${PR_NUM} --repo ${REPO} --approve --body '<2-4 sentence summary of what looks good>'
+   gh pr review ${PR_NUM} --repo ${REPO} --approve --body '[loop:review] <2-4 sentence summary of what looks good>'
    gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label ${_REVIEW_LABEL} --remove-label ${_QA_LABEL} --add-label ${_QA_LABEL}
 
 If REQUEST_CHANGES:
-   gh pr review ${PR_NUM} --repo ${REPO} --request-changes --body '<specific, actionable feedback -- what to change and why>'
+   gh pr review ${PR_NUM} --repo ${REPO} --request-changes --body '[loop:review] <specific, actionable feedback -- what to change and why>'
    gh pr edit ${PR_NUM} --repo ${REPO} --remove-label in-review --remove-label ${_REVIEW_LABEL} --remove-label ${_REWORK_LABEL} --add-label ${_REWORK_LABEL}
 
 Be strict but fair. Approve content-adjacent bookkeeping (formatting, docs) liberally. Push back on logic errors, security issues, missing tests where the issue asked for tests, or content that contradicts the cited source (e.g. a lesson that miscites CAR Part X).

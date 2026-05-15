@@ -311,7 +311,7 @@ ${_PHASE4_COMMENT_TEMPLATE}
 \`\`\`
 
 Post the comment:
-   gh pr comment ${PR_NUM} --repo ${REPO} --body '<comment text>'
+   gh pr comment ${PR_NUM} --repo ${REPO} --body '[loop:qa] <comment text>'
 
 Then apply the label:
 
