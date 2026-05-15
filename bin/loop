@@ -1,0 +1,247 @@
+#!/usr/bin/env bash
+# bin/loop — Loop operator CLI front-end.
+#
+# Usage:
+#   loop priority set  <repo> <issue#> <p0|p1|p2|p3>
+#   loop priority bump <repo> <issue#>
+#   loop priority drop <repo> <issue#>
+#   loop priority [--help]
+
+set -euo pipefail
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Priority label helpers
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Canonical label names
+_PRIORITY_LABELS=(p0-critical p1-high p2-medium p3-low)
+
+# Map short tier (p0..p3) → full label name
+_priority_label_for_tier() {
+    local tier="$1"
+    case "$tier" in
+        p0) echo "p0-critical" ;;
+        p1) echo "p1-high"     ;;
+        p2) echo "p2-medium"   ;;
+        p3) echo "p3-low"      ;;
+        *)  echo "Unknown tier: $tier" >&2; return 1 ;;
+    esac
+}
+
+# Map full label name → short tier (p0..p3), or empty string if not a priority label
+_priority_tier_for_label() {
+    local label="$1"
+    case "$label" in
+        p0-critical) echo "p0" ;;
+        p1-high)     echo "p1" ;;
+        p2-medium)   echo "p2" ;;
+        p3-low)      echo "p3" ;;
+        *)           echo ""   ;;
+    esac
+}
+
+# Get the current priority label on an issue, or empty string if none.
+_get_current_priority() {
+    local repo="$1" issue="$2"
+    local label tier
+    while IFS= read -r label; do
+        tier=$(_priority_tier_for_label "$label")
+        if [ -n "$tier" ]; then
+            echo "$label"
+            return 0
+        fi
+    done < <(gh issue view "$issue" --repo "$repo" --json labels --jq '.labels[].name' 2>/dev/null)
+    echo ""
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# priority subcommand
+# ─────────────────────────────────────────────────────────────────────────────
+
+_priority_usage() {
+    cat <<'USAGE'
+Usage: loop priority <subcommand> <repo> <issue#> [args]
+
+Subcommands:
+  set  <repo> <issue#> <p0|p1|p2|p3>
+        Remove any existing p[0-3]-* label and add the requested priority
+        label in a single gh issue edit call.
+
+  bump <repo> <issue#>
+        Raise priority by one tier (p3->p2->p1->p0).
+        No-op (exit 0) if already p0.
+        If no priority label is present, sets p3-low.
+
+  drop <repo> <issue#>
+        Lower priority by one tier (p0->p1->p2->p3).
+        No-op (exit 0) if already p3 or no priority label is set.
+
+Priority label vocabulary:
+  p0  ->  p0-critical
+  p1  ->  p1-high
+  p2  ->  p2-medium
+  p3  ->  p3-low
+USAGE
+}
+
+_cmd_priority_set() {
+    local repo="$1" issue="$2" tier="$3"
+
+    local new_label
+    new_label=$(_priority_label_for_tier "$tier") || {
+        echo "error: unknown priority tier '$tier' (expected p0, p1, p2, or p3)" >&2
+        return 1
+    }
+
+    local args=("$issue" --repo "$repo" --add-label "$new_label")
+
+    # Gather all existing priority labels to remove them atomically
+    local current_label
+    current_label=$(_get_current_priority "$repo" "$issue")
+    if [ -n "$current_label" ] && [ "$current_label" != "$new_label" ]; then
+        args+=(--remove-label "$current_label")
+    fi
+
+    gh issue edit "${args[@]}"
+    echo "Set priority: $new_label (issue #$issue in $repo)"
+}
+
+_cmd_priority_bump() {
+    local repo="$1" issue="$2"
+
+    local current_label
+    current_label=$(_get_current_priority "$repo" "$issue")
+
+    if [ -z "$current_label" ]; then
+        # No priority set — treat bump as setting p3-low (lowest)
+        gh issue edit "$issue" --repo "$repo" --add-label "p3-low"
+        echo "No priority set; initialized to p3-low (issue #$issue in $repo)"
+        return 0
+    fi
+
+    local current_tier
+    current_tier=$(_priority_tier_for_label "$current_label")
+
+    local new_tier
+    case "$current_tier" in
+        p0) echo "Already at highest priority (p0-critical); no change." >&2; return 0 ;;
+        p1) new_tier="p0" ;;
+        p2) new_tier="p1" ;;
+        p3) new_tier="p2" ;;
+    esac
+
+    local new_label
+    new_label=$(_priority_label_for_tier "$new_tier")
+
+    gh issue edit "$issue" --repo "$repo" --remove-label "$current_label" --add-label "$new_label"
+    echo "Bumped priority: $current_label -> $new_label (issue #$issue in $repo)"
+}
+
+_cmd_priority_drop() {
+    local repo="$1" issue="$2"
+
+    local current_label
+    current_label=$(_get_current_priority "$repo" "$issue")
+
+    if [ -z "$current_label" ]; then
+        echo "No priority label set; nothing to drop." >&2
+        return 0
+    fi
+
+    local current_tier
+    current_tier=$(_priority_tier_for_label "$current_label")
+
+    local new_tier
+    case "$current_tier" in
+        p3) echo "Already at lowest priority (p3-low); no change." >&2; return 0 ;;
+        p2) new_tier="p3" ;;
+        p1) new_tier="p2" ;;
+        p0) new_tier="p1" ;;
+    esac
+
+    local new_label
+    new_label=$(_priority_label_for_tier "$new_tier")
+
+    gh issue edit "$issue" --repo "$repo" --remove-label "$current_label" --add-label "$new_label"
+    echo "Dropped priority: $current_label -> $new_label (issue #$issue in $repo)"
+}
+
+_subcmd_priority() {
+    local subcmd="${1:-}"
+
+    case "$subcmd" in
+        --help|"")
+            _priority_usage
+            return 0
+            ;;
+        set)
+            shift
+            if [ $# -lt 3 ]; then
+                echo "error: 'loop priority set' requires: <repo> <issue#> <p0|p1|p2|p3>" >&2
+                _priority_usage >&2
+                return 1
+            fi
+            _cmd_priority_set "$1" "$2" "$3"
+            ;;
+        bump)
+            shift
+            if [ $# -lt 2 ]; then
+                echo "error: 'loop priority bump' requires: <repo> <issue#>" >&2
+                _priority_usage >&2
+                return 1
+            fi
+            _cmd_priority_bump "$1" "$2"
+            ;;
+        drop)
+            shift
+            if [ $# -lt 2 ]; then
+                echo "error: 'loop priority drop' requires: <repo> <issue#>" >&2
+                _priority_usage >&2
+                return 1
+            fi
+            _cmd_priority_drop "$1" "$2"
+            ;;
+        *)
+            echo "error: unknown priority subcommand '$subcmd'" >&2
+            _priority_usage >&2
+            return 1
+            ;;
+    esac
+}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Main dispatcher
+# ─────────────────────────────────────────────────────────────────────────────
+
+_usage() {
+    cat <<'USAGE'
+Usage: loop <command> [args]
+
+Commands:
+  priority    Manage per-issue priority labels (set/bump/drop)
+
+Run 'loop <command> --help' for command-specific help.
+USAGE
+}
+
+main() {
+    local cmd="${1:-}"
+
+    case "$cmd" in
+        priority)
+            shift
+            _subcmd_priority "$@"
+            ;;
+        --help|"")
+            _usage
+            return 0
+            ;;
+        *)
+            echo "error: unknown command '$cmd'" >&2
+            _usage >&2
+            return 1
+            ;;
+    esac
+}
+
+main "$@"

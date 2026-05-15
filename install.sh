@@ -401,6 +401,46 @@ bootstrap_chmod_scripts() {
             echo "[chmod] $(basename "$f") -> +x"
         fi
     done
+    # Ensure bin/loop is executable
+    if [ -f "$LOOP_ROOT/bin/loop" ] && [ ! -x "$LOOP_ROOT/bin/loop" ]; then
+        chmod +x "$LOOP_ROOT/bin/loop"
+        echo "[chmod] bin/loop -> +x"
+    fi
+}
+
+# Symlink bin/loop into a directory on PATH so 'loop' is available system-wide.
+# Tries $HOME/.local/bin first (XDG standard), then /usr/local/bin. Idempotent.
+bootstrap_install_cli() {
+    local cli_src="$LOOP_ROOT/bin/loop"
+    [ -f "$cli_src" ] || { echo "[cli] WARNING: bin/loop not found — skipping" >&2; return 0; }
+    chmod +x "$cli_src"
+
+    local link_dir=""
+    if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
+        link_dir="$HOME/.local/bin"
+    elif [[ ":$PATH:" == *":/usr/local/bin:"* ]]; then
+        link_dir="/usr/local/bin"
+    fi
+
+    if [ -z "$link_dir" ]; then
+        echo "[cli] WARNING: neither \$HOME/.local/bin nor /usr/local/bin is in PATH" >&2
+        echo "       Add '$LOOP_ROOT/bin' to your PATH manually, or symlink bin/loop into a PATH directory." >&2
+        return 0
+    fi
+
+    mkdir -p "$link_dir"
+    local link_path="$link_dir/loop"
+
+    if [ -L "$link_path" ] && [ "$(readlink "$link_path")" = "$cli_src" ]; then
+        echo "[cli] loop CLI already symlinked at $link_path — skipping"
+        return 0
+    fi
+
+    # Remove stale symlink or file before creating
+    [ -e "$link_path" ] && rm -f "$link_path"
+    ln -s "$cli_src" "$link_path"
+    echo "[cli] Symlinked loop CLI: $link_path -> $cli_src"
+    echo "[cli] Run 'loop --help' to verify"
 }
 
 # Register scanner + reconciler for the current OS.
@@ -432,6 +472,7 @@ bootstrap_pipeline() {
     bootstrap_detect_agent || return 1
     bootstrap_write_projects_yaml
     bootstrap_chmod_scripts
+    bootstrap_install_cli
     bootstrap_register_services
 
     local log_dir
