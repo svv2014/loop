@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  loop-scanner-watchdog launchd template.
+
+  Fires every 5 minutes. Checks scanner-heartbeat mtime; kills and lets
+  launchd restart the scanner if it has been silent longer than
+  LOOP_SCANNER_STALE_THRESHOLD seconds (default: 2 × poll interval).
+
+  Installed automatically by install.sh --bootstrap alongside the scanner plist.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.loop-scanner-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__LOOP_ROOT__/scanner/scanner-watchdog.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/loop-scanner-watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/loop-scanner-watchdog.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PATH</key>
+        <string>__EXTRA_PATH__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
