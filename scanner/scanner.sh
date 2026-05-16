@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -775,6 +776,17 @@ scan_project() {
 }
 
 run_once() {
+    # Stdout integrity check: if the log file has become unwritable (closed fd
+    # due to dead tee child, EPIPE, or log rotation without SIGHUP), try to
+    # reopen it. Bail out on failure so launchd restarts with fresh fds.
+    if [ -n "${LOG_FILE:-}" ] && ! { : >> "$LOG_FILE"; } 2>/dev/null; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" \
+            || { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] ERROR: cannot reopen LOG_FILE — exiting for launchd restart" >&2; exit 1; }
+    fi
+    # Heartbeat: stamp liveness for the external watchdog.
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date +%s)" > "${HEARTBEAT_FILE}" 2>/dev/null || true
+    fi
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
@@ -785,6 +797,11 @@ run_once() {
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
+    # Tick-counter: count dedup entries for observability (scanner_tick event).
+    local _dedup_count=0
+    local _f
+    for _f in "$DEDUP_DIR"/*; do [ -f "$_f" ] && _dedup_count=$(( _dedup_count + 1 )); done
+    log "scanner_tick: ts=$(date +%s) dedup_count=${_dedup_count}"
     log "=== scan tick done ==="
 }
 
