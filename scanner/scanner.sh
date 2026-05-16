@@ -774,7 +774,28 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+# _write_heartbeat — record the current epoch to the liveness file.
+# The scanner-watchdog reads this to detect a silently-wedged scanner.
+_write_heartbeat() {
+    if ! $DRY_RUN && [ -n "${LOOP_LOG_DIR:-}" ]; then
+        printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+}
+
+# _check_log_fd — re-attach stdout/stderr to LOG_FILE if the file is no longer
+# writable (e.g. after log rotation removed the inode). Exits with status 1 so
+# launchd/cron can restart the scanner when the reopen itself fails.
+_check_log_fd() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    [ -w "${LOG_FILE}" ] && return 0
+    # File is gone or unwritable — try to reopen stdout then stderr.
+    exec 1>>"${LOG_FILE}" || exit 1
+    exec 2>>"${LOG_FILE}" || exit 1
+}
+
 run_once() {
+    _check_log_fd
+    _write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
