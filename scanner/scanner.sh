@@ -775,6 +775,20 @@ scan_project() {
 }
 
 run_once() {
+    # Liveness heartbeat — write current timestamp so the watchdog can detect a
+    # silent wedge (alive PID but no emit activity). Skip in dry-run to avoid
+    # side-effects during testing.
+    if ! $DRY_RUN && ! $ONCE; then
+        printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
+    # Stdout integrity check: if the log file has become non-writable (e.g., a
+    # closed pipe upstream), exit so launchd can restart with a fresh fd.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] WARN: log file not writable — exiting for restart" >&2
+        exit 1
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
