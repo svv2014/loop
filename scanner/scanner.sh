@@ -182,16 +182,21 @@ _dedup_key() {
 
 # Stage-age cache — tracks when a PR first appeared at a given stage.
 # Prevents a stuck PR from winning the per-tick cap slot indefinitely.
-# Key: "stage-age:<event_type>:<slug>:<num>". Never auto-expires; clear
-# /tmp/loop-stage-age/ manually (or delete a specific entry) to reset.
+# Key: "stage-age:<event_type>:<slug>:<num>". Auto-expires after the cooloff
+# window (LOOP_STAGE_AGE_COOLOFF_MULTIPLIER × LOOP_MAX_AGE_IN_STAGE_SECONDS,
+# default 6h) so a quarantined PR gets one more dispatch attempt. Clear
+# /tmp/loop-stage-age/ manually to force immediate retry.
 STAGE_AGE_DIR="/tmp/loop-stage-age"
 mkdir -p "$STAGE_AGE_DIR"
 
-# _stage_age_exceeded <key> <max_seconds>
-# Returns 0 (true) if this key was first recorded more than max_seconds ago.
+# _stage_age_exceeded <key> <max_seconds> <cooloff_seconds>
+# Returns 0 (true) if this key was recorded more than max_seconds ago AND the
+# cooloff window has not yet elapsed (i.e., the PR is quarantined).
+# Once age >= cooloff_seconds the tracking file is deleted so the PR gets one
+# more dispatch attempt; if it stalls again a fresh quarantine begins.
 # Side-effect: creates the tracking file on first call for a new key.
 _stage_age_exceeded() {
-    local key="$1" max_age="$2"
+    local key="$1" max_age="$2" cooloff="$3"
     local key_file
     key_file="$STAGE_AGE_DIR/$(_dedup_key "$key")"
     if [ ! -f "$key_file" ]; then
@@ -200,6 +205,10 @@ _stage_age_exceeded() {
     fi
     local age
     age=$(( $(date +%s) - $(stat -f%m "$key_file" 2>/dev/null || stat -c%Y "$key_file" 2>/dev/null || echo 0) ))
+    if [ "$age" -ge "$cooloff" ]; then
+        rm -f "$key_file"
+        return 1
+    fi
     [ "$age" -ge "$max_age" ]
 }
 
@@ -648,11 +657,15 @@ _scan_pr_stage() {
 
         # Skip PRs stuck at this stage longer than LOOP_MAX_AGE_IN_STAGE_SECONDS (default 1h).
         # Prevents a zombie PR from consuming the per-tick cap slot indefinitely and
-        # starving all other PRs at this stage. Operator must clear /tmp/loop-stage-age/
-        # (or the specific entry) to re-enable dispatch for the affected PR.
+        # starving all other PRs at this stage. After the cooloff window the tracking
+        # entry is deleted and the PR gets one more auto-dispatch attempt; if it stalls
+        # again a fresh quarantine begins. Set LOOP_STAGE_AGE_COOLOFF_MULTIPLIER to
+        # tune the cooloff (default 6× max_age).
         local _max_stage_age="${LOOP_MAX_AGE_IN_STAGE_SECONDS:-3600}"
-        if _stage_age_exceeded "${event_type}:${slug}:${num}" "$_max_stage_age"; then
-            log "skip ${event_type} #${num}: stuck at ${trigger_label} for >${_max_stage_age}s — round-robin skip; operator action needed"
+        local _cooloff_mult="${LOOP_STAGE_AGE_COOLOFF_MULTIPLIER:-6}"
+        local _cooloff=$(( _max_stage_age * _cooloff_mult ))
+        if _stage_age_exceeded "${event_type}:${slug}:${num}" "$_max_stage_age" "$_cooloff"; then
+            log "skip ${event_type} #${num}: stuck at ${trigger_label} for >${_max_stage_age}s — quarantined for ${_cooloff}s then auto-retry"
             continue
         fi
 
