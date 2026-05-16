@@ -64,6 +64,23 @@ done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
 
+# _scanner_write_heartbeat — write a liveness sentinel every tick.
+# The scanner-watchdog reads this file's mtime to detect silent stalls.
+_scanner_write_heartbeat() {
+    printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
+        > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+}
+
+# _scanner_check_log_fd — verify the log file is writable; reopen if not.
+# Protects against the closed-pipe / rotated-file failure mode where the
+# script is alive but STDOUT writes block or go to a deleted inode.
+# Exits (triggering launchd restart) if the reopen also fails.
+_scanner_check_log_fd() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    [ -w "$LOG_FILE" ] && return 0
+    exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+}
+
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
 # Skipped when LOOP_JOBS_ENQUEUE=0 or --dry-run.
@@ -762,6 +779,8 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_check_log_fd
+    _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
