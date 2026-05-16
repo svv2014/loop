@@ -738,7 +738,7 @@ scan_project() {
     while IFS= read -r trigger_label; do
         [ -z "$trigger_label" ] && continue
         local handler event_type
-        handler=$(loop_handler_for_label "$slug" "$trigger_label" 2>/dev/null || true)
+        handler=$(loop_handler_for_label "$slug" "$trigger_label" issue 2>/dev/null || true)
         [ -z "$handler" ] && continue
         if $_slots_gate_active && [ "$trigger_label" = "$_first_issue_trigger" ]; then
             continue
@@ -754,7 +754,7 @@ scan_project() {
     while IFS= read -r trigger_label; do
         [ -z "$trigger_label" ] && continue
         local handler event_type
-        handler=$(loop_handler_for_label "$slug" "$trigger_label" 2>/dev/null || true)
+        handler=$(loop_handler_for_label "$slug" "$trigger_label" pr 2>/dev/null || true)
         [ -z "$handler" ] && continue
         event_type=$(_handler_to_event_type "$handler")
         _scan_pr_stage "$slug" "$repo" "$trigger_label" "$handler" "$event_type"

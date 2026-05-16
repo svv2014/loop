@@ -13,7 +13,7 @@
 #   loop_workflow_for_project <slug>            # echo workflow name for a project
 #   loop_label_for <slug> <canonical>           # echo label name with overrides applied
 #   loop_polled_labels <slug> <issue|pr>        # list labels the scanner should poll
-#   loop_handler_for_label <slug> <label>       # echo handler base name
+#   loop_handler_for_label <slug> <label> <kind>  # echo handler base name (kind: issue|pr)
 #   loop_workflow_validate <path>               # exit 0 if file is schema-v1 valid
 
 # Sourced libs should not enable -u (would crash callers); leave shell defaults.
@@ -240,19 +240,25 @@ sys.exit(1)
 PY
 }
 
-# loop_handler_for_label <slug> <label>
+# loop_handler_for_label <slug> <label> [kind]
 # Given an actually-applied label (post-override), returns the handler script base name.
+# `kind` is "issue" or "pr" — required when a label is reused across both stage
+# kinds (e.g. `loop:action:dev` triggers `dev-handler` on issues and
+# `dev-rework-handler` on PRs in the default workflow). Omitting `kind`
+# preserves legacy behaviour (first match wins across both sections) — but new
+# callers should always pass it.
 loop_handler_for_label() {
-    local slug="$1" label="$2"
+    local slug="$1" label="$2" kind="${3:-}"
     local wf
     wf=$(loop_workflow_for_project "$slug")
     local wf_file="$_LOOP_WORKFLOW_DIR/${wf}.yaml"
     [ -f "$wf_file" ] || return 1
-    SLUG="$slug" WF="$wf_file" LBL="$label" \
+    SLUG="$slug" WF="$wf_file" LBL="$label" KIND="$kind" \
     CFG="${LOOP_CONFIG:-${LOOP_ROOT:-.}/config/projects.yaml}" python3 - <<'PY'
 import os, sys, yaml
 slug = os.environ['SLUG']
 label = os.environ['LBL']
+kind = os.environ.get('KIND', '')
 with open(os.environ['WF']) as f:
     wf = yaml.safe_load(f) or {}
 overrides = {}
@@ -266,7 +272,13 @@ if cfg_path and os.path.isfile(cfg_path):
             break
 reverse = {v: k for k, v in overrides.items()}
 canonical = reverse.get(label, label)
-for section in ('issue_stages', 'pr_stages'):
+if kind == 'issue':
+    sections = ('issue_stages',)
+elif kind == 'pr':
+    sections = ('pr_stages',)
+else:
+    sections = ('issue_stages', 'pr_stages')
+for section in sections:
     for stage in wf.get(section, []) or []:
         if stage.get('trigger_label') == canonical:
             print(stage.get('handler', ''))
