@@ -776,6 +776,10 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Liveness heartbeat — written every tick so a watchdog can detect wedged scanners.
+    # A separate scanner-watchdog process compares this file's mtime against now;
+    # if stale by > 2× poll_interval it kills the scanner PID and lets launchd restart.
+    $DRY_RUN || printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "${LOOP_LOG_DIR}/scanner-heartbeat"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
