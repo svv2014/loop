@@ -761,7 +761,22 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+_scanner_check_log_fd() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+}
+
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    local hb_file="${LOOP_LOG_DIR}/scanner-heartbeat"
+    date +%s > "$hb_file" || true
+}
+
 run_once() {
+    _scanner_check_log_fd
+    _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
