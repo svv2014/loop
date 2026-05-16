@@ -774,7 +774,32 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
+# _scanner_write_heartbeat — update the heartbeat timestamp file every tick.
+# A separate scanner-watchdog reads this file; if it is older than
+# 2 × POLL_INTERVAL the watchdog restarts the scanner.
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# _scanner_check_log_writable — if LOG_FILE is no longer writable, reopen it
+# or exit so launchd restarts the scanner with a fresh stdout.
+_scanner_check_log_writable() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    if [ ! -w "$LOG_FILE" ] && [ ! -w "$(dirname "$LOG_FILE")" ]; then
+        # Cannot write to log dir at all — force exit so launchd restarts.
+        exit 1
+    fi
+    # Reopen fd 1/2 to ensure we are writing to the current inode (e.g. after
+    # log rotation without a SIGHUP, or if the fd was silently closed).
+    exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+}
+
 run_once() {
+    _scanner_check_log_writable
+    _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
