@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -775,6 +776,22 @@ scan_project() {
 }
 
 run_once() {
+    # Stdout integrity: if the log file is no longer writable (e.g. after
+    # rotation that left a closed pipe or a deleted inode), exit so launchd
+    # restarts us against a fresh file descriptor. Don't apply in dry-run
+    # mode where LOG_FILE may be the terminal.
+    if ! $DRY_RUN && [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        # Attempt one re-open before giving up; handles the common case where
+        # the file was just created by logrotate and is now writable again.
+        exec 1>>"$LOG_FILE" 2>&1 || true
+        if [ ! -w "$LOG_FILE" ]; then
+            exit 1
+        fi
+    fi
+
+    # Heartbeat: update mtime so scanner-watchdog can detect a wedged process.
+    $DRY_RUN || touch "$HEARTBEAT_FILE"
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
