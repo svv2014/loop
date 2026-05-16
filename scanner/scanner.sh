@@ -761,7 +761,32 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+# _write_heartbeat — update ${LOOP_LOG_DIR}/scanner-heartbeat with the current
+# timestamp and scanner PID. Called at the top of every tick so an external
+# watchdog can detect a wedged scanner by comparing the file mtime against now.
+_write_heartbeat() {
+    $DRY_RUN && return 0
+    local hb="${LOOP_LOG_DIR}/scanner-heartbeat"
+    printf '%s pid=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" > "$hb" || true
+}
+
+# _check_log_fd — if LOG_FILE is no longer writable (e.g. logrotate deleted the
+# inode), reopen stdout/stderr against the path so writes resume to a live file.
+# Exits the scanner if the reopen fails so launchd/cron can restart cleanly.
+_check_log_fd() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -w "$LOG_FILE" ] 2>/dev/null; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || {
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: cannot reopen $LOG_FILE — exiting for restart" >&2
+            exit 1
+        }
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] log FD reopened (file was unwritable)"
+    fi
+}
+
 run_once() {
+    _check_log_fd
+    _write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
