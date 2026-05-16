@@ -64,6 +64,12 @@ done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
 
+# _scanner_write_heartbeat — update ${LOOP_LOG_DIR}/scanner-heartbeat with the
+# current epoch so scanner-watchdog can detect a silently wedged process.
+_scanner_write_heartbeat() {
+    printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+}
+
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
 # Skipped when LOOP_JOBS_ENQUEUE=0 or --dry-run.
@@ -775,6 +781,7 @@ scan_project() {
 }
 
 run_once() {
+    $DRY_RUN || _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
