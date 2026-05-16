@@ -354,6 +354,25 @@ bootstrap_register_launchd() {
             echo "[launchd] WARNING: could not load com.user.loop-digest (check Console.app)" >&2
         fi
     fi
+
+    # Scanner liveness watchdog — fires every 5 min and kills a wedged scanner
+    # (heartbeat file older than 2 × poll interval) so launchd KeepAlive restarts it.
+    local scanner_watchdog_plist="$agents_dir/com.user.loop-scanner-watchdog.plist"
+    if [ -f "$scanner_watchdog_plist" ]; then
+        echo "[launchd] com.user.loop-scanner-watchdog already registered — skipping"
+    else
+        sed \
+            -e "s|__LOOP_ROOT__|$LOOP_ROOT|g" \
+            -e "s|__LOG_DIR__|$log_dir|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__EXTRA_PATH__|$extra_path|g" \
+            "$template_dir/com.user.loop-scanner-watchdog.plist.template" > "$scanner_watchdog_plist"
+        if launchctl load "$scanner_watchdog_plist" 2>/dev/null; then
+            echo "[launchd] com.user.loop-scanner-watchdog loaded (every 5 min)"
+        else
+            echo "[launchd] WARNING: could not load com.user.loop-scanner-watchdog (check Console.app)" >&2
+        fi
+    fi
 }
 
 # Register scanner + reconciler via crontab (Linux). Idempotent: skips if marker present.

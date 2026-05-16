@@ -776,6 +776,16 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Liveness heartbeat: update mtime so scanner-watchdog can detect silent stops.
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "${LOOP_LOG_DIR}/scanner-heartbeat" || true
+    fi
+    # Stdout integrity: if the log file exists but is no longer writable, exit so
+    # launchd restarts the scanner and reopens a fresh fd.
+    if ! $DRY_RUN && [ -n "${LOG_FILE:-}" ] && [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: log file not writable — exiting for restart" >&2
+        exit 1
+    fi
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
