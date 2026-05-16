@@ -776,6 +776,18 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+
+    # Heartbeat: write current epoch so scanner-watchdog.sh can detect silent
+    # wedges (alive PID but no events emitted for an extended period).
+    printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+
+    # Stdout integrity check: if LOG_FILE is no longer writable (e.g. deleted
+    # inode after log rotation with a dead tee child), reopen FDs. Exit on
+    # failure so launchd restarts us cleanly with fresh file descriptors.
+    if [ -n "${LOG_FILE:-}" ] && ! { true >> "$LOG_FILE"; } 2>/dev/null; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
