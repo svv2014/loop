@@ -776,6 +776,15 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Heartbeat: touch every tick so the watchdog detects silent-stop via mtime.
+    # Skipped in --dry-run to avoid side effects during testing.
+    $DRY_RUN || touch "${LOOP_LOG_DIR}/scanner-heartbeat"
+    # Stdout integrity: if LOG_FILE has become unwritable (e.g. after logrotate
+    # without SIGHUP), attempt reopen; if that fails, exit for launchd to restart.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "${LOG_FILE}" ]; then
+        exec 1>>"${LOG_FILE}" 2>>"${LOG_FILE}" \
+            || { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: cannot reopen LOG_FILE, exiting" >&2; exit 1; }
+    fi
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
