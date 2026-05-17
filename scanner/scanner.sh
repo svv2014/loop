@@ -776,6 +776,8 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Write heartbeat so the watchdog can detect a silent-stop scanner.
+    $DRY_RUN || printf '%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)" > "${LOOP_LOG_DIR}/scanner-heartbeat"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
