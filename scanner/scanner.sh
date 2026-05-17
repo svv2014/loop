@@ -775,6 +775,20 @@ scan_project() {
 }
 
 run_once() {
+    # Stdout/log file integrity check: if the log file has become unwritable
+    # (e.g. rotated away while FDs were still open), reopen it; if that fails,
+    # exit so launchd restarts the process with fresh file descriptors.
+    if [ -n "${LOG_FILE:-}" ] && ! true >> "$LOG_FILE" 2>/dev/null; then
+        exec 1>/dev/null 2>/dev/null
+        exit 1
+    fi
+
+    # Heartbeat: write current epoch to allow an external watchdog to detect
+    # a silent-stop (alive PID but no scan activity).
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" || true
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
