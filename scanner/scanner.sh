@@ -32,6 +32,7 @@ LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 
 # SIGHUP-reopen contract (#194): logrotate-style tools truncate or rename
 # the on-disk log file. The launchd plist redirects stdout/stderr to a
@@ -775,6 +776,18 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat: write timestamp so the watchdog can detect a wedged scanner.
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "$HEARTBEAT_FILE" 2>/dev/null || true
+    fi
+
+    # Stdout integrity check: if the log file is no longer writable (e.g. deleted
+    # or inode swapped by logrotate without a SIGHUP), reopen FDs and continue;
+    # if reopen fails, exit so launchd restarts the process with a fresh FD.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
@@ -785,7 +798,9 @@ run_once() {
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
-    log "=== scan tick done ==="
+    local _dedup_count=0
+    _dedup_count=$(ls -1 "$DEDUP_DIR" 2>/dev/null | wc -l | tr -d ' ') || true
+    log "=== scan tick done (dedup_count=${_dedup_count}) ==="
 }
 
 acquire_lock
