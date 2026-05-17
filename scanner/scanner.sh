@@ -64,6 +64,23 @@ done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
 
+# _scanner_heartbeat — write current PID to the heartbeat file so the
+# scanner-watchdog can detect a wedged process and restart it.
+# Skipped in dry-run mode to keep that path side-effect-free.
+_scanner_heartbeat() {
+    $DRY_RUN && return 0
+    printf '%s\n' "$$" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+}
+
+# _scanner_check_log — verify LOG_FILE is still writable at the top of each
+# tick. If not, try to reopen stdout/stderr; if that also fails, exit so that
+# launchd/cron can restart the process with clean file descriptors.
+_scanner_check_log() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    [ -w "${LOG_FILE}" ] && return 0
+    exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+}
+
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
 # Skipped when LOOP_JOBS_ENQUEUE=0 or --dry-run.
@@ -775,6 +792,8 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_heartbeat
+    _scanner_check_log
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then

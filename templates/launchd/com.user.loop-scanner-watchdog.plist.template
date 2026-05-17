@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.loop-scanner-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__LOOP_ROOT__/scanner/scanner-watchdog.sh</string>
+    </array>
+    <!-- Fire every 5 minutes; detects a wedged scanner within 2× poll interval -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/loop-scanner-watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/loop-scanner-watchdog.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PATH</key>
+        <string>__EXTRA_PATH__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
