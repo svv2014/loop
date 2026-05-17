@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -774,7 +775,26 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+# _scanner_write_heartbeat — update the heartbeat file so the watchdog can
+# confirm the scanner is still making forward progress on every tick.
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    date '+%Y-%m-%dT%H:%M:%SZ' > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# _scanner_check_log_fd — if the log file is no longer writable (e.g. the
+# inode was rotated away), exit so launchd can restart with a fresh fd.
+_scanner_check_log_fd() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    if [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: log file not writable — exiting for restart" >&2
+        exit 1
+    fi
+}
+
 run_once() {
+    _scanner_check_log_fd
+    _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
