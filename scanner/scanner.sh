@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -775,6 +776,16 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat: record epoch so the watchdog can detect a wedged scanner.
+    $DRY_RUN || date +%s > "$HEARTBEAT_FILE" 2>/dev/null || true
+
+    # Stdout integrity: if the log file is gone or not writable, reopen FDs
+    # (mirrors the SIGHUP reopen path) and continue; launchd will restart on
+    # any uncaught failure so we prefer recovery over exit here.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || true
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
