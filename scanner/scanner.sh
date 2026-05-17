@@ -32,6 +32,7 @@ LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 
 # SIGHUP-reopen contract (#194): logrotate-style tools truncate or rename
 # the on-disk log file. The launchd plist redirects stdout/stderr to a
@@ -46,6 +47,24 @@ _scanner_reopen_log() {
     fi
 }
 trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
+
+# _scanner_write_heartbeat — touch the heartbeat file so the external watchdog
+# can verify the scanner is still making progress each tick.
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "$HEARTBEAT_FILE" || true
+}
+
+# _scanner_check_log_fd — if the log file is no longer writable (e.g. the
+# inode was replaced and SIGHUP hasn't fired yet, or the fd is broken),
+# attempt to reopen. If reopen fails, exit so launchd restarts the scanner.
+_scanner_check_log_fd() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    [ -w "$LOG_FILE" ] && return 0
+    exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" \
+        || { printf '%s [scanner] FATAL: cannot reopen log fd — exiting for restart\n' \
+                 "$(date '+%Y-%m-%d %H:%M:%S')" >&2; exit 1; }
+}
 
 DRY_RUN=false
 ONCE=false
@@ -775,6 +794,8 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_write_heartbeat
+    _scanner_check_log_fd
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
