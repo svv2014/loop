@@ -775,6 +775,19 @@ scan_project() {
 }
 
 run_once() {
+    # Log-file integrity guard: exit so launchd/cron restarts with a fresh log FD.
+    if [ -n "${LOG_FILE:-}" ] && [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: log file not writable — exiting for restart" >&2
+        exit 1
+    fi
+
+    # Heartbeat: write epoch to a file so an external watchdog can detect a
+    # silently-wedged scanner (alive PID, no tick activity).
+    if ! $DRY_RUN; then
+        local _hb_file="${LOOP_LOG_DIR}/scanner-heartbeat"
+        date +%s > "$_hb_file" 2>/dev/null || true
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
