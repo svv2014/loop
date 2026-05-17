@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -776,6 +777,22 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+
+    # Heartbeat (#413): write current timestamp so scanner-watchdog.sh can
+    # detect a wedged scanner (alive PID, silent main loop).
+    touch "$HEARTBEAT_FILE"
+
+    # Stdout integrity check (#413): if the log file path is no longer
+    # writable (e.g. deleted after rotation without SIGHUP), reopen or exit
+    # so launchd restarts with fresh file descriptors.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        _scanner_reopen_log
+        if [ ! -w "$LOG_FILE" ]; then
+            echo "[scanner] FATAL: cannot write to $LOG_FILE — exiting for restart" >&2
+            exit 1
+        fi
+    fi
+
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
