@@ -775,6 +775,17 @@ scan_project() {
 }
 
 run_once() {
+    # Liveness heartbeat — watchdog reads mtime; kills + restarts if stale.
+    $DRY_RUN || touch "${LOOP_LOG_DIR}/scanner-heartbeat"
+
+    # Log-FD integrity check: if the log file went unwritable (e.g. log rotation
+    # without SIGHUP), reopen FDs so log() calls continue working. If reopen
+    # fails, exit so launchd/cron restarts a clean process.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "${LOG_FILE}" ]; then
+        exec 1>>"${LOG_FILE}" 2>>"${LOG_FILE}" \
+            || { echo "FATAL: cannot reopen log ${LOG_FILE} — exiting for restart" >&2; exit 1; }
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
