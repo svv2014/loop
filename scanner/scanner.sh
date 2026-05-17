@@ -775,6 +775,15 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat: record tick timestamp so scanner-watchdog.sh can detect wedging.
+    $DRY_RUN || printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+
+    # Stdout integrity check: if the on-disk log file is not writable (e.g. after
+    # a rotation that didn't send SIGHUP), reopen file descriptors so writes resume.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "${LOG_FILE}" ]; then
+        exec 1>>"${LOG_FILE}" 2>>"${LOG_FILE}" || exit 1
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
