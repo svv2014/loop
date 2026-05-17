@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -46,6 +47,18 @@ _scanner_reopen_log() {
     fi
 }
 trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
+
+# _scanner_check_stdout — called at the start of each tick to verify the log
+# FD is still viable. If LOG_FILE no longer exists or is not writable (e.g.
+# deleted inode after rotation without SIGHUP, or broken pipe to a dead tee
+# child), attempt to reopen the FD; if that also fails, exit so launchd
+# KeepAlive restarts the scanner with fresh file descriptors.
+_scanner_check_stdout() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -e "$LOG_FILE" ] || [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>&1 || exit 1
+    fi
+}
 
 DRY_RUN=false
 ONCE=false
@@ -775,6 +788,9 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_check_stdout
+    # Write liveness heartbeat so scanner-watchdog can detect a wedged process.
+    $DRY_RUN || printf '%s\n' "$(date +%s)" > "${HEARTBEAT_FILE}" 2>/dev/null || true
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
