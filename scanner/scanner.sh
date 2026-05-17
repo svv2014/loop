@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -46,6 +47,25 @@ _scanner_reopen_log() {
     fi
 }
 trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
+
+# _scanner_update_heartbeat — write current timestamp + PID to the heartbeat
+# file so the external watchdog knows the scanner is alive and active.
+# Called unconditionally at the top of every tick (including --dry-run).
+_scanner_update_heartbeat() {
+    printf '%s pid=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" > "$HEARTBEAT_FILE" || true
+}
+
+# _scanner_check_log_fd — if LOG_FILE is no longer writable (e.g. deleted or
+# permissions changed), attempt to reopen stdout/stderr against it. If the
+# reopen fails, exit so launchd/cron can restart the process with a fresh fd.
+_scanner_check_log_fd() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -w "$LOG_FILE" ] && [ ! -e "$LOG_FILE" ]; then
+        # Attempt recovery first; exit on failure so launchd restarts cleanly.
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" \
+            || { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: log fd unrecoverable — exiting for restart" >&2; exit 1; }
+    fi
+}
 
 DRY_RUN=false
 ONCE=false
@@ -775,6 +795,8 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_update_heartbeat
+    _scanner_check_log_fd
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
