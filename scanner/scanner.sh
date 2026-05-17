@@ -775,6 +775,17 @@ scan_project() {
 }
 
 run_once() {
+    # Liveness heartbeat — written at the start of every tick so the external
+    # watchdog (check-scanner-liveness.sh) can detect a wedged scanner.
+    $DRY_RUN || touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+
+    # Log file integrity check — recover a broken/unwritable log FD so launchd
+    # sees output and the on-disk file reflects actual scanner activity.
+    if ! $DRY_RUN && [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" \
+            || { printf '[scanner] FATAL: log unwritable, exiting for launchd restart\n' >&2; exit 1; }
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
