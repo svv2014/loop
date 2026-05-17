@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -775,6 +776,19 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat — updated every tick so scanner-watchdog can detect wedged process.
+    $DRY_RUN || touch "$HEARTBEAT_FILE"
+
+    # Log-file integrity check: if the log path is no longer writable (e.g. after
+    # a logrotate that left us writing to a deleted inode and the SIGHUP trap was
+    # missed), reopen stdout/stderr and exit if the reopen also fails so launchd
+    # restarts us cleanly.
+    if [ -n "${LOG_FILE:-}" ] && ! $DRY_RUN; then
+        if [ ! -w "$LOG_FILE" ] 2>/dev/null || [ ! -e "$LOG_FILE" ]; then
+            exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+        fi
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
