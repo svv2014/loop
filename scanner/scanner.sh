@@ -774,8 +774,16 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
+_write_heartbeat() {
+    $DRY_RUN && return 0
+    date '+%Y-%m-%d %H:%M:%S' > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
 run_once() {
     log "=== scan tick start ==="
+    _write_heartbeat
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
