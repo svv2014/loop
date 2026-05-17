@@ -774,8 +774,30 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+# _scanner_write_heartbeat — update the liveness file every tick.
+# An external watchdog reads this file; if mtime is older than 2×POLL_INTERVAL
+# the scanner is considered wedged and the watchdog kills + restarts it.
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+}
+
+# _scanner_check_log_writable — if the log file exists but is no longer
+# writable (e.g. FD points at a deleted/rotated inode), reopen it.
+# Exit so launchd restarts cleanly if reopen fails.
+_scanner_check_log_writable() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+}
+
 run_once() {
-    log "=== scan tick start ==="
+    _scanner_check_log_writable
+    _scanner_write_heartbeat
+    local _dedup_count
+    _dedup_count=$(find "$DEDUP_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+    log "=== scan tick start === ts=$(date +%s) dedup_count=${_dedup_count}"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
