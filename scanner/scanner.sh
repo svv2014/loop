@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -775,7 +776,23 @@ scan_project() {
 }
 
 run_once() {
+    # Stdout integrity guard: if the log file has become unwritable (e.g. after
+    # log rotation leaves a stale FD), exit so launchd restarts with a fresh FD.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ] 2>/dev/null; then
+        # Attempt reopen first (same path as SIGHUP handler).
+        # Redirect stdout first, then stderr separately to avoid SC2261.
+        exec 1>>"$LOG_FILE" || exit 1
+        exec 2>>"$LOG_FILE" || true
+    fi
+
     log "=== scan tick start ==="
+
+    # Write heartbeat so scanner-watchdog can detect silent-stop.
+    # File contains ISO timestamp + PID for watchdog diagnostics.
+    if ! $DRY_RUN; then
+        printf '%s pid=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" > "$HEARTBEAT_FILE" 2>/dev/null || true
+    fi
+
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
