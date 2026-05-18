@@ -776,6 +776,13 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Liveness heartbeat — written every tick so the scanner watchdog can detect
+    # a wedged process by comparing this file's mtime against now.
+    if ! $DRY_RUN; then
+        local _hb_dir="${LOOP_LOG_DIR}"
+        mkdir -p "$_hb_dir"
+        date +%s > "${_hb_dir}/scanner-heartbeat" 2>/dev/null || true
+    fi
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
