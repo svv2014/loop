@@ -22,6 +22,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/jobs.sh
 source "$LOOP_ROOT/lib/jobs.sh"
+# shellcheck source=../lib/monitor.sh
+source "$LOOP_ROOT/lib/monitor.sh"
 # workflow helpers (loop_polled_labels, loop_handler_for_label, loop_stage_trigger,
 # loop_workflow_for_project) are already loaded via lib/env.sh → lib/workflow.sh.
 # The line below is for shellcheck only.
@@ -29,6 +31,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -774,7 +777,31 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+_scanner_check_stdout() {
+    # If LOG_FILE is not writable, reopen FDs or exit so launchd restarts us.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+}
+
+_scanner_heartbeat() {
+    $DRY_RUN && return 0
+    date '+%Y-%m-%d %H:%M:%S' > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+_scanner_emit_tick() {
+    $DRY_RUN && return 0
+    local dedup_count now
+    dedup_count=$(find "$DEDUP_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+    now=$(date '+%Y-%m-%d %H:%M:%S')
+    _loop_emit_event "scanner_tick" \
+        "{\"now\":\"${now}\",\"dedup_count\":${dedup_count}}" \
+        2>/dev/null || true
+}
+
 run_once() {
+    _scanner_check_stdout
+    _scanner_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
@@ -785,6 +812,7 @@ run_once() {
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
+    _scanner_emit_tick
     log "=== scan tick done ==="
 }
 
