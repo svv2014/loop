@@ -776,6 +776,13 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Heartbeat — update file on every tick so the watchdog can detect a
+    # wedged scanner (alive PID, no emit activity, no log output for hours).
+    if ! $DRY_RUN; then
+        local _hb_dir="${LOOP_LOG_DIR}"
+        mkdir -p "$_hb_dir" 2>/dev/null || true
+        date +%s > "${_hb_dir}/scanner-heartbeat" 2>/dev/null || true
+    fi
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
