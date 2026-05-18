@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -63,6 +64,31 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# _scanner_write_heartbeat — update the heartbeat file once per tick so the
+# external watchdog can detect a wedged scanner (alive PID, zero emit activity).
+# Format: "<pid> <epoch>" — watchdog checks mtime, not content.
+_scanner_write_heartbeat() {
+    local dedup_count
+    dedup_count=$(find "$DEDUP_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+    printf '%s %s %s\n' "$$" "$(date +%s)" "$dedup_count" > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# _scanner_check_stdout — at the top of each tick verify stdout is writable.
+# If the log file path is set but the file is not writable (e.g. after a log
+# rotation that the SIGHUP handler did not catch), reopen and log the recovery.
+# If reopen also fails, exit so launchd restarts the scanner cleanly.
+_scanner_check_stdout() {
+    [ -z "${LOG_FILE:-}" ] && return 0
+    if [ ! -w "$LOG_FILE" ] && [ -e "$LOG_FILE" ]; then
+        # Attempt recovery: reopen FDs 1+2 against the current path.
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || {
+            # Reopen failed; exit so launchd restarts with a fresh log FD.
+            exit 1
+        }
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] WARN: log not writable — reopened FDs"
+    fi
+}
 
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
@@ -775,6 +801,8 @@ scan_project() {
 }
 
 run_once() {
+    $DRY_RUN || _scanner_check_stdout
+    $DRY_RUN || _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
