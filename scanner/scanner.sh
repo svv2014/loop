@@ -32,6 +32,7 @@ LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 
 # SIGHUP-reopen contract (#194): logrotate-style tools truncate or rename
 # the on-disk log file. The launchd plist redirects stdout/stderr to a
@@ -63,6 +64,21 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# Write current epoch to the heartbeat file so the watchdog can verify liveness.
+_scanner_write_heartbeat() {
+    date +%s > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# Verify stdout is writable; exit if not so launchd/cron can restart cleanly.
+# Protects against the "dead tee child" wedge where echo blocks on EPIPE.
+_scanner_check_stdout() {
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        # Try to reopen; if that fails, exit so launchd/cron can restart.
+        exec 1>>"$LOG_FILE" || exit 1
+        exec 2>>"$LOG_FILE" || exit 1
+    fi
+}
 
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
@@ -775,6 +791,8 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_check_stdout
+    _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
