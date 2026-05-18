@@ -776,6 +776,9 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Heartbeat: write current timestamp so the scanner watchdog can detect a
+    # wedged process (alive PID but no tick progress for 2×poll_interval).
+    $DRY_RUN || touch "${LOOP_LOG_DIR}/scanner-heartbeat"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
