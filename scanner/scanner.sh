@@ -774,8 +774,17 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
+# _write_heartbeat — touch the heartbeat sentinel on every tick so the
+# scanner-watchdog can detect a wedged process (alive PID, no progress).
+_write_heartbeat() {
+    date +%s > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
 run_once() {
     log "=== scan tick start ==="
+    $DRY_RUN || _write_heartbeat
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
