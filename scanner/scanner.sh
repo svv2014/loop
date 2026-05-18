@@ -775,6 +775,18 @@ scan_project() {
 }
 
 run_once() {
+    # Liveness heartbeat: write current epoch so scanner-watchdog can detect a
+    # wedged scanner (alive PID but not completing ticks) and restart it.
+    if ! $DRY_RUN; then
+        date +%s > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+    # Log file integrity guard: if the log file exists but is no longer writable
+    # (e.g. permissions changed or replaced by a non-writable file after rotation),
+    # exit so launchd restarts the scanner with fresh file descriptors.
+    if ! $DRY_RUN && [ -n "${LOG_FILE:-}" ] && [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] ERROR: log file not writable — exiting for launchd restart" >&2
+        exit 1
+    fi
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
