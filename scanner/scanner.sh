@@ -774,7 +774,18 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
+# _scanner_write_heartbeat — update the heartbeat timestamp file every tick.
+# scanner-watchdog.sh reads this file; if its mtime is older than
+# 2 × POLL_INTERVAL the watchdog kills and restarts the scanner.
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    date '+%Y-%m-%d %H:%M:%S' > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
 run_once() {
+    _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
