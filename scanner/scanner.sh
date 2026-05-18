@@ -775,6 +775,22 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat — write current epoch to a file every tick so the watchdog can
+    # detect a wedged-but-alive scanner (no events emitted, no log output).
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
+    # Stdout integrity check — if the log file has become unwritable (e.g. the
+    # inode was unlinked and the fd is orphaned), exit so launchd restarts us
+    # and we get a fresh file descriptor pointing at the current path.
+    if [ -n "${LOG_FILE:-}" ] && ! $DRY_RUN; then
+        if [ ! -w "$LOG_FILE" ] && [ -e "$LOG_FILE" ]; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] WARN: log file not writable — exiting for restart" >&2
+            exit 1
+        fi
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
