@@ -774,8 +774,12 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
 run_once() {
     log "=== scan tick start ==="
+    # Write heartbeat so watchdog can detect a silently wedged scanner.
+    $DRY_RUN || date +%s > "$HEARTBEAT_FILE" 2>/dev/null || true
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
