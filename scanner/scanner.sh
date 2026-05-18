@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -775,6 +776,19 @@ scan_project() {
 }
 
 run_once() {
+    # Liveness heartbeat: update mtime so the scanner-watchdog can detect a
+    # wedged process (alive PID, no progress). Also recover a non-writable log
+    # FD by exiting early — launchd will restart the scanner cleanly.
+    if ! $DRY_RUN; then
+        touch "${HEARTBEAT_FILE}" 2>/dev/null \
+            || log "WARN: could not update heartbeat file ${HEARTBEAT_FILE}"
+        # Only check writability when the file already exists — a missing log
+        # file is normal on first start (launchd creates it on first write).
+        if [ -n "${LOG_FILE:-}" ] && [ -e "${LOG_FILE}" ] && [ ! -w "${LOG_FILE}" ]; then
+            log "WARN: log file not writable (${LOG_FILE}) — exiting for launchd restart"
+            exit 1
+        fi
+    fi
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
