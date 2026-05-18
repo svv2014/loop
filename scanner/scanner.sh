@@ -32,6 +32,7 @@ LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 
 # SIGHUP-reopen contract (#194): logrotate-style tools truncate or rename
 # the on-disk log file. The launchd plist redirects stdout/stderr to a
@@ -46,6 +47,22 @@ _scanner_reopen_log() {
     fi
 }
 trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
+
+# _scanner_write_heartbeat — update the liveness heartbeat file every tick.
+# scanner-watchdog.sh reads the mtime; if older than 2 × POLL_INTERVAL the
+# watchdog kills and restarts this process.
+_scanner_write_heartbeat() {
+    printf '%s pid=%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" \
+        > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# _scanner_check_log_fd — if the log file has disappeared or become
+# non-writable (logrotate without SIGHUP), reopen the FDs before writing.
+_scanner_check_log_fd() {
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        _scanner_reopen_log
+    fi
+}
 
 DRY_RUN=false
 ONCE=false
@@ -775,7 +792,15 @@ scan_project() {
 }
 
 run_once() {
-    log "=== scan tick start ==="
+    # Liveness heartbeat — must be first so the watchdog sees activity even if
+    # a later step hangs.  Log-fd check must precede any log() call.
+    if ! $DRY_RUN; then
+        _scanner_check_log_fd
+        _scanner_write_heartbeat
+    fi
+    local _dedup_count
+    _dedup_count=$(find "$DEDUP_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+    log "=== scan tick start === pid=$$ dedup_count=${_dedup_count}"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
