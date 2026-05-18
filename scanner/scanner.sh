@@ -64,6 +64,38 @@ done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
 
+# _scanner_write_heartbeat — update ${LOOP_LOG_DIR}/scanner-heartbeat on every tick.
+# A separate watchdog reads this file's mtime; if age > 2×POLL_INTERVAL the
+# scanner is considered wedged and is killed so launchd/cron restarts it.
+_scanner_write_heartbeat() {
+    local hb_file="${LOOP_LOG_DIR}/scanner-heartbeat"
+    printf '%s\n' "$(date +%s)" > "$hb_file" 2>/dev/null || true
+}
+
+# _scanner_check_log_fd — verify LOG_FILE is still writable at the top of each tick.
+# If not writable (permissions changed, filesystem full, etc.), attempt to recover
+# the file descriptor. If recovery fails, exit so launchd restarts the process.
+_scanner_check_log_fd() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -w "$LOG_FILE" ]; then
+        if ! touch "$LOG_FILE" 2>/dev/null; then
+            printf '[%s] [scanner] ERROR: LOG_FILE not writable — exiting for restart\n' \
+                "$(date '+%Y-%m-%d %H:%M:%S')" >&2
+            exit 1
+        fi
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+}
+
+# _scanner_emit_tick_event — append a scanner_tick JSONL line to the monitor event log.
+# Provides a stream of liveness signals that loop-monitor can surface on the dashboard.
+_scanner_emit_tick_event() {
+    local dedup_count="$1"
+    local monitor_log="${LOOP_MONITOR_LOG:-${LOOP_LOG_DIR}/loop-monitor-events.jsonl}"
+    printf '{"type":"scanner_tick","ts":%s,"dedup_count":%s}\n' \
+        "$(date +%s)" "$dedup_count" >> "$monitor_log" 2>/dev/null || true
+}
+
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
 # Skipped when LOOP_JOBS_ENQUEUE=0 or --dry-run.
@@ -776,6 +808,15 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Liveness: write heartbeat so the watchdog can detect a wedged scanner.
+    $DRY_RUN || _scanner_write_heartbeat
+    # Integrity: exit if the log file is no longer writable so launchd restarts.
+    _scanner_check_log_fd
+    # Tick telemetry: count active dedup entries and emit to monitor event log.
+    local _tick_dedup_count
+    _tick_dedup_count=$(ls -1 "$DEDUP_DIR" 2>/dev/null | wc -l | tr -d ' ')
+    log "scanner_tick ts=$(date +%s) dedup_count=${_tick_dedup_count}"
+    $DRY_RUN || _scanner_emit_tick_event "$_tick_dedup_count"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
