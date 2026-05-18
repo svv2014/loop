@@ -1,0 +1,31 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.loop-scanner-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>__LOOP_ROOT__/scripts/scanner-watchdog.sh</string>
+    </array>
+    <!-- RunAtLoad false: no point checking before the scanner has had a tick -->
+    <key>RunAtLoad</key>
+    <false/>
+    <!-- Fire every 5 minutes (300s). With a default stale threshold of 2×poll
+         (600s) this gives a worst-case restart latency of ~10 minutes. -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>StandardOutPath</key>
+    <string>__LOG_DIR__/loop-scanner-watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>__LOG_DIR__/loop-scanner-watchdog.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>HOME</key>
+        <string>__HOME__</string>
+        <key>PATH</key>
+        <string>__EXTRA_PATH__:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>

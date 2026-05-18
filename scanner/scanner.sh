@@ -775,6 +775,20 @@ scan_project() {
 }
 
 run_once() {
+    # Liveness heartbeat: updated every tick so scanner-watchdog.sh can detect
+    # a wedged process (alive PID, zero log activity) and restart it.
+    if ! $DRY_RUN; then
+        touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
+    # Stdout integrity check: if the log file exists but is not writable (e.g.
+    # permissions changed, filesystem issue), reopen the FD or exit so launchd
+    # restarts with a fresh file descriptor.
+    if [ -n "${LOG_FILE:-}" ] && [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" \
+            || { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: cannot reopen log — exiting for restart" >&2; exit 1; }
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
