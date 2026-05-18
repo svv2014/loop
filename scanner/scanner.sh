@@ -775,6 +775,20 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat: record the current epoch every tick so the watchdog can detect
+    # a wedged scanner (alive PID, no events). Written before everything else
+    # so even a partial/slow tick keeps the watchdog happy.
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date +%s)" > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
+    # Stdout integrity: if the log file exists but is no longer writable (e.g.
+    # log rotation without SIGHUP), reopen FDs. On failure, exit so launchd
+    # restarts with a fresh descriptor set.
+    if [ -n "${LOG_FILE:-}" ] && [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>&1 || exit 1
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then

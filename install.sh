@@ -316,6 +316,25 @@ bootstrap_register_launchd() {
         fi
     fi
 
+    # Scanner liveness watchdog — detects a wedged scanner (alive PID, no events)
+    # and restarts it. Fires every 5 min; stale threshold is 2× poll interval.
+    local scanner_watchdog_plist="$agents_dir/com.user.loop-scanner-watchdog.plist"
+    if [ -f "$scanner_watchdog_plist" ]; then
+        echo "[launchd] com.user.loop-scanner-watchdog already registered — skipping"
+    else
+        sed \
+            -e "s|__LOOP_ROOT__|$LOOP_ROOT|g" \
+            -e "s|__LOG_DIR__|$log_dir|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__EXTRA_PATH__|$extra_path|g" \
+            "$template_dir/com.user.loop-scanner-watchdog.plist.template" > "$scanner_watchdog_plist"
+        if launchctl load "$scanner_watchdog_plist" 2>/dev/null; then
+            echo "[launchd] com.user.loop-scanner-watchdog loaded (every 5 min)"
+        else
+            echo "[launchd] WARNING: could not load com.user.loop-scanner-watchdog (check Console.app)" >&2
+        fi
+    fi
+
     # PR auto-rework watchdog — labels stale loop-authored PRs needs-rework so
     # the dev-rework handler picks them up. Independent of scanner; runs every
     # 15 min on its own cadence. Only acts on PRs whose author is in the
