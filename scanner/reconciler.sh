@@ -1623,12 +1623,38 @@ reconcile_anomalies() {
     local state_dir="${LOOP_ANOMALY_STATE_DIR:-/tmp/loop-anomaly-notified}"
     mkdir -p "$state_dir"
 
-    [ -f "$LOG_FILE" ] || { log "[$repo] no reconciler log to mine"; return 0; }
+    local pairs_file response_file
+    pairs_file="$(mktemp "${TMPDIR:-/tmp}/loop-anomalies.XXXXXX")"
+    response_file="$(mktemp "${TMPDIR:-/tmp}/loop-anomalies-response.XXXXXX")"
+    trap 'rm -f "$pairs_file" "$response_file"' RETURN
+
+    local sql_path=false
+    if [ -n "${BOUNTY_MONITOR_URL:-}" ]; then
+        local monitor_base="${BOUNTY_MONITOR_URL%/}"
+        local project_q
+        project_q="$(python3 - <<'PY' "$repo"
+import sys
+from urllib.parse import quote
+print(quote(sys.argv[1], safe=""))
+PY
+)"
+        local anomalies_url="${monitor_base}/api/anomalies?project=${project_q}&window_hours=${window_hours}&threshold=${threshold}"
+        if curl --max-time 5 -sf "$anomalies_url" > "$response_file" \
+            && jq -e 'type == "array"' "$response_file" >/dev/null 2>&1 \
+            && jq -r '.[] | select(.issue_number != null and .touches != null) | "\(.issue_number)\t\(.touches)"' "$response_file" > "$pairs_file"; then
+            sql_path=true
+            log "[$repo] anomaly detector: loaded SQL-backed anomalies from loop-monitor"
+        else
+            log "[$repo] anomaly detector: loop-monitor unavailable or malformed response; falling back to log mining"
+        fi
+    fi
 
     # Mine the reconciler log: count touch-events per ticket within the
     # window, emit "<num>\t<count>" for tickets crossing the threshold.
-    REPO_FOR_PY="$repo" THRESHOLD="$threshold" WIN_HOURS="$window_hours" \
-    LOG_FILE_PY="$LOG_FILE" python3 - <<'PY' | while IFS=$'\t' read -r num touches; do
+    if ! $sql_path; then
+        [ -f "$LOG_FILE" ] || { log "[$repo] no reconciler log to mine"; return 0; }
+        REPO_FOR_PY="$repo" THRESHOLD="$threshold" WIN_HOURS="$window_hours" \
+        LOG_FILE_PY="$LOG_FILE" python3 - <<'PY' > "$pairs_file"
 import os, re, sys, time
 from datetime import datetime
 
@@ -1676,6 +1702,9 @@ for num, count in counts.items():
     if count >= threshold:
         print(f"{num}\t{count}")
 PY
+    fi
+
+    while IFS=$'\t' read -r num touches; do
         [ -z "$num" ] && continue
         local repo_slug="${repo//\//-}"
         local sentinel="$state_dir/${repo_slug}-${num}"
@@ -1696,7 +1725,7 @@ PY
         loop_notify "Loop reconciler: $repo — issue/PR #$num was touched ${touches}× in the last ${window_hours}h. Likely a pipeline pathology (ping-pong, eventual-consistency drift, missing label, etc.). Operator: investigate. URL: https://github.com/${repo}/issues/${num}" \
             || true
         : > "$sentinel"
-    done
+    done < "$pairs_file"
 
     return 0
 }
