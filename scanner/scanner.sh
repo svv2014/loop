@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -774,8 +775,24 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+_scanner_check_stdout() {
+    # If the log file is no longer writable (e.g. deleted by log rotation without
+    # a SIGHUP, or on a broken pipe), reopen or exit so launchd restarts clean.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        # Attempt recovery by reopening both fds against the log path.
+        # On failure, exit so launchd KeepAlive triggers a fresh start.
+        exec 1>>"$LOG_FILE" || exit 1
+        exec 2>>"$LOG_FILE" || exit 1
+    fi
+}
+
 run_once() {
+    $DRY_RUN || _scanner_check_stdout
     log "=== scan tick start ==="
+    # Heartbeat: record PID + timestamp so the watchdog can detect a wedged scanner.
+    if ! $DRY_RUN; then
+        printf '%s %s\n' "$$" "$(date +%s)" > "${HEARTBEAT_FILE}" 2>/dev/null || true
+    fi
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
@@ -785,7 +802,9 @@ run_once() {
         [ -z "$slug" ] && continue
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
-    log "=== scan tick done ==="
+    local _dedup_count
+    _dedup_count=$(find "$DEDUP_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+    log "=== scan tick done (dedup_entries=${_dedup_count}) ==="
 }
 
 acquire_lock
