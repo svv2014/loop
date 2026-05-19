@@ -774,7 +774,28 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+_scanner_heartbeat() {
+    # Write current timestamp to the heartbeat file so the watchdog can detect
+    # a silently-wedged scanner (alive PID, no tick activity).
+    local hb_file="${LOOP_LOG_DIR}/scanner-heartbeat"
+    $DRY_RUN && return 0
+    printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "$hb_file" 2>/dev/null || true
+}
+
+# _scanner_check_log_fd — if the log file exists but is not writable, exit so
+# launchd restarts us and reopens a fresh fd against the current inode.
+# A missing file is normal on first startup; only an unwritable existing file
+# indicates a broken fd state worth recovering from.
+_scanner_check_log_fd() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        exit 1
+    fi
+}
+
 run_once() {
+    _scanner_check_log_fd
+    _scanner_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
