@@ -774,8 +774,19 @@ scan_project() {
     done < <(loop_polled_labels "$slug" pr)
 }
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
+# _write_heartbeat — record the current epoch second to $HEARTBEAT_FILE so the
+# scanner-watchdog can detect a wedged scanner (alive PID but no emit activity).
+# Called at the start of every tick. Skipped in --dry-run mode.
+_write_heartbeat() {
+    $DRY_RUN && return 0
+    date +%s > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
 run_once() {
     log "=== scan tick start ==="
+    _write_heartbeat
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \

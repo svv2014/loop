@@ -287,15 +287,24 @@ import json, re, os
 open_prs = json.loads(os.environ['OPEN'])
 merged_prs = json.loads(os.environ['MERGED'])
 pat = re.compile(r'(?:clos(?:e|es|ed)|fix(?:|es|ed)|resolv(?:e|es|ed))\s+#(\d+)', re.I)
+
+def close_refs(body):
+    """Return issue numbers referenced by non-quoted lines (skip '>' blockquotes)."""
+    nums = []
+    for line in (body or '').splitlines():
+        if line.lstrip().startswith('>'):
+            continue
+        nums.extend(int(n) for n in pat.findall(line))
+    return nums
+
 merged_by_issue = {}
 for pr in merged_prs:
-    for n in pat.findall(pr.get('body') or ''):
-        merged_by_issue.setdefault(int(n), pr['number'])
+    for n in close_refs(pr.get('body')):
+        merged_by_issue.setdefault(n, pr['number'])
 for pr in open_prs:
-    for n in pat.findall(pr.get('body') or ''):
-        iss = int(n)
-        if iss in merged_by_issue:
-            print(f"{pr['number']}\t{iss}\t{merged_by_issue[iss]}\t{pr['title'][:60]}")
+    for n in close_refs(pr.get('body')):
+        if n in merged_by_issue:
+            print(f"{pr['number']}\t{n}\t{merged_by_issue[n]}\t{pr['title'][:60]}")
             break
 PY
 )
