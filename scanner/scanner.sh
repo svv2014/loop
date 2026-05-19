@@ -776,6 +776,27 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+
+    # Heartbeat — write current epoch to the heartbeat file so the scanner
+    # watchdog can detect a wedged process (alive PID, no tick activity).
+    # Done before any I/O so a hang in _sweep_stale_locks or scan_project
+    # is immediately visible via mtime lag.
+    if ! $DRY_RUN; then
+        local _hb_file="${LOOP_LOG_DIR}/scanner-heartbeat"
+        local _dedup_count
+        _dedup_count=$(find "$DEDUP_DIR" -type f 2>/dev/null | wc -l | tr -d ' ')
+        printf '%s dedup_count=%s\n' "$(date +%s)" "$_dedup_count" > "$_hb_file" || true
+    fi
+
+    # Stdout integrity check — if the log file exists but is no longer
+    # writable (e.g. chmod'd by a log-rotation script without SIGHUP), exit
+    # so launchd restarts the process with a fresh FD. Skips when the file
+    # does not exist yet (first tick before launchd creates it).
+    if ! $DRY_RUN && [ -n "${LOG_FILE:-}" ] && [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] WARN: LOG_FILE not writable — exiting for launchd restart" >&2
+        exit 1
+    fi
+
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
