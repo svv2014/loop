@@ -1,0 +1,44 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+    "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  loop-scanner-watchdog launchd template.
+  Runs restart-scanner-if-stale.sh every 5 minutes. Kills the scanner if
+  its heartbeat file has not been updated within LOOP_SCANNER_STALE_THRESHOLD
+  seconds (default 900); launchd's KeepAlive=true on the scanner plist then
+  restarts it automatically.
+
+  Install:
+    sed "s|@LOOP_ROOT@|$LOOP_ROOT|g; s|@LOG_DIR@|$LOOP_LOG_DIR|g" \
+        templates/launchd/com.user.loop-scanner-watchdog.plist.template \
+        > ~/Library/LaunchAgents/com.user.loop-scanner-watchdog.plist
+    launchctl load ~/Library/LaunchAgents/com.user.loop-scanner-watchdog.plist
+
+  Uninstall:
+    launchctl unload ~/Library/LaunchAgents/com.user.loop-scanner-watchdog.plist
+    rm ~/Library/LaunchAgents/com.user.loop-scanner-watchdog.plist
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.user.loop-scanner-watchdog</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>@LOOP_ROOT@/scripts/restart-scanner-if-stale.sh</string>
+    </array>
+    <key>RunAtLoad</key>
+    <true/>
+    <!-- Fire every 5 minutes -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+    <key>StandardOutPath</key>
+    <string>@LOG_DIR@/loop-scanner-watchdog.log</string>
+    <key>StandardErrorPath</key>
+    <string>@LOG_DIR@/loop-scanner-watchdog.log</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+</dict>
+</plist>
