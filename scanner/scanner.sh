@@ -775,6 +775,18 @@ scan_project() {
 }
 
 run_once() {
+    # Stdout/FD integrity: if the log file has disappeared (logrotate deleted
+    # the inode while launchd held the old FD), reopen it so writes resume to
+    # the current inode. Exit on failure so launchd's KeepAlive restarts us.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -f "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+    # Heartbeat — updated every tick so scanner-watchdog.sh can detect a
+    # wedged scanner (alive PID, sleep loop intact, but no event activity).
+    if ! $DRY_RUN; then
+        printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" \
+            > "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
