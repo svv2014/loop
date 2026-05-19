@@ -118,3 +118,39 @@ seed_touches() {
     [ "$status" -eq 0 ]
     grep -q "^loop_notify .*#42" "$OPS_LOG"
 }
+
+@test "SQL-backed monitor path drives Signal alert" {
+    mkdir -p "$BATS_TMPDIR/bin"
+    cat > "$BATS_TMPDIR/bin/curl" <<'SH'
+#!/usr/bin/env sh
+printf '[{"issue_number":77,"touches":4}]'
+SH
+    chmod +x "$BATS_TMPDIR/bin/curl"
+    PATH="$BATS_TMPDIR/bin:$PATH"
+    export PATH
+    export BOUNTY_MONITOR_URL="http://monitor.test"
+    rm -f "$LOG_FILE"
+
+    run reconcile_anomalies "$REPO"
+    [ "$status" -eq 0 ]
+
+    grep -q "^loop_notify .*#77.*4" "$OPS_LOG"
+}
+
+@test "SQL monitor failure falls back to log mining" {
+    mkdir -p "$BATS_TMPDIR/bin"
+    cat > "$BATS_TMPDIR/bin/curl" <<'SH'
+#!/usr/bin/env sh
+exit 22
+SH
+    chmod +x "$BATS_TMPDIR/bin/curl"
+    PATH="$BATS_TMPDIR/bin:$PATH"
+    export PATH
+    export BOUNTY_MONITOR_URL="http://monitor.test"
+    seed_touches 88 3 "alias-rename issue"
+
+    run reconcile_anomalies "$REPO"
+    [ "$status" -eq 0 ]
+
+    grep -q "^loop_notify .*#88.*3" "$OPS_LOG"
+}
