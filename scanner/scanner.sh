@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -46,6 +47,30 @@ _scanner_reopen_log() {
     fi
 }
 trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
+
+# _scanner_write_heartbeat — stamp the liveness file every tick.
+# The external watchdog (restart-scanner-if-stale.sh) checks this file's
+# mtime; if it exceeds 2 × POLL_INTERVAL the scanner is assumed wedged.
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    printf '%s pid=%s\n' "$(date '+%Y-%m-%dT%H:%M:%S')" "$$" \
+        > "${HEARTBEAT_FILE}" 2>/dev/null || true
+}
+
+# _scanner_check_stdout — verify LOG_FILE is still writable before each tick.
+# If writes would be lost (e.g. filesystem full, rotated path gone), attempt
+# one reopen via the SIGHUP handler; if still unwritable, exit so launchd
+# or cron restarts the scanner with fresh file descriptors.
+_scanner_check_stdout() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -w "${LOG_FILE}" ] 2>/dev/null; then
+        _scanner_reopen_log
+        if [ ! -w "${LOG_FILE}" ] 2>/dev/null; then
+            echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: LOG_FILE not writable — exiting for restart" >&2
+            exit 1
+        fi
+    fi
+}
 
 DRY_RUN=false
 ONCE=false
@@ -775,7 +800,13 @@ scan_project() {
 }
 
 run_once() {
-    log "=== scan tick start ==="
+    # Liveness: write heartbeat before I/O-heavy work so the watchdog can
+    # distinguish a healthy-but-slow tick from a wedged process.
+    _scanner_write_heartbeat
+    _scanner_check_stdout
+    local _dedup_count
+    _dedup_count=$(find "${DEDUP_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')
+    log "=== scan tick start === heartbeat=$(date '+%Y-%m-%dT%H:%M:%S') dedup_entries=${_dedup_count}"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
