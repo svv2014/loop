@@ -22,6 +22,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/jobs.sh
 source "$LOOP_ROOT/lib/jobs.sh"
+# shellcheck source=../lib/monitor.sh
+source "$LOOP_ROOT/lib/monitor.sh"
 # workflow helpers (loop_polled_labels, loop_handler_for_label, loop_stage_trigger,
 # loop_workflow_for_project) are already loaded via lib/env.sh → lib/workflow.sh.
 # The line below is for shellcheck only.
@@ -29,6 +31,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -63,6 +66,39 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# _scanner_write_heartbeat — touch the heartbeat file so the watchdog can
+# detect a wedged scanner (file mtime stale by > 2 × POLL_INTERVAL).
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    touch "${HEARTBEAT_FILE}" 2>/dev/null || true
+}
+
+# _scanner_check_stdout — if LOG_FILE is no longer writable (e.g. deleted
+# by rotation and not yet reopened), exec FDs 1+2 back to it so subsequent
+# log() calls are not silently discarded. Exit if recovery fails so launchd
+# can restart the scanner with clean FDs.
+_scanner_check_stdout() {
+    $DRY_RUN && return 0
+    [ -n "${LOG_FILE:-}" ] || return 0
+    if [ ! -w "${LOG_FILE}" ] 2>/dev/null; then
+        exec 1>>"${LOG_FILE}" 2>>"${LOG_FILE}" || exit 1
+    fi
+}
+
+# _scanner_emit_tick — send a scanner.tick event to loop-monitor (best-effort).
+# Skipped when LOOP_MONITOR_URL is unset or in dry-run mode.
+_scanner_emit_tick() {
+    $DRY_RUN && return 0
+    [ -n "${LOOP_MONITOR_URL:-}" ] || return 0
+    local dedup_count now
+    dedup_count=$(find "${DEDUP_DIR}" -type f 2>/dev/null | wc -l | tr -d ' ')
+    now=$(date '+%Y-%m-%dT%H:%M:%SZ')
+    local payload
+    payload=$(python3 -c "import json,sys; print(json.dumps({'ts': sys.argv[1], 'dedup_count': int(sys.argv[2])}))" \
+        "$now" "$dedup_count" 2>/dev/null) || return 0
+    _loop_emit_event "scanner.tick" "$payload" 2>/dev/null || true
+}
 
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
@@ -775,6 +811,8 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_check_stdout
+    _scanner_write_heartbeat
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
@@ -786,6 +824,7 @@ run_once() {
         scan_project "$slug" || log "scan_project $slug failed (continuing)"
     done < <(loop_list_slugs)
     log "=== scan tick done ==="
+    _scanner_emit_tick
 }
 
 acquire_lock
