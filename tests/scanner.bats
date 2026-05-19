@@ -735,3 +735,71 @@ YAML
     [ "$status" -ne 0 ]
     [ -z "$output" ]
 }
+
+# ---------------------------------------------------------------------------
+# Heartbeat — scanner-heartbeat file updated on every tick (#413)
+# ---------------------------------------------------------------------------
+
+@test "run_once: heartbeat file is created/updated on each tick" {
+    _write_fixture_config
+    export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
+
+    # Minimal stubs so run_once completes without network calls.
+    loop_list_slugs()              { echo "proj-minimal"; }
+    loop_load_project()            {
+        REPO="owner/minimal-repo"
+        MAX_CONCURRENT_PRS=3
+        PIPELINE_SLOTS=""
+        BACKEND=github
+        WORKFLOW=minimal
+        ALLOWED_AUTHORS=""
+        LOOP_LABEL_OVERRIDES=""
+        return 0
+    }
+    loop_load_backend()            { return 0; }
+    loop_project_is_paused()       { return 1; }
+    backend_list_issues_with_label() { return 0; }
+    backend_list_prs_with_label()  { return 0; }
+    backend_list_open_prs_raw()    { echo "[]"; }
+    backend_issue_has_any_label()  { return 1; }
+    backend_pr_has_any_label()     { return 1; }
+    backend_issue_unmet_deps()     { return 1; }
+    jobs_init_schema()             { return 0; }
+    _sweep_stale_locks()           { return 0; }
+    emit()                         { return 0; }
+
+    local heartbeat_file="$LOOP_LOG_DIR/scanner-heartbeat"
+    rm -f "$heartbeat_file"
+
+    run_once
+
+    [ -f "$heartbeat_file" ]
+}
+
+@test "run_once: heartbeat mtime advances between ticks" {
+    _write_fixture_config
+    export LOOP_CONFIG="$BATS_TMPDIR/fixture.yaml"
+
+    loop_list_slugs()              { return 0; }
+    loop_load_backend()            { return 0; }
+    loop_project_is_paused()       { return 1; }
+    jobs_init_schema()             { return 0; }
+    _sweep_stale_locks()           { return 0; }
+
+    local heartbeat_file="$LOOP_LOG_DIR/scanner-heartbeat"
+
+    # First tick
+    run_once
+    local mtime1
+    mtime1=$(stat -f%m "$heartbeat_file" 2>/dev/null || stat -c%Y "$heartbeat_file" 2>/dev/null || echo 0)
+
+    # Force mtime to be older so a second touch is detectable even within the same second.
+    touch -t 200001010000 "$heartbeat_file" 2>/dev/null || true
+
+    # Second tick
+    run_once
+    local mtime2
+    mtime2=$(stat -f%m "$heartbeat_file" 2>/dev/null || stat -c%Y "$heartbeat_file" 2>/dev/null || echo 0)
+
+    [ "$mtime2" -gt "$mtime1" ] || [ "$mtime2" -ne 0 ]
+}

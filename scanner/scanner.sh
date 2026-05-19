@@ -776,6 +776,10 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Heartbeat: update mtime so the watchdog knows the scanner is alive.
+    if ! $DRY_RUN; then
+        touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
