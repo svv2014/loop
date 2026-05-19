@@ -775,6 +775,19 @@ scan_project() {
 }
 
 run_once() {
+    # Stdout file integrity: if LOG_FILE is not writable (e.g., after log rotation
+    # where launchd holds a stale FD), try to reopen it; exit if that fails so
+    # launchd restarts the scanner cleanly.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+
+    # Heartbeat: touch a sentinel file every tick so the scanner watchdog can
+    # detect a silently-wedged scanner (alive PID, no log output for hours).
+    if ! $DRY_RUN; then
+        touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
