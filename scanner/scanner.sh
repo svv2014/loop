@@ -22,6 +22,8 @@ source "$LOOP_ROOT/lib/backends/backend.sh"
 source "$LOOP_ROOT/lib/labels.sh"
 # shellcheck source=../lib/jobs.sh
 source "$LOOP_ROOT/lib/jobs.sh"
+# shellcheck source=../lib/monitor.sh
+source "$LOOP_ROOT/lib/monitor.sh"
 # workflow helpers (loop_polled_labels, loop_handler_for_label, loop_stage_trigger,
 # loop_workflow_for_project) are already loaded via lib/env.sh → lib/workflow.sh.
 # The line below is for shellcheck only.
@@ -32,6 +34,7 @@ LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 
 # SIGHUP-reopen contract (#194): logrotate-style tools truncate or rename
 # the on-disk log file. The launchd plist redirects stdout/stderr to a
@@ -63,6 +66,33 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# Write current epoch to the heartbeat file so the watchdog can verify liveness.
+_scanner_write_heartbeat() {
+    date +%s > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# Verify stdout is writable; exit if not so launchd/cron can restart cleanly.
+# Protects against the "dead tee child" wedge where echo blocks on EPIPE.
+_scanner_check_stdout() {
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" || exit 1
+        exec 2>>"$LOG_FILE" || exit 1
+    fi
+}
+
+# Emit a scanner_tick event to loop-monitor (best-effort, never blocks the tick).
+# Payload: epoch timestamp + count of dedup entries (proxy for total events seen).
+_scanner_emit_tick() {
+    local now dedup_count payload
+    now=$(date +%s)
+    dedup_count=$(find "$DEDUP_DIR" -maxdepth 1 -type f 2>/dev/null | wc -l | tr -d ' ')
+    payload=$(python3 -c "
+import json, sys
+print(json.dumps({'ts': int(sys.argv[1]), 'dedup_count': int(sys.argv[2])}))
+" "$now" "$dedup_count" 2>/dev/null || echo "")
+    [ -n "$payload" ] && _loop_emit_event "scanner_tick" "$payload" || true
+}
 
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
@@ -775,6 +805,9 @@ scan_project() {
 }
 
 run_once() {
+    _scanner_check_stdout
+    _scanner_write_heartbeat
+    $DRY_RUN || _scanner_emit_tick
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
