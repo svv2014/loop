@@ -354,6 +354,25 @@ bootstrap_register_launchd() {
             echo "[launchd] WARNING: could not load com.user.loop-digest (check Console.app)" >&2
         fi
     fi
+
+    # Scanner liveness watchdog — checks heartbeat file every 5 min and kills
+    # a wedged scanner so launchd auto-restarts it via KeepAlive.
+    local scanner_watchdog_plist="$agents_dir/com.user.loop-scanner-watchdog.plist"
+    if [ -f "$scanner_watchdog_plist" ]; then
+        echo "[launchd] com.user.loop-scanner-watchdog already registered — skipping"
+    else
+        sed \
+            -e "s|__LOOP_ROOT__|$LOOP_ROOT|g" \
+            -e "s|__LOG_DIR__|$log_dir|g" \
+            -e "s|__HOME__|$HOME|g" \
+            -e "s|__EXTRA_PATH__|$extra_path|g" \
+            "$template_dir/com.user.loop-scanner-watchdog.plist.template" > "$scanner_watchdog_plist"
+        if launchctl load "$scanner_watchdog_plist" 2>/dev/null; then
+            echo "[launchd] com.user.loop-scanner-watchdog loaded (every 5 min)"
+        else
+            echo "[launchd] WARNING: could not load com.user.loop-scanner-watchdog (check Console.app)" >&2
+        fi
+    fi
 }
 
 # Register scanner + reconciler via crontab (Linux). Idempotent: skips if marker present.
@@ -361,8 +380,10 @@ bootstrap_register_cron() {
     local log_dir="$1"
     local scanner_marker="# loop-scanner"
     local reconciler_marker="# loop-reconciler"
+    local watchdog_marker="# loop-scanner-watchdog"
     local scanner_entry="*/5 * * * * $LOOP_ROOT/scanner/scanner.sh --once >> $log_dir/loop-scanner.log 2>&1 $scanner_marker"
     local reconciler_entry="*/15 * * * * $LOOP_ROOT/scanner/reconciler.sh >> $log_dir/loop-reconciler.log 2>&1 $reconciler_marker"
+    local watchdog_entry="*/5 * * * * $LOOP_ROOT/scanner/scanner-watchdog.sh >> $log_dir/loop-scanner-watchdog.log 2>&1 $watchdog_marker"
 
     local current_cron new_cron updated=false
     current_cron=$(crontab -l 2>/dev/null || true)
@@ -382,6 +403,14 @@ bootstrap_register_cron() {
         new_cron="${new_cron}"$'\n'"$reconciler_entry"
         updated=true
         echo "[cron] Added reconciler (*/15 min)"
+    fi
+
+    if echo "$current_cron" | grep -qF "$watchdog_marker"; then
+        echo "[cron] scanner-watchdog entry already exists — skipping"
+    else
+        new_cron="${new_cron}"$'\n'"$watchdog_entry"
+        updated=true
+        echo "[cron] Added scanner-watchdog (*/5 min)"
     fi
 
     if $updated; then
