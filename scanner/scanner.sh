@@ -47,6 +47,8 @@ _scanner_reopen_log() {
 }
 trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
 
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
+
 DRY_RUN=false
 ONCE=false
 
@@ -63,6 +65,22 @@ for arg in "$@"; do
 done
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] $*"; }
+
+# _scanner_write_heartbeat — stamp the heartbeat file so the watchdog knows
+# the scanner is alive. Skipped in dry-run and on write error (non-fatal).
+_scanner_write_heartbeat() {
+    $DRY_RUN && return 0
+    printf '%s\n' "$(date '+%Y-%m-%d %H:%M:%S')" > "$HEARTBEAT_FILE" 2>/dev/null || true
+}
+
+# _scanner_check_stdout — verify the log FD is still functional.
+# If LOG_FILE was rotated or deleted between ticks, reopen it. If reopen
+# fails, exit immediately so launchd/cron restarts the scanner cleanly.
+_scanner_check_stdout() {
+    [ -n "${LOG_FILE:-}" ] || return 0
+    [ -f "$LOG_FILE" ] && [ -w "$LOG_FILE" ] && return 0
+    exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+}
 
 # _scanner_jobs_enqueue <slug> <stage> <num>
 # Best-effort dual-write to the jobs table alongside the legacy label-event path.
@@ -775,7 +793,11 @@ scan_project() {
 }
 
 run_once() {
-    log "=== scan tick start ==="
+    _scanner_check_stdout
+    _scanner_write_heartbeat
+    local _dc
+    _dc=$(ls -1 "$DEDUP_DIR" 2>/dev/null | wc -l | tr -d ' ')
+    log "=== scan tick start === ts=$(date +%s) dedup_count=${_dc}"
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
