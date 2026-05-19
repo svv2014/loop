@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -46,6 +47,23 @@ _scanner_reopen_log() {
     fi
 }
 trap '_scanner_reopen_log; echo "[$(date "+%Y-%m-%d %H:%M:%S")] [scanner] SIGHUP — log fds reopened"' HUP
+
+# _scanner_heartbeat — write current timestamp to the heartbeat file so the
+# external watchdog can confirm the scanner is making progress each tick.
+_scanner_heartbeat() {
+    printf '%s %s\n' "$(date '+%Y-%m-%d %H:%M:%S')" "$$" > "${HEARTBEAT_FILE}" || true
+}
+
+# _scanner_check_stdout — exit if the log file has become unwritable (e.g.,
+# the log directory was removed or the fd was closed). launchd/cron restarts
+# the scanner and recreates the file descriptor cleanly.
+_scanner_check_stdout() {
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "${LOG_FILE}" ]; then
+        printf '[%s] [scanner] WARN: LOG_FILE not writable (%s) — exiting for restart\n' \
+            "$(date '+%Y-%m-%d %H:%M:%S')" "${LOG_FILE}" >&2
+        exit 1
+    fi
+}
 
 DRY_RUN=false
 ONCE=false
@@ -776,6 +794,8 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    $DRY_RUN || _scanner_heartbeat
+    $DRY_RUN || _scanner_check_stdout
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
