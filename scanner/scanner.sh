@@ -776,6 +776,14 @@ scan_project() {
 
 run_once() {
     log "=== scan tick start ==="
+    # Write heartbeat so the scanner-watchdog can detect silent hangs.
+    $DRY_RUN || touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    # Stdout integrity check: if an existing log file is no longer writable
+    # (e.g. inode recycled after rotation), exit so launchd restarts cleanly.
+    if ! $DRY_RUN && [ -n "${LOG_FILE:-}" ] && [ -e "$LOG_FILE" ] && [ ! -w "$LOG_FILE" ]; then
+        echo "[$(date '+%Y-%m-%d %H:%M:%S')] [scanner] FATAL: $LOG_FILE not writable — exiting for launchd restart" >&2
+        exit 1
+    fi
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
         jobs_init_schema 2>/dev/null \
