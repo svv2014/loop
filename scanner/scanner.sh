@@ -775,6 +775,8 @@ scan_project() {
 }
 
 run_once() {
+    # Touch heartbeat file so scanner-watchdog can confirm liveness.
+    touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
