@@ -775,6 +775,18 @@ scan_project() {
 }
 
 run_once() {
+    # Stdout integrity check: if the log file path is set but no longer writable
+    # (e.g. log rotation deleted the inode), reopen FDs so writes resume.
+    # If the reopen itself fails, exit so launchd auto-restarts with a clean FD table.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ]; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+
+    # Heartbeat: update mtime so scanner-watchdog.sh can detect a wedged process.
+    if ! $DRY_RUN; then
+        touch "${LOOP_LOG_DIR}/scanner-heartbeat" 2>/dev/null || true
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
