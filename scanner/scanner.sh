@@ -29,6 +29,7 @@ source "$LOOP_ROOT/lib/jobs.sh"
 
 LOCK_FILE="/tmp/loop-scanner.lock"
 LOG_FILE="${LOOP_LOG_DIR}/loop-scanner.log"
+HEARTBEAT_FILE="${LOOP_LOG_DIR}/scanner-heartbeat"
 POLL_INTERVAL="${LOOP_SCANNER_INTERVAL:-300}"
 BOBA_EVENT_CLIENT="${LOOP_EVENT_CLIENT:-}"
 HANDLER_TIMEOUT="${LOOP_HANDLER_TIMEOUT:-7200}"
@@ -775,6 +776,15 @@ scan_project() {
 }
 
 run_once() {
+    # Heartbeat: stamp every tick so scanner-watchdog can detect a silent wedge.
+    $DRY_RUN || date +%s > "$HEARTBEAT_FILE"
+
+    # Stdout integrity: if the log file is gone or unwritable (e.g. after log
+    # rotation removed the inode), reopen FDs or exit so launchd restarts.
+    if [ -n "${LOG_FILE:-}" ] && [ ! -w "$LOG_FILE" ] 2>/dev/null; then
+        exec 1>>"$LOG_FILE" 2>>"$LOG_FILE" || exit 1
+    fi
+
     log "=== scan tick start ==="
     $DRY_RUN || _sweep_stale_locks
     if [[ "${LOOP_JOBS_ENQUEUE:-1}" == "1" ]] && ! $DRY_RUN; then
